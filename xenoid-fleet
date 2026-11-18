@@ -1,0 +1,353 @@
+#!/usr/bin/env python3
+"""Route local fleet operations through the unmodified Xenoid CLI."""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import fcntl
+import json
+import os
+import pwd
+import re
+import runpy
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Iterator
+
+
+NAME_PREFIX = "phone-"
+DEVICE_ID = re.compile(r"[1-9][0-9]{0,25}")
+INSTALL_ROOT = Path(__file__).resolve().parent
+LIFECYCLE_COMMANDS = {"init", "delete"}
+GLOBAL_COMMANDS = {
+    "build", "install-runtime", "instance", "linux-binderfs",
+    "package-release", "verify-release",
+}
+ADB_COMMANDS_WITH_GLOBAL_EFFECTS = {
+    "attach", "detach", "disconnect", "host-features", "kill-server",
+    "mdns", "pair", "reconnect", "server", "start-server", "track-devices",
+}
+RECREATE_RECOVERY_CODES = {
+    "runtime_image_required", "convergence_pending", "device_regeneration_pending",
+    "google_services_assets_missing", "runtime_image_artifact_snapshot_invalid",
+    "runtime_preflight_failed",
+}
+
+
+class FleetError(Exception):
+    pass
+
+
+def device_ids(selector: str) -> list[str]:
+    values = selector.split(",")
+    if any(not DEVICE_ID.fullmatch(value) for value in values):
+        raise FleetError("use positive decimal IDs without leading zeros, e.g. 1 or 1,2")
+    if len(set(values)) != len(values):
+        raise FleetError("a device ID may appear only once per command")
+    return values
+
+
+def validate_run_command(command: list[str], *, multiple: bool) -> None:
+    if not command or command[0].startswith("-"):
+        raise FleetError("supply an upstream command after --, without global options")
+    if command[0] in LIFECYCLE_COMMANDS:
+        raise FleetError("use fleet create or delete for this lifecycle operation")
+    if command[0] in GLOBAL_COMMANDS:
+        raise FleetError("this upstream command is global; run it directly in the checkout")
+    if command[0] == "ebpf" and command[1:] != ["status"]:
+        raise FleetError("shared engine maintenance must be run directly in the checkout")
+    if command[0] == "adb":
+        if len(command) < 2 or command[1].startswith("-"):
+            raise FleetError("pass an ADB subcommand without server or device selection flags")
+        if command[1] in ADB_COMMANDS_WITH_GLOBAL_EFFECTS or command[1].startswith("wait-for-any-"):
+            raise FleetError("this ADB operation is not scoped to the selected device")
+    if multiple and (command[0] == "view" or "--stdin" in command[:3] or command == ["adb", "shell"]):
+        raise FleetError("interactive or stdin-dependent commands require one device ID")
+
+
+@contextlib.contextmanager
+def device_lock(device_id: str) -> Iterator[None]:
+    directory = (Path.home() / ".xenoid").resolve() / "fleet-locks"
+    directory.parent.mkdir(mode=0o700, exist_ok=True)
+    directory.mkdir(mode=0o700, exist_ok=True)
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise FleetError("the fleet lock directory must be private and operator-owned")
+    descriptor = os.open(directory / f"{NAME_PREFIX}{device_id}.lock",
+                         os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_nlink != 1 or info.st_mode & 0o077):
+            raise FleetError("the device lock must be a private operator-owned regular file")
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(descriptor)
+
+
+class Upstream:
+    def __init__(self) -> None:
+        root = os.environ.get("XENOID_FLEET_UPSTREAM")
+        self.root = Path(root).expanduser().resolve() if root else INSTALL_ROOT / "upstream"
+        executable = self.root / "xenoid"
+        if not executable.is_file() or not os.access(executable, os.X_OK):
+            raise FleetError(f"Xenoid launcher is unavailable at {executable}")
+        self.prefix = [str(executable)]
+        toolchain = INSTALL_ROOT / "toolchain" / "env.sh"
+        if toolchain.is_file():
+            self.prefix = ["bash", "-e", "-c", 'source "$1"; shift; exec "$@"',
+                           "xenoid-fleet", str(toolchain), *self.prefix]
+        self.environment = dict(os.environ, XENOID_PROJECT=str(self.root))
+        self.environment.pop("XENOID_EXPECT_INSTANCE_ID", None)
+        self.environment.pop("XENOID_INSTANCE", None)
+
+    def call(self, arguments: list[str], *, device_id: str | None = None,
+             capture: bool = False, interactive: bool = False) -> subprocess.CompletedProcess:
+        argv = list(self.prefix)
+        if device_id is not None:
+            argv.extend(("--instance", NAME_PREFIX + device_id))
+        argv.extend(arguments)
+        with contextlib.ExitStack() as resources:
+            environment = self.environment
+            if (arguments[0] in {"up", "runtime-build-image"}
+                    and not environment.get("BUILDX_CONFIG") and not environment.get("BUILDX_BUILDER")):
+                # A fresh Buildx client ID isolates canonical build contexts from stale source snapshots.
+                config = resources.enter_context(tempfile.TemporaryDirectory(prefix="xenoid-fleet-buildx-"))
+                environment = dict(environment, BUILDX_CONFIG=config)
+            return subprocess.run(argv, env=environment, text=True, capture_output=capture,
+                                  stdin=None if interactive else subprocess.DEVNULL, check=False)
+
+    def document(self, arguments: list[str], device_id: str | None = None) -> tuple[dict, int]:
+        result = self.call(arguments, device_id=device_id, capture=True)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr, end="")
+        try:
+            document = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            raise FleetError(f"Xenoid {' '.join(arguments)} returned invalid JSON") from error
+        if not isinstance(document, dict):
+            raise FleetError(f"Xenoid {' '.join(arguments)} did not return a JSON object")
+        return document, result.returncode
+
+    def registry(self) -> dict[str, dict]:
+        document, returncode = self.document(["instance", "list"])
+        rows = document.get("instances")
+        if returncode != 0 or document.get("ok") is not True or not isinstance(rows, list):
+            raise FleetError("Xenoid could not read the instance registry")
+        entries = {}
+        for row in rows:
+            name = row.get("instanceName") if isinstance(row, dict) else None
+            if not isinstance(name, str):
+                raise FleetError("Xenoid returned an invalid registry entry")
+            if not name.startswith(NAME_PREFIX):
+                continue
+            device_id = name[len(NAME_PREFIX):]
+            if DEVICE_ID.fullmatch(device_id):
+                if device_id in entries:
+                    raise FleetError(f"Xenoid returned a duplicate registry entry for {name}")
+                entries[device_id] = row
+        return entries
+
+    def require(self, device_id: str, arguments: list[str]) -> None:
+        result = self.call(arguments, device_id=device_id)
+        if result.returncode != 0:
+            raise FleetError(f"upstream {' '.join(arguments[:2])} exited with status {result.returncode}")
+
+    def recreate(self, device_id: str) -> None:
+        arguments = ["start", "--recreate"]
+        result = self.call(arguments, device_id=device_id, capture=True)
+        print(result.stdout, end="", flush=True)
+        print(result.stderr, end="", file=sys.stderr, flush=True)
+        if result.returncode == 0:
+            return
+        try:
+            response = json.loads(result.stdout)
+            code = response.get("error") if isinstance(response, dict) else None
+        except json.JSONDecodeError:
+            code = None
+        if not isinstance(code, str) or code not in RECREATE_RECOVERY_CODES:
+            raise FleetError(f"upstream start --recreate exited with status {result.returncode}")
+        print(f"{NAME_PREFIX}{device_id}: recovering {code} through upstream up", file=sys.stderr)
+        self.require(device_id, ["up"])
+        self.require(device_id, arguments)
+
+    @contextlib.contextmanager
+    def validated_profile(self, filename: str | None) -> Iterator[str | None]:
+        if filename is None:
+            yield None
+            return
+        validator = self.root / "scripts" / "import-pixel-template.py"
+        if not validator.is_file():
+            raise FleetError("the upstream fingerprint validator is unavailable")
+        path = Path(filename).expanduser()
+        try:
+            if not path.is_file():
+                raise FleetError("the profile must be a regular JSON file")
+            data = json.loads(path.read_text(encoding="utf-8"))
+            normalize = runpy.run_path(str(validator))["normalize"]
+            normalized = normalize(data, path.name)
+        except (OSError, ValueError, KeyError) as error:
+            raise FleetError(f"profile validation failed: {error}") from error
+        with tempfile.TemporaryDirectory(prefix="xenoid-fleet-profile-") as staging:
+            profile = Path(staging) / "profile.json"
+            with open(profile, "x", encoding="utf-8", opener=private_open) as stream:
+                json.dump(normalized, stream, ensure_ascii=False, allow_nan=False)
+            yield str(profile)
+
+
+def private_open(path: str, flags: int) -> int:
+    return os.open(path, flags, 0o600)
+
+
+def selection(upstream: Upstream, selector: str) -> list[str]:
+    if selector == "all":
+        return sorted(upstream.registry(), key=int)
+    return device_ids(selector)
+
+
+def check_registry_entry(device_id: str, row: dict | None) -> None:
+    if row is not None and row.get("ok") is False:
+        raise FleetError(f"registry entry for {NAME_PREFIX}{device_id} is unhealthy")
+
+
+def create_device(upstream: Upstream, device_id: str, args: argparse.Namespace,
+                  profile: str | None) -> None:
+    row = upstream.registry().get(device_id)
+    check_registry_entry(device_id, row)
+    if row is None:
+        command = ["init", "--config", str(upstream.root / "examples" / "config-linux-arm.json")]
+        if args.no_google_services:
+            command.append("--no-google-services")
+        upstream.require(device_id, command)
+    else:
+        if args.no_google_services:
+            config, code = upstream.document(["config", "show"], device_id)
+            settings = config.get("config")
+            if code != 0 or config.get("ok") is not True or not isinstance(settings, dict):
+                raise FleetError("could not verify the configured Google-services provider")
+            if settings.get("google_services_provider") != "none":
+                raise FleetError("Google services on an existing device require a new device ID to change")
+        upstream.recreate(device_id)
+    upstream.require(device_id, ["up"])
+    if profile is not None:
+        upstream.require(device_id, ["device", "apply", profile, "--instance-identity"])
+
+
+def list_devices(upstream: Upstream, *, as_json: bool) -> int:
+    devices = []
+    registry = upstream.registry()
+    for device_id, row in sorted(registry.items(), key=lambda item: int(item[0])):
+        item = {**row, "id": int(device_id)}
+        try:
+            check_registry_entry(device_id, row)
+            status, code = upstream.document(["status"], device_id)
+            item.update({"ok": code == 0 and status.get("ok") is True, "status": status})
+        except FleetError as error:
+            item.update({"ok": False, "error": str(error)})
+        devices.append(item)
+    ok = all(item["ok"] for item in devices)
+    if as_json:
+        print(json.dumps({"ok": ok, "devices": devices}, indent=2))
+    else:
+        print("ID\tINSTANCE\tRUNTIME\tNEXT ACTION")
+        for item in devices:
+            status = item.get("status", {})
+            running = status.get("running")
+            runtime = "running" if running is True else "not running" if running is False else "unknown"
+            action = status.get("recommendedAction", item.get("error", "-"))
+            print(f"{item['id']}\t{item['instanceName']}\t{runtime}\t{action}")
+    return int(not ok)
+
+
+def report_failure(device_id: str, error: Exception) -> None:
+    print(f"{NAME_PREFIX}{device_id}: {error}", file=sys.stderr)
+
+
+def run_devices(upstream: Upstream, ids: list[str], command: list[str]) -> int:
+    multiple = len(ids) > 1
+    validate_run_command(command, multiple=multiple)
+    failed = False
+    for device_id in ids:
+        if multiple:
+            print(f"{NAME_PREFIX}{device_id}:", file=sys.stderr)
+        try:
+            with device_lock(device_id):
+                code = upstream.call(command, device_id=device_id, interactive=not multiple).returncode
+        except (OSError, FleetError) as error:
+            report_failure(device_id, error)
+            code = 1
+        if not multiple:
+            return code if code >= 0 else 128 - code
+        if code != 0:
+            report_failure(device_id, FleetError(f"upstream exited with status {code}"))
+            failed = True
+    return int(failed)
+
+
+def execute(args: argparse.Namespace, command: list[str]) -> int:
+    upstream = Upstream()
+    if args.action == "list":
+        return list_devices(upstream, as_json=args.json)
+    ids = device_ids(args.ids) if args.action == "create" else selection(upstream, args.ids)
+    if args.action == "run":
+        return run_devices(upstream, ids, command)
+    filename = args.profile if args.action == "create" else None
+    failed = False
+    with upstream.validated_profile(filename) as profile:
+        for device_id in ids:
+            if len(ids) > 1:
+                print(f"{NAME_PREFIX}{device_id}:", file=sys.stderr)
+            try:
+                with device_lock(device_id):
+                    if args.action == "create":
+                        create_device(upstream, device_id, args, profile)
+                    else:
+                        upstream.require(device_id, ["delete"] if args.yes else ["delete", "--dry-run"])
+            except (OSError, FleetError) as error:
+                report_failure(device_id, error)
+                failed = True
+    return int(failed)
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    parser = argparse.ArgumentParser(prog="xenoid-fleet", description=__doc__)
+    commands = parser.add_subparsers(dest="action", required=True)
+    listing = commands.add_parser("list", help="list registered numeric devices and their status")
+    listing.add_argument("--json", action="store_true")
+    create = commands.add_parser("create", help="create or recreate devices while preserving existing data")
+    create.add_argument("ids", metavar="ID[,ID...]")
+    create.add_argument("profile", nargs="?", metavar="PROFILE")
+    create.add_argument("--no-google-services", action="store_true")
+    delete = commands.add_parser("delete", help="preview or permanently delete selected devices")
+    delete.add_argument("ids", metavar="ID|CSV|all")
+    confirm = delete.add_mutually_exclusive_group()
+    confirm.add_argument("--dry-run", action="store_true", help="preview (the default)")
+    confirm.add_argument("--yes", action="store_true", help="permanently delete the selected devices")
+    run = commands.add_parser("run", help="pass a stock instance command to the selected devices")
+    run.add_argument("ids", metavar="ID|CSV|all")
+    run.add_argument("command", nargs=argparse.REMAINDER, metavar="-- COMMAND [ARG ...]")
+    args = parser.parse_args(argv)
+    command = []
+    if args.action == "run":
+        if len(argv) < 4 or argv[2] != "--":
+            run.error("expected ID|CSV|all -- COMMAND [ARG ...]")
+        command = argv[3:]
+    try:
+        if not os.environ.get("HOME"):
+            os.environ["HOME"] = pwd.getpwuid(os.getuid()).pw_dir
+        return execute(args, command)
+    except (FleetError, OSError, ValueError) as error:
+        print(f"xenoid-fleet: {error}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
