@@ -50,6 +50,8 @@ The arguments after `--` are sent to upstream Xenoid for the selected device or 
 
 The [complete command reference](docs/commands.md) covers the installer, Fleet selectors, every command and option in the pinned Xenoid CLI, and the separate service commands.
 
+For a separate SSH coordinator and web panel, see the [Fleet control manager command reference](docs/control-manager.md).
+
 ```bash
 sudo -H xenoid-fleet run 2 -- status
 sudo -H xenoid-fleet run 2,3 -- input tap 540 1800
