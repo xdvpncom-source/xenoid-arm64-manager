@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-release=v0.1.6
+release=v0.1.7
 fleet_repository=https://github.com/xdvpncom-source/xenoid-arm64-manager.git
-fleet_sha256=93767f36229c64f8f6bf9cd7d3ae3cac1b8e3b92ac6b5ce758e71b1c62831045
+fleet_sha256=3ae2cc040d15d206c00028771f8ad75ace148cd6c83c66a6c4dcbf36d2c6ba4b
 toolchain_sha256=f657aba4c546b5c6c3a9c37b513db9ceca4fb31f26b33bf3106a5852052cf9c8
 daemon_patch_sha256=a76a728fea8ebee104fc5e7230eb02ec69d11db5d24f51eff0f9edfa4f9ae467
 keymint_patch_sha256=5fd4a5fe25479ebe8fa068bd8cf55fe72ddf3245787e19feaf4a06f67859fa16

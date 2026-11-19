@@ -22,7 +22,7 @@ from typing import Iterator
 
 
 NAME_PREFIX = "phone-"
-VERSION = "v0.1.6"
+VERSION = "v0.1.7"
 DEVICE_ID = re.compile(r"[1-9][0-9]{0,25}")
 INSTALL_ROOT = Path(__file__).resolve().parent
 CHROME_SCHEMA = "dev.xenoid.fleet.chrome-baseline/v1"
@@ -82,7 +82,7 @@ def baseline_apk(directory: Path, value) -> Path:
 class ChromeBaseline:
     version_code: int
     chrome: tuple[Path, ...]
-    trichrome: Path
+    trichrome: Path | None
 
     @classmethod
     def load(cls) -> ChromeBaseline | None:
@@ -108,18 +108,26 @@ class ChromeBaseline:
                 or not 1 <= len(manifest["chrome"]) <= 64):
             raise FleetError("Chrome baseline manifest does not match the expected schema")
         chrome = tuple(baseline_apk(directory, apk) for apk in manifest["chrome"])
-        trichrome = baseline_apk(directory, manifest["trichrome"])
-        if (chrome[0].name != "base.apk" or trichrome.name != "trichrome.apk" or trichrome in chrome
-                or len(set(chrome)) != len(chrome)):
-            raise FleetError("Chrome baseline requires base.apk first, unique splits and trichrome.apk")
+        library = manifest["trichrome"]
+        trichrome = baseline_apk(directory, library) if library is not None else None
+        if (chrome[0].name != "base.apk" or len(set(chrome)) != len(chrome)
+                or any(apk.name == "trichrome.apk" for apk in chrome)
+                or (trichrome is not None and trichrome.name != "trichrome.apk")):
+            raise FleetError("Chrome baseline requires base.apk first and unique split and library filenames")
         return cls(manifest["version_code"], chrome, trichrome)
 
     def converge(self, upstream: Upstream, device_id: str) -> None:
         installed = installed_chrome_version(upstream, device_id)
         if installed is not None and installed >= self.version_code:
             return
-        for command in (["app", "install", str(self.trichrome)],
-                        ["adb", "install-multiple", "-r", *map(str, self.chrome)]):
+        commands = []
+        if self.trichrome is not None:
+            commands.append(["app", "install", str(self.trichrome)])
+        if len(self.chrome) == 1:
+            commands.append(["app", "install", str(self.chrome[0])])
+        else:
+            commands.append(["adb", "install-multiple", "-r", *map(str, self.chrome)])
+        for command in commands:
             result = upstream.call(command, device_id=device_id, capture=True)
             if result.returncode:
                 if result.stdout:

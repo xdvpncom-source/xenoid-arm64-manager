@@ -74,7 +74,7 @@ With a private Chrome archive and its digest configured on the manager, it prepa
 sudo fleet-control server chrome-baseline --server all --wait
 ```
 
-The manager uses the published installer in `--install-only` mode when a host needs the current Fleet wrapper. The matching Trichrome Library and Chrome split set come from the approved private archive. [Native baseline format and behavior](../README.md#optional-chrome-baseline)
+The manager uses the published installer in `--install-only` mode when a host needs the current Fleet wrapper. A standalone Chrome APK uses native `app install`. Use the matching Trichrome Library for Chrome split packages that require it. [Native baseline format and behavior](../README.md#optional-chrome-baseline)
 
 ## Parallel jobs across servers
 

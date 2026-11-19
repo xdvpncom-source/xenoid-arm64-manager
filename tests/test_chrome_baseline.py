@@ -23,9 +23,10 @@ FLEET_GLOBALS = BASELINE.load.__func__.__globals__
 class Instance:
     root = Path("/fixture/upstream")
 
-    def __init__(self, existing=False, installed=None):
+    def __init__(self, existing=False, installed=None, installed_by_command=720418033):
         self.existing = existing
         self.installed = installed
+        self.installed_by_command = installed_by_command
         self.commands = []
 
     def registry(self):
@@ -44,8 +45,10 @@ class Instance:
 
     def call(self, command, **_options):
         self.commands.append(command)
-        if command[:2] == ["adb", "install-multiple"]:
-            self.installed = 720418033
+        if command[:2] == ["adb", "install-multiple"] or (
+            command[:2] == ["app", "install"] and Path(command[2]).name == "base.apk"
+        ):
+            self.installed = self.installed_by_command
         return CompletedProcess(command, 0, "", "")
 
 
@@ -134,6 +137,40 @@ class ChromeBaselineTest(unittest.TestCase):
         with self.assertRaisesRegex(FLEET["FleetError"], "invalid JSON"):
             FLEET["run_devices"](instance, ["1"], ["up"])
         self.assertEqual(instance.commands, [])
+
+    def set_library_free_manifest(self, split_count):
+        manifest = json.loads(self.manifest.read_text())
+        manifest["chrome"] = manifest["chrome"][:split_count]
+        manifest["trichrome"] = None
+        self.manifest.write_text(json.dumps(manifest))
+        (self.directory / "trichrome.apk").unlink(missing_ok=True)
+
+    def test_independent_single_apk_uses_native_app_install(self):
+        self.set_library_free_manifest(1)
+        baseline = BASELINE.load()
+        instance = Instance()
+        with contextlib.redirect_stderr(io.StringIO()):
+            baseline.converge(instance, "1")
+        self.assertEqual(instance.commands[1:-1], [["app", "install", str(self.directory / "base.apk")]])
+        self.assertEqual(instance.commands[0], instance.commands[-1])
+
+    def test_library_free_splits_use_one_native_install_multiple(self):
+        self.set_library_free_manifest(2)
+        baseline = BASELINE.load()
+        instance = Instance()
+        with contextlib.redirect_stderr(io.StringIO()):
+            baseline.converge(instance, "1")
+        self.assertEqual(instance.commands[1:-1], [["adb", "install-multiple", "-r", str(self.directory / "base.apk"),
+                                                    str(self.directory / "split_config.en.apk")]])
+
+    def test_independent_baseline_rejects_empty_package_or_unverified_install(self):
+        self.set_library_free_manifest(1)
+        baseline = BASELINE.load()
+        with self.assertRaisesRegex(FLEET["FleetError"], "could not be verified"):
+            baseline.converge(Instance(installed_by_command=None), "1")
+        self.set_library_free_manifest(0)
+        with self.assertRaisesRegex(FLEET["FleetError"], "expected schema"):
+            BASELINE.load()
 
 
 if __name__ == "__main__":
