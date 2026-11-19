@@ -65,6 +65,13 @@ Optional upstream operations such as graphical viewing and Frida use their own h
 
 After a server restart, use `sudo -H xenoid-fleet run all -- up` to start the registered devices and reuse their data.
 
+If `up` reports `proxy_disabled_state_unverified` for a running device, reconcile its saved proxy policy and retry `up`. For example, these commands recover device `1`.
+
+```bash
+sudo -H xenoid-fleet run 1 -- proxy reconcile
+sudo -H xenoid-fleet run 1 -- up
+```
+
 ## راهنمای سریع فارسی
 
 روی سرور Ubuntu 24.04 با معماری ARM64، دستور بخش Install را اجرا کنید. برای ساخت دستگاه شمارهٔ ۲ از `sudo -H xenoid-fleet create 2` و برای ساخت یا بازسازی همان دستگاه با پروفایل از `sudo -H xenoid-fleet create 2 ./qa-profile.json` استفاده کنید. `list` وضعیت دستگاه‌ها را نشان می‌دهد. برای اجرای یک فرمان روی چند دستگاه، IDها را با کاما جدا کنید. برای نمونه، `sudo -H xenoid-fleet run 2,3 -- status` وضعیت دستگاه‌های ۲ و ۳ را می‌دهد. دستور `delete` داده‌های اندروید دستگاه‌های انتخاب‌شده را پاک می‌کند. اول با `--dry-run` مقصدها را بررسی کنید.
