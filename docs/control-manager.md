@@ -40,6 +40,32 @@ On the manager host, `sudo fleet-control --help` opens the CLI help. `--json` se
 
 `device list` reads the controller's cached inventory. `device refresh` updates it via the remote CLI. `--count N` ensures IDs 1 through N and preserves IDs that are already registered. Explicit IDs follow the native `xenoid-fleet create` recreate behavior. Use a profile path on the managed server. Use `--output -` for a screenshot on standard output. Live view takes successive PNG frames, with 1 to 3600 frames and 1 to 60 seconds between captures. The web panel offers live frame grids for multiple devices.
 
+## Xenoid proxy
+
+The panel and controller use the published Fleet launcher to run Xenoid's native proxy commands per device. Supply a UTF-8 text source up to 64 KiB through `--source-file PATH` or `--stdin`. The controller forwards it through SSH and stages a private file for the native command. Job logs show the operation and verified status fields.
+
+| Command | Example |
+| --- | --- |
+| `proxy set` | `sudo fleet-control proxy set --server all --source-file ./proxy.txt --kind endpoint --no-udp --wait` |
+| `proxy status` | `sudo fleet-control proxy status --server all --wait` |
+| `proxy off` | `sudo fleet-control proxy off --server all --wait` |
+| `proxy on` | `sudo fleet-control proxy on --server 2 --devices 3 --wait` |
+
+An endpoint source can contain `socks5://USER:PASSWORD@HOST:1080` or `http://USER:PASSWORD@HOST:8080`. Percent-encode reserved characters in the username or password. Add `--no-udp` for HTTP and HTTPS proxy endpoints. Use `--kind subscription` for subscription URLs. Other source types are `uri_list` and `clash`. Use `--no-enable` to save a configuration in the disabled state and `--no-ipv6` when the proxy provider lacks IPv6. Select a node with `--name NAME` or explicitly allow an HTTP subscription through `--allow-insecure-http`.
+
+## APK uploads and percentage installs
+
+| Command | Example |
+| --- | --- |
+| `apk upload PATH` | `sudo fleet-control apk upload ./qa.apk` |
+| `apk upload - --name NAME --size BYTES` | `sudo fleet-control apk upload - --name qa.apk --size "$(wc -c < qa.apk)" < qa.apk` |
+| `apk list` | `sudo fleet-control --json apk list` |
+| `apk deploy ID --percent N` | `sudo fleet-control apk deploy 1 --percent 35 --wait` |
+
+The library accepts a single APK file up to 250 MiB per upload. Refresh the device inventory to include external registry changes before deploying. The controller rounds the percentage of registered devices to the nearest whole device, rounding a half up. The same APK selects the same device cohort at a given percentage while the inventory stays the same. Use 0% to save a zero-target selection. A later percentage sets the next install cohort. Removing an existing app copy is a separate operation.
+
+The controller uploads and verifies one temporary copy per host in parallel, then runs `/usr/local/bin/xenoid-fleet run ID -- app install PATH` for each selected device. Installation jobs report the outcome for each device. Selected devices that are stopped are recorded as failures so they can be started and retried.
+
 ## Parallel jobs across servers
 
 An action with `--server all` submits one job and dispatches each registered server independently. A server starts when a worker slot is available and its earlier submissions have finished. The production configuration sets `FLEET_CONTROL_WORKERS=22`, so up to 22 servers can run concurrently across all jobs. Other deployments default to 6 and accept values from 1 to 24. Actions on the same server run one at a time in submission order.
