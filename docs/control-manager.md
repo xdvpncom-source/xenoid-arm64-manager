@@ -40,6 +40,24 @@ On the manager host, `sudo fleet-control --help` opens the CLI help. `--json` se
 
 `device list` reads the controller's cached inventory. `device refresh` updates it via the remote CLI. `--count N` ensures IDs 1 through N and preserves IDs that are already registered. Explicit IDs follow the native `xenoid-fleet create` recreate behavior. Use a profile path on the managed server. Use `--output -` for a screenshot on standard output. Live view takes successive PNG frames, with 1 to 3600 frames and 1 to 60 seconds between captures. The web panel offers live frame grids for multiple devices.
 
+## Parallel jobs across servers
+
+An action with `--server all` submits one job and dispatches each registered server independently. A server starts when a worker slot is available and its earlier submissions have finished. The production configuration sets `FLEET_CONTROL_WORKERS=22`, so up to 22 servers can run concurrently across all jobs. Other deployments default to 6 and accept values from 1 to 24. Actions on the same server run one at a time in submission order.
+
+```sh
+# Refresh all servers, then print the inventory from the manager.
+sudo fleet-control device refresh --server all --wait
+sudo fleet-control --json device list --server all
+
+# Read the model of device 1 independently on each server.
+sudo fleet-control device run --server all --devices 1 --wait -- adb shell getprop ro.product.model
+
+# Install Fleet where needed and ensure device 1 exists on each server.
+sudo fleet-control server install --server all --device-count 1 --wait
+```
+
+`--wait` follows the grouped job until all targets finish. A failure on one server leaves the other servers running and makes the final exit status nonzero. The transcript labels output by host ID, and `job show ID` includes `host_results` with each server's status, error, and timestamps. Use a selector such as `--server 2,5` to retry only the servers that need it.
+
 ## Jobs and saved SSH sequences
 
 | Command | Example |
