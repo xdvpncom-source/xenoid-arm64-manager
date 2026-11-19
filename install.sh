@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-release=v0.1.1
+release=v0.1.2
 fleet_repository=https://github.com/xdvpncom-source/xenoid-arm64-manager.git
 fleet_sha256=4fba151e18b71a12ad8904847d2ce90dc8a28fd9143cba45b399cd58a1e1faff
 toolchain_sha256=f657aba4c546b5c6c3a9c37b513db9ceca4fb31f26b33bf3106a5852052cf9c8
-daemon_patch_sha256=a9f59afedd9d03e83e19e42cc5fd6c9179a650c288d268aaa7a3298c167f96b6
+daemon_patch_sha256=a76a728fea8ebee104fc5e7230eb02ec69d11db5d24f51eff0f9edfa4f9ae467
 keymint_patch_sha256=5fd4a5fe25479ebe8fa068bd8cf55fe72ddf3245787e19feaf4a06f67859fa16
+v011_daemon_blob=ef4394904d9798a529fb8cf609989cf8526b4a89
 upstream_repository=https://github.com/Umiade/xenoid.git
 upstream_revision=c07e56b4aef8cd7e4d56eed11c84781369d29997
 base_repository=redroid/redroid
@@ -181,7 +182,9 @@ for script in "${build_scripts[@]}"; do
     [[ -f $installed_script && ! -L $installed_script && $(stat -c '%u:%g:%a' "$installed_script") == 0:0:755 ]] || \
         fail "Check the ownership and mode of $installed_script."
     if ! cmp -s "$installed_script" "$stage/reference/$script"; then
-        [[ $(git -C "$upstream" hash-object --no-filters "$installed_script") == $(git -C "$upstream" rev-parse "HEAD:$script") ]] || \
+        installed_blob=$(git -C "$upstream" hash-object --no-filters "$installed_script")
+        [[ $installed_blob == $(git -C "$upstream" rev-parse "HEAD:$script") ||
+            ( $script == scripts/build-daemon-standalone.sh && $installed_blob == "$v011_daemon_blob" ) ]] || \
             fail "The installed Xenoid build script $script has local changes."
     fi
 done

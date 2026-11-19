@@ -45,6 +45,7 @@ diff --git a/scripts/build-daemon-standalone.sh b/scripts/build-daemon-standalon
  
 -find "$APP/java" -name '*.java' | sort > "$OUT/sources.txt"
 +{ find "$APP/java" -name '*.java'; printf '%s\n' "$OUT/BuildConfig.java"; } | sort > "$OUT/sources.txt"
- javac -source 8 -target 8 -classpath "$ANDROID_JAR" -d "$OUT/classes" @"$OUT/sources.txt"
+-javac -source 8 -target 8 -classpath "$ANDROID_JAR" -d "$OUT/classes" @"$OUT/sources.txt"
++javac -encoding UTF-8 -source 8 -target 8 -classpath "$ANDROID_JAR" -d "$OUT/classes" @"$OUT/sources.txt"
  "$BT/d8" --lib "$ANDROID_JAR" --output "$OUT/dex" $(find "$OUT/classes" -name '*.class' | sort)
  cp "$OUT/linked.apk" "$OUT/unaligned.apk"

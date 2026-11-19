@@ -7,14 +7,14 @@ Install Xenoid on an ARM64 Ubuntu server and manage headless Android 13 instance
 Use an **ARM64 (aarch64) server running Ubuntu 24.04**, such as a Hetzner CAX server. The installer requires root access, outbound HTTPS, and free disk space for the build toolchain, container images, and Android data. Install and management commands use the same operator account and Xenoid registry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.1/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.2/install.sh | sudo -H bash -s -- --accept-android-licenses
 ```
 
 The `--accept-android-licenses` flag accepts the Android SDK licenses for the pinned build tools from Google. The installer prepares the host and starts device `1`. Allow tens of minutes for the first build on a small server. The CLI is installed as `/usr/local/bin/xenoid-fleet` and the managed checkout lives under `/opt/xenoid-fleet/upstream`. Rerunning the installer reuses the toolchain and converges device `1` with its existing data.
 
 Android runs natively on ARM64 under Docker. An existing Docker engine needs Buildx and the containerd image store, which is the default on new Docker Engine 29 installations. The installer enables x86-64 userspace emulation for Google's Linux SDK and NDK executables. The Xenoid build cache and Docker images stay on the server for subsequent devices. The fleet CLI gives image builds separate Buildx client state so Xenoid can verify their payloads against the current build inputs.
 
-The installer verifies and applies two patches to the pinned Xenoid build scripts. The standalone daemon build supplies the same package and version metadata as Gradle, and the KeyMint build remaps paths from the installed Rust toolchain before artifact validation. Rerun the versioned command to upgrade an existing v0.1.0 installation.
+The installer verifies and applies two patches to the pinned Xenoid build scripts. The standalone daemon build supplies the same package and version metadata as Gradle and reads Java source as UTF-8. The KeyMint build remaps paths from the installed Rust toolchain before artifact validation. Rerun the versioned command to upgrade an existing v0.1.0 or v0.1.1 installation.
 
 Check that Android booted. The command output includes the value `1` after boot completes.
 
@@ -25,7 +25,7 @@ sudo -H xenoid-fleet run 1 -- adb shell getprop sys.boot_completed
 To prepare the host and CLI before creating the first device, use `--install-only`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.1/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.2/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
 ```
 
 ## Devices
