@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-release=v0.1.2
+release=v0.1.3
 fleet_repository=https://github.com/xdvpncom-source/xenoid-arm64-manager.git
 fleet_sha256=4fba151e18b71a12ad8904847d2ce90dc8a28fd9143cba45b399cd58a1e1faff
 toolchain_sha256=f657aba4c546b5c6c3a9c37b513db9ceca4fb31f26b33bf3106a5852052cf9c8
@@ -91,6 +91,18 @@ bpftool version >/dev/null || fail "bpftool is unavailable for the running kerne
 if ! modinfo binder_linux >/dev/null 2>&1 && [[ ! -d /sys/module/binder_linux ]]; then
     install_packages "linux-modules-extra-$kernel"
 fi
+
+printf 'Loading the kernel netfilter tables required by Xenoid\n'
+for module in ip_tables ip6_tables; do
+    if ! modinfo "$module" >/dev/null 2>&1 && [[ ! -d /sys/module/$module ]]; then
+        install_packages "linux-modules-extra-$kernel"
+    fi
+done
+modprobe -a ip_tables ip6_tables
+[[ -r /proc/net/ip_tables_targets && -r /proc/net/ip6_tables_targets ]] || \
+    fail 'Xenoid requires IPv4 and IPv6 kernel netfilter tables.'
+printf '%s\n' ip_tables ip6_tables > "$stage/xenoid-fleet-netfilter.conf"
+install -m 0644 "$stage/xenoid-fleet-netfilter.conf" /etc/modules-load.d/xenoid-fleet-netfilter.conf
 
 printf 'Checking the local Docker engine\n'
 if ! command -v docker >/dev/null; then
