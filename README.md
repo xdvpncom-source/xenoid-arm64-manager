@@ -7,7 +7,7 @@ Install Xenoid on an ARM64 Ubuntu server and manage headless Android 13 instance
 Use an **ARM64 (aarch64) server running Ubuntu 24.04**, such as a Hetzner CAX server. The installer requires root access, outbound HTTPS, and free disk space for the build toolchain, container images, and Android data. Install and management commands use the same operator account and Xenoid registry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.8/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.9/install.sh | sudo -H bash -s -- --accept-android-licenses
 ```
 
 The `--accept-android-licenses` flag accepts the Android SDK licenses for the pinned build tools from Google. The installer prepares the host and starts device `1`. Allow tens of minutes for the first build on a small server. The CLI is installed as `/usr/local/bin/xenoid-fleet` and the managed checkout lives under `/opt/xenoid-fleet/upstream`. Rerunning the installer reuses the toolchain and converges device `1` with its existing data.
@@ -25,7 +25,7 @@ sudo -H xenoid-fleet run 1 -- adb shell getprop sys.boot_completed
 Use `--install-only` to prepare the host before creating the first device or upgrade an existing installation without issuing a device start.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.8/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.9/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
 ```
 
 ## Devices
@@ -53,6 +53,14 @@ Place an independently signature-verified ARM64 Google Chrome APK or split bundl
 For Chrome builds that require size seals on Android shared memory, use schema `dev.xenoid.fleet.chrome-baseline/v2` and add a `runtime` record of the form `{"file":"libcutils.so","sha256":"<digest>"}`. Supply the matching private ARM64 Android 13 `libcutils.so` with the [AOSP memfd size-seal fix](https://android.googlesource.com/platform/system/core/+/46d46dc46446f14f26fbe8fb102dd36c1dfc1229%5E%21/). Fleet creates a separate, content-addressed image based on the pinned Redroid image and verifies the running image and Android library before installing Chrome. A plain `xenoid-fleet run ID -- up` applies this baseline to instances already configured with that image. Explicit `create` selects the compatibility image for new devices and migrates devices based on the pinned Redroid image during recreation.
 
 `xenoid-fleet create` verifies the bundle before creating or recreating a device. After startup it installs standalone Chrome and Trichrome APKs through Xenoid `app install` and installs Chrome split APKs in one instance-scoped `adb install-multiple -r` transaction. It then checks the installed Chrome version. Existing equal or higher Chrome versions are preserved. The v1 baseline also applies during plain `up`. `--install-only` limits the installer to host preparation.
+
+### Optional proxy default
+
+Create the root-owned directory `/opt/xenoid-fleet/proxy-default` with mode `0700`. Use the native `proxy export --out` command on a configured instance to create `source.conf`. Keep that file and `manifest.json` root-owned with mode `0600`. The manifest contains `schema` set to `dev.xenoid.fleet.proxy-default/v1`, the exported `kind`, the hex `sha256` of `source.conf`, and the Boolean policy fields `udpAllowed`, `ipv6Allowed`, and `allowInsecureHttp`.
+
+After startup, Fleet imports this source through the native Xenoid CLI on unconfigured devices and requires a successful data-plane check. Create, recreate, and plain `up` keep a device's configured proxy policy and use Xenoid's native reconciliation.
+
+The pinned Xenoid patch reads live host quarantine status during boot acceptance. The native acceptance checks still require a verified data plane before accepting an enabled proxy.
 
 ## Run Xenoid commands
 

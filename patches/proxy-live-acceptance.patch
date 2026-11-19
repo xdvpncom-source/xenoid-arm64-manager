@@ -1,0 +1,131 @@
+diff --git a/src/xenoid/live_observe.py b/src/xenoid/live_observe.py
+--- a/src/xenoid/live_observe.py
++++ b/src/xenoid/live_observe.py
+@@ -766,15 +766,13 @@
+         )
+         if not host:
+             host = self._optional_call(manager, "proxy_engine_status", budget)
+-        snapshot_quarantine = _first_bool(
+-            _at(snapshot, "proxyQuarantined"),
+-            _at(snapshot, "components.proxy.quarantineRequired"),
+-            _at(host, "quarantined"),
+-        )
+-        if snapshot_quarantine is True:
+-            checks.add("proxyHostQuarantine", False, "proxy_quarantined")
+-        else:
+-            checks.add("proxyHostQuarantine", True, "proxy_quarantined")
++        # Planner quarantine intent is distinct from the host's live state.
++        host_quarantined = (
++            _at(snapshot, "proxyQuarantined") is True
++            or host.get("quarantined") is True
++            or host.get("phase") in ("quarantine", "quarantined")
++        )
++        checks.add("proxyHostQuarantine", not host_quarantined, "proxy_quarantined")
+
+         disabled_proof = False
+         if enabled is True:
+diff --git a/scripts/test-convergence.py b/scripts/test-convergence.py
+--- a/scripts/test-convergence.py
++++ b/scripts/test-convergence.py
+@@ -1255,6 +1255,101 @@
+         "pending Google binding satisfied convergence acceptance",
+     )
+
++@case("proxyLiveAcceptanceDistinguishesPlannerIntent")
++def proxy_live_acceptance_distinguishes_planner_intent() -> None:
++    epoch = OBSERVATION_DIGEST
++    generation = 7
++    counters = {"ingress": 1, "proxyUplink": 1, "egress": 1}
++    capabilities = {
++        "v4DnsProxy": True,
++        "v4TcpProxy": True,
++        "v4UdpProxy": False,
++        "v6DnsProxy": False,
++        "v6TcpProxy": False,
++        "v6UdpProxy": False,
++    }
++    host = {
++        "ok": True,
++        "generation": generation,
++        "runtimeEpoch": epoch,
++        "phase": "active",
++        "structuralApplied": True,
++        "dataPlaneVerified": False,
++        "counters": counters,
++    }
++    report = {
++        "checkId": 1,
++        "generation": generation,
++        "phase": "active",
++        "structuralApplied": True,
++        "dataPlaneVerified": True,
++        "capabilities": capabilities,
++        "counters": counters,
++    }
++    daemon = {
++        "bootstrap": {"components": {"proxy": {"ok": True}}},
++        "proxy": {
++            "ok": True,
++            "stateReadable": True,
++            "enabled": True,
++            "configured": True,
++            "quarantined": False,
++            "udpAllowed": False,
++            "ipv6Allowed": False,
++            "generation": generation,
++            "runtimeEpoch": epoch,
++            "checkId": 1,
++            "report": report,
++            "probe": {"checkId": 1, "capabilities": capabilities},
++        },
++    }
++
++    def check(snapshot_overrides=None, host_overrides=None):
++        snapshot = {
++            "components": {
++                "proxy": {
++                    "quarantineRequired": True,
++                    "engine": {**host, **(host_overrides or {})},
++                },
++            },
++            **(snapshot_overrides or {}),
++        }
++        checks = live_observe._Checks()
++        live_observe.LiveAcceptance()._proxy_checks(
++            None,
++            snapshot,
++            {"proxyGeneration": generation, "runtimeEpoch": epoch},
++            {},
++            daemon,
++            live_observe._Budget(None),
++            checks,
++        )
++        return checks
++
++    observed = check()
++    require(observed.first_failure() is None, "planner intent rejected live proxy proof")
++
++    for name, overrides, host_overrides in (
++        ("snapshot flag", {"proxyQuarantined": True}, {}),
++        ("host flag", {"proxyQuarantined": False}, {"quarantined": True}),
++        ("host phase", {"proxyQuarantined": False}, {"phase": "quarantined"}),
++    ):
++        observed = check(overrides, host_overrides)
++        require(
++            observed.values["proxyHostQuarantine"]
++            == {"ok": False, "code": "proxy_quarantined"},
++            f"actual quarantine was ignored: {name}",
++        )
++
++    report["dataPlaneVerified"] = False
++    observed = check()
++    require(
++        observed.values["proxyDataPlane"]
++        == {"ok": False, "code": "proxy_data_plane_unverified"},
++        "proxy passed without daemon data-plane proof",
++    )
++
++
+ @case("googleBootstrapGateDispatch")
+ def google_bootstrap_gate_dispatch() -> None:
+     manager = object.__new__(RuntimeManager)

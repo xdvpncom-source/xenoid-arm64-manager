@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-release=v0.1.8
+release=v0.1.9
 fleet_repository=https://github.com/xdvpncom-source/xenoid-arm64-manager.git
-fleet_sha256=0dcf91d9bddabbc9e35d86f8461b7b1e37f3c764818d9784464e0c8a721a3efa
+fleet_sha256=70a0e3cce6aa3161323f40436d9e854003d38e6cb4e3c2a914962ea707b31562
 toolchain_sha256=f657aba4c546b5c6c3a9c37b513db9ceca4fb31f26b33bf3106a5852052cf9c8
 daemon_patch_sha256=a76a728fea8ebee104fc5e7230eb02ec69d11db5d24f51eff0f9edfa4f9ae467
 keymint_patch_sha256=5fd4a5fe25479ebe8fa068bd8cf55fe72ddf3245787e19feaf4a06f67859fa16
 protection_patch_sha256=1e57b90e7008a26a7f4a04a926ddcc82e9b79d78c367bba3562e41f4a19c26a3
+proxy_acceptance_patch_sha256=fb6da2a5e665527ce8a1e3daaa85ec65a3536a03269d3c4c76253a39a9ce3f19
 v011_daemon_blob=ef4394904d9798a529fb8cf609989cf8526b4a89
 upstream_repository=https://github.com/Umiade/xenoid.git
 upstream_revision=c07e56b4aef8cd7e4d56eed11c84781369d29997
@@ -150,7 +151,7 @@ if [[ -e $upstream || -L $upstream ]]; then
     # The stock build replaces its tracked proxy sandbox binary with a validated artifact.
     git -C "$upstream" diff --quiet HEAD -- . ':(exclude)native/xenoid-proxy-sandbox/xenoid-proxy-sandbox' \
         ':(exclude)scripts/build-daemon-standalone.sh' ':(exclude)scripts/build-keymint.sh' \
-        ':(exclude)src/xenoid/protection.py' || \
+        ':(exclude)src/xenoid/protection.py' ':(exclude)src/xenoid/live_observe.py' || \
         fail 'The installed Xenoid tracked sources have local changes.'
 else
     git init -q "$stage/upstream"
@@ -183,20 +184,22 @@ fi
     cd "$source_tree"
     printf '%s  %s\n' "$fleet_sha256" xenoid-fleet "$toolchain_sha256" install-toolchain.sh \
         "$daemon_patch_sha256" patches/standalone-manifest.patch "$keymint_patch_sha256" patches/keymint-paths.patch \
-        "$protection_patch_sha256" patches/shared-protection-inspect.patch | \
+        "$protection_patch_sha256" patches/shared-protection-inspect.patch \
+        "$proxy_acceptance_patch_sha256" patches/proxy-live-acceptance.patch | \
         sha256sum --check --status
 ) || fail "The CLI, toolchain installer, or source patches did not match release $release."
 
 printf 'Preparing the pinned Xenoid source patches\n'
-patched_sources=(scripts/build-daemon-standalone.sh scripts/build-keymint.sh src/xenoid/protection.py)
+patched_sources=(scripts/build-daemon-standalone.sh scripts/build-keymint.sh src/xenoid/protection.py src/xenoid/live_observe.py)
 mkdir "$stage/reference"
 git -C "$upstream" archive HEAD -- "${patched_sources[@]}" | tar -x --no-same-permissions -C "$stage/reference"
 git -C "$stage/reference" apply "$source_tree/patches/standalone-manifest.patch" "$source_tree/patches/keymint-paths.patch" \
     "$source_tree/patches/shared-protection-inspect.patch"
+git -C "$stage/reference" apply --include=src/xenoid/live_observe.py "$source_tree/patches/proxy-live-acceptance.patch"
 for source_file in "${patched_sources[@]}"; do
     installed_source=$upstream/$source_file
     expected_mode=755
-    if [[ $source_file == src/xenoid/protection.py ]]; then expected_mode=644; fi
+    if [[ $source_file == *.py ]]; then expected_mode=644; fi
     [[ -f $installed_source && ! -L $installed_source &&
         $(stat -c '%u:%g:%a' "$installed_source") == "0:0:$expected_mode" ]] || \
         fail "Check the ownership and mode of $installed_source."

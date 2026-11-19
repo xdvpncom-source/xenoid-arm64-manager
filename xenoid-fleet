@@ -16,13 +16,13 @@ import stat
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
 
 NAME_PREFIX = "phone-"
-VERSION = "v0.1.8"
+VERSION = "v0.1.9"
 DEVICE_ID = re.compile(r"[1-9][0-9]{0,25}")
 INSTALL_ROOT = Path(__file__).resolve().parent
 CHROME_SCHEMA = "dev.xenoid.fleet.chrome-baseline/v1"
@@ -35,6 +35,8 @@ IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 REDROID_BASE = "redroid/redroid@sha256:5a42a569ee1d7c71796c0385e906cbaa4c3e0a162a56d9f26b29bdb1befac13b"
 RUNTIME_LIBRARY = "/system/lib64/libcutils.so"
 RUNTIME_LIBRARY_LIMIT = 2 * 1024 * 1024
+PROXY_DEFAULT_SCHEMA = "dev.xenoid.fleet.proxy-default/v1"
+PROXY_SOURCE_LIMIT = 1024 * 1024
 LIFECYCLE_COMMANDS = {"init", "delete"}
 GLOBAL_COMMANDS = {
     "build", "install-runtime", "instance", "linux-binderfs",
@@ -56,13 +58,13 @@ class FleetError(Exception):
 
 
 @contextlib.contextmanager
-def private_baseline_file(path: Path):
+def private_baseline_file(path: Path, label: str = "Chrome baseline"):
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(descriptor, "rb") as stream:
         info = os.fstat(stream.fileno())
         if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
                 or (info.st_uid, info.st_gid) != (0, 0) or info.st_nlink != 1):
-            raise FleetError(f"Chrome baseline file {path.name} must be a private root-owned file")
+            raise FleetError(f"{label} file {path.name} must be a private root-owned file")
         yield stream
 
 
@@ -296,6 +298,88 @@ def installed_chrome_version(upstream: Upstream, device_id: str) -> int | None:
     return None
 
 
+@dataclass(frozen=True)
+class ProxyDefault:
+    source: bytes = field(repr=False)
+    kind: str
+    udp_allowed: bool
+    ipv6_allowed: bool
+    allow_insecure_http: bool
+
+    @classmethod
+    def load(cls) -> ProxyDefault | None:
+        directory = INSTALL_ROOT / "proxy-default"
+        try:
+            info = directory.lstat()
+        except FileNotFoundError:
+            return None
+        if (not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700
+                or (info.st_uid, info.st_gid) != (0, 0)):
+            raise FleetError("Proxy default directory must be private and root-owned")
+        with private_baseline_file(directory / "manifest.json", "Proxy default") as stream:
+            body = stream.read(4097)
+        if len(body) > 4096:
+            raise FleetError("Proxy default manifest exceeded its size limit")
+        try:
+            manifest = json.loads(body)
+        except (UnicodeError, ValueError):
+            raise FleetError("Proxy default manifest is invalid JSON") from None
+        flags = ("udpAllowed", "ipv6Allowed", "allowInsecureHttp")
+        if (not isinstance(manifest, dict) or set(manifest) != {"schema", "kind", "sha256", *flags}
+                or manifest["schema"] != PROXY_DEFAULT_SCHEMA
+                or manifest["kind"] not in ("endpoint", "uri_list", "clash", "subscription")
+                or not isinstance(manifest["sha256"], str) or not ONE_SHA256.fullmatch(manifest["sha256"])
+                or not all(type(manifest[flag]) is bool for flag in flags)):
+            raise FleetError("Proxy default manifest does not match the expected schema")
+        with private_baseline_file(directory / "source.conf", "Proxy default") as stream:
+            source = stream.read(PROXY_SOURCE_LIMIT + 1)
+        if not source or len(source) > PROXY_SOURCE_LIMIT:
+            raise FleetError("Proxy default source has an invalid size")
+        try:
+            source.decode("utf-8")
+        except UnicodeError:
+            raise FleetError("Proxy default source is invalid UTF-8") from None
+        if hashlib.sha256(source).hexdigest() != manifest["sha256"]:
+            raise FleetError("Proxy default source SHA-256 mismatch")
+        return cls(source, manifest["kind"], *(manifest[flag] for flag in flags))
+
+    def converge(self, upstream: Upstream, device_id: str) -> None:
+        status = self._request(upstream, device_id, ["status"], "could not read native proxy status")
+        if status.get("configured") is True:
+            return
+        if status.get("configured") is not False or status.get("stateReadable") is not True:
+            raise FleetError("could not verify that the native proxy is unconfigured")
+        with tempfile.TemporaryDirectory(prefix="xenoid-fleet-proxy-") as staging:
+            source = Path(staging) / "source.conf"
+            with open(source, "xb", opener=private_open) as stream:
+                stream.write(self.source)
+            flags = ["--kind", self.kind, "--enable",
+                     "--udp" if self.udp_allowed else "--no-udp",
+                     "--ipv6" if self.ipv6_allowed else "--no-ipv6"]
+            if self.allow_insecure_http:
+                flags.append("--allow-insecure-http")
+            verified = self._request(upstream, device_id, ["import", str(source), *flags],
+                                     "native proxy default import failed")
+        if (verified.get("configured") is not True or verified.get("enabled") is not True
+                or verified.get("quarantined") is not False or verified.get("checkCompleted") is not True
+                or verified.get("sourceKind") != self.kind
+                or verified.get("udpAllowed") is not self.udp_allowed
+                or verified.get("ipv6Allowed") is not self.ipv6_allowed
+                or verified.get("allowInsecureHttp") is not self.allow_insecure_http):
+            raise FleetError("native proxy default did not pass its fresh data-plane check")
+
+    @staticmethod
+    def _request(upstream: Upstream, device_id: str, args: list[str], error: str) -> dict:
+        try:
+            result = upstream.call(["proxy", *args], device_id=device_id, capture=True)
+            reply = json.loads(result.stdout)
+        except (OSError, ValueError):
+            raise FleetError(error) from None
+        if result.returncode or not isinstance(reply, dict) or reply.get("ok") is not True:
+            raise FleetError(error)
+        return reply
+
+
 def device_ids(selector: str) -> list[str]:
     values = selector.split(",")
     if any(not DEVICE_ID.fullmatch(value) for value in values):
@@ -502,7 +586,8 @@ def verify_migration_base(context: str, reference) -> None:
 
 
 def create_device(upstream: Upstream, device_id: str, args: argparse.Namespace,
-                  profile: str | None, baseline: ChromeBaseline | None) -> None:
+                  profile: str | None, baseline: ChromeBaseline | None,
+                  proxy_default: ProxyDefault | None = None) -> None:
     row = upstream.registry().get(device_id)
     check_registry_entry(device_id, row)
     runtime = baseline.runtime if baseline is not None else None
@@ -534,6 +619,8 @@ def create_device(upstream: Upstream, device_id: str, args: argparse.Namespace,
     upstream.require(device_id, ["up"])
     if profile is not None:
         upstream.require(device_id, ["device", "apply", profile, "--instance-identity"])
+    if proxy_default is not None:
+        proxy_default.converge(upstream, device_id)
     if baseline is not None:
         baseline.converge(upstream, device_id, base_id)
 
@@ -572,6 +659,7 @@ def run_devices(upstream: Upstream, ids: list[str], command: list[str]) -> int:
     multiple = len(ids) > 1
     validate_run_command(command, multiple=multiple)
     baseline = ChromeBaseline.load() if command == ["up"] else None
+    proxy_default = ProxyDefault.load() if command == ["up"] else None
     failed = False
     for device_id in ids:
         if multiple:
@@ -579,6 +667,8 @@ def run_devices(upstream: Upstream, ids: list[str], command: list[str]) -> int:
         try:
             with device_lock(device_id):
                 code = upstream.call(command, device_id=device_id, interactive=not multiple).returncode
+                if code == 0 and proxy_default is not None:
+                    proxy_default.converge(upstream, device_id)
                 if code == 0 and baseline is not None:
                     if baseline.runtime is None:
                         baseline.converge(upstream, device_id)
@@ -606,6 +696,7 @@ def execute(args: argparse.Namespace, command: list[str]) -> int:
     if args.action == "run":
         return run_devices(upstream, ids, command)
     baseline = ChromeBaseline.load() if args.action == "create" else None
+    proxy_default = ProxyDefault.load() if args.action == "create" else None
     filename = args.profile if args.action == "create" else None
     failed = False
     with upstream.validated_profile(filename) as profile:
@@ -615,7 +706,7 @@ def execute(args: argparse.Namespace, command: list[str]) -> int:
             try:
                 with device_lock(device_id):
                     if args.action == "create":
-                        create_device(upstream, device_id, args, profile, baseline)
+                        create_device(upstream, device_id, args, profile, baseline, proxy_default)
                     else:
                         upstream.require(device_id, ["delete"] if args.yes else ["delete", "--dry-run"])
             except (OSError, FleetError) as error:
