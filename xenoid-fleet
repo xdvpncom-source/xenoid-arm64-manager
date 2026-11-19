@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import pwd
@@ -15,13 +16,20 @@ import stat
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
 
 NAME_PREFIX = "phone-"
+VERSION = "v0.1.6"
 DEVICE_ID = re.compile(r"[1-9][0-9]{0,25}")
 INSTALL_ROOT = Path(__file__).resolve().parent
+CHROME_SCHEMA = "dev.xenoid.fleet.chrome-baseline/v1"
+CHROME_PACKAGE = "com.android.chrome"
+CHROME_VERSION_LINE = re.compile(r"package:com\.android\.chrome versionCode:([0-9]+)")
+CHROME_FILENAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,119}\.apk")
+ONE_SHA256 = re.compile(r"[0-9a-f]{64}")
 LIFECYCLE_COMMANDS = {"init", "delete"}
 GLOBAL_COMMANDS = {
     "build", "install-runtime", "instance", "linux-binderfs",
@@ -40,6 +48,102 @@ RECREATE_RECOVERY_CODES = {
 
 class FleetError(Exception):
     pass
+
+
+@contextlib.contextmanager
+def private_baseline_file(path: Path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
+                or (info.st_uid, info.st_gid) != (0, 0) or info.st_nlink != 1):
+            raise FleetError(f"Chrome baseline file {path.name} must be a private root-owned file")
+        yield stream
+
+
+def baseline_apk(directory: Path, value) -> Path:
+    if not isinstance(value, dict) or set(value) != {"file", "sha256"}:
+        raise FleetError("Chrome baseline has an invalid APK record")
+    filename, expected = value["file"], value["sha256"]
+    if (not isinstance(filename, str) or not CHROME_FILENAME.fullmatch(filename)
+            or not isinstance(expected, str) or not ONE_SHA256.fullmatch(expected)):
+        raise FleetError("Chrome baseline has an invalid APK filename or SHA-256")
+    path = directory / filename
+    digest = hashlib.sha256()
+    with private_baseline_file(path) as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    if digest.hexdigest() != expected:
+        raise FleetError(f"Chrome baseline SHA-256 mismatch for {filename}")
+    return path
+
+
+@dataclass(frozen=True)
+class ChromeBaseline:
+    version_code: int
+    chrome: tuple[Path, ...]
+    trichrome: Path
+
+    @classmethod
+    def load(cls) -> ChromeBaseline | None:
+        directory = INSTALL_ROOT / "chrome-baseline"
+        try:
+            info = directory.lstat()
+        except FileNotFoundError:
+            return None
+        if (not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700
+                or (info.st_uid, info.st_gid) != (0, 0)):
+            raise FleetError("Chrome baseline directory must be private and root-owned")
+        with private_baseline_file(directory / "manifest.json") as stream:
+            body = stream.read(65_537)
+        if len(body) > 65_536:
+            raise FleetError("Chrome baseline manifest exceeded its size limit")
+        try:
+            manifest = json.loads(body)
+        except (UnicodeError, ValueError) as error:
+            raise FleetError("Chrome baseline manifest is invalid JSON") from error
+        if (not isinstance(manifest, dict) or set(manifest) != {"schema", "version_code", "chrome", "trichrome"}
+                or manifest["schema"] != CHROME_SCHEMA or type(manifest["version_code"]) is not int
+                or not 1 <= manifest["version_code"] <= 2**63 - 1 or not isinstance(manifest["chrome"], list)
+                or not 1 <= len(manifest["chrome"]) <= 64):
+            raise FleetError("Chrome baseline manifest does not match the expected schema")
+        chrome = tuple(baseline_apk(directory, apk) for apk in manifest["chrome"])
+        trichrome = baseline_apk(directory, manifest["trichrome"])
+        if (chrome[0].name != "base.apk" or trichrome.name != "trichrome.apk" or trichrome in chrome
+                or len(set(chrome)) != len(chrome)):
+            raise FleetError("Chrome baseline requires base.apk first, unique splits and trichrome.apk")
+        return cls(manifest["version_code"], chrome, trichrome)
+
+    def converge(self, upstream: Upstream, device_id: str) -> None:
+        installed = installed_chrome_version(upstream, device_id)
+        if installed is not None and installed >= self.version_code:
+            return
+        for command in (["app", "install", str(self.trichrome)],
+                        ["adb", "install-multiple", "-r", *map(str, self.chrome)]):
+            result = upstream.call(command, device_id=device_id, capture=True)
+            if result.returncode:
+                if result.stdout:
+                    print(result.stdout, end="", file=sys.stderr)
+                if result.stderr:
+                    print(result.stderr, end="", file=sys.stderr)
+                raise FleetError(f"Chrome baseline failed during upstream {' '.join(command[:2])}")
+        installed = installed_chrome_version(upstream, device_id)
+        if installed is None or installed < self.version_code:
+            raise FleetError("The Chrome baseline version could not be verified after installation")
+        print(f"{NAME_PREFIX}{device_id}: Chrome baseline installed (versionCode {installed})", file=sys.stderr)
+
+
+def installed_chrome_version(upstream: Upstream, device_id: str) -> int | None:
+    result, code = upstream.document(
+        ["adb", "shell", "pm", "list", "packages", "--show-versioncode", "--user", "0", CHROME_PACKAGE], device_id
+    )
+    stdout = result.get("stdout")
+    if code or result.get("ok") is not True or not isinstance(stdout, str):
+        raise FleetError("Android did not return the installed Chrome package version")
+    for line in stdout.splitlines():
+        if match := CHROME_VERSION_LINE.fullmatch(line.strip()):
+            return int(match[1])
+    return None
 
 
 def device_ids(selector: str) -> list[str]:
@@ -217,7 +321,7 @@ def check_registry_entry(device_id: str, row: dict | None) -> None:
 
 
 def create_device(upstream: Upstream, device_id: str, args: argparse.Namespace,
-                  profile: str | None) -> None:
+                  profile: str | None, baseline: ChromeBaseline | None) -> None:
     row = upstream.registry().get(device_id)
     check_registry_entry(device_id, row)
     if row is None:
@@ -237,6 +341,8 @@ def create_device(upstream: Upstream, device_id: str, args: argparse.Namespace,
     upstream.require(device_id, ["up"])
     if profile is not None:
         upstream.require(device_id, ["device", "apply", profile, "--instance-identity"])
+    if baseline is not None:
+        baseline.converge(upstream, device_id)
 
 
 def list_devices(upstream: Upstream, *, as_json: bool) -> int:
@@ -272,6 +378,7 @@ def report_failure(device_id: str, error: Exception) -> None:
 def run_devices(upstream: Upstream, ids: list[str], command: list[str]) -> int:
     multiple = len(ids) > 1
     validate_run_command(command, multiple=multiple)
+    baseline = ChromeBaseline.load() if command == ["up"] else None
     failed = False
     for device_id in ids:
         if multiple:
@@ -279,6 +386,8 @@ def run_devices(upstream: Upstream, ids: list[str], command: list[str]) -> int:
         try:
             with device_lock(device_id):
                 code = upstream.call(command, device_id=device_id, interactive=not multiple).returncode
+                if code == 0 and baseline is not None:
+                    baseline.converge(upstream, device_id)
         except (OSError, FleetError) as error:
             report_failure(device_id, error)
             code = 1
@@ -297,6 +406,7 @@ def execute(args: argparse.Namespace, command: list[str]) -> int:
     ids = device_ids(args.ids) if args.action == "create" else selection(upstream, args.ids)
     if args.action == "run":
         return run_devices(upstream, ids, command)
+    baseline = ChromeBaseline.load() if args.action == "create" else None
     filename = args.profile if args.action == "create" else None
     failed = False
     with upstream.validated_profile(filename) as profile:
@@ -306,7 +416,7 @@ def execute(args: argparse.Namespace, command: list[str]) -> int:
             try:
                 with device_lock(device_id):
                     if args.action == "create":
-                        create_device(upstream, device_id, args, profile)
+                        create_device(upstream, device_id, args, profile, baseline)
                     else:
                         upstream.require(device_id, ["delete"] if args.yes else ["delete", "--dry-run"])
             except (OSError, FleetError) as error:
@@ -318,6 +428,7 @@ def execute(args: argparse.Namespace, command: list[str]) -> int:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(prog="xenoid-fleet", description=__doc__)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     commands = parser.add_subparsers(dest="action", required=True)
     listing = commands.add_parser("list", help="list registered numeric devices and their status")
     listing.add_argument("--json", action="store_true")

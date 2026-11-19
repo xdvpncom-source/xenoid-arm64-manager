@@ -66,6 +66,16 @@ The library accepts a single APK file up to 250 MiB per upload. Refresh the devi
 
 The controller uploads and verifies one temporary copy per host in parallel, then runs `/usr/local/bin/xenoid-fleet run ID -- app install PATH` for each selected device. Installation jobs report the outcome for each device. Selected devices that are stopped are recorded as failures so they can be started and retried.
 
+## Chrome baseline
+
+With a private Chrome archive and its digest configured on the manager, it prepares the signed APKs before native Fleet create, recreate, and start. Use the host-only action to prepare the registered servers for their next device startup.
+
+```sh
+sudo fleet-control server chrome-baseline --server all --wait
+```
+
+The manager uses the published installer in `--install-only` mode when a host needs the current Fleet wrapper. The matching Trichrome Library and Chrome split set come from the approved private archive. [Native baseline format and behavior](../README.md#optional-chrome-baseline)
+
 ## Parallel jobs across servers
 
 An action with `--server all` submits one job and dispatches each registered server independently. A server starts when a worker slot is available and its earlier submissions have finished. The production configuration sets `FLEET_CONTROL_WORKERS=22`, so up to 22 servers can run concurrently across all jobs. Other deployments default to 6 and accept values from 1 to 24. Actions on the same server run one at a time in submission order.
