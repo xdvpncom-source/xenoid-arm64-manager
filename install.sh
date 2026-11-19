@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-release=v0.1.4
+release=v0.1.5
 fleet_repository=https://github.com/xdvpncom-source/xenoid-arm64-manager.git
 fleet_sha256=0abb12276dc765950d175c72c16d4583e53bed38a0d9b2a7dca509f9225bd05b
 toolchain_sha256=f657aba4c546b5c6c3a9c37b513db9ceca4fb31f26b33bf3106a5852052cf9c8
 daemon_patch_sha256=a76a728fea8ebee104fc5e7230eb02ec69d11db5d24f51eff0f9edfa4f9ae467
 keymint_patch_sha256=5fd4a5fe25479ebe8fa068bd8cf55fe72ddf3245787e19feaf4a06f67859fa16
+protection_patch_sha256=1e57b90e7008a26a7f4a04a926ddcc82e9b79d78c367bba3562e41f4a19c26a3
 v011_daemon_blob=ef4394904d9798a529fb8cf609989cf8526b4a89
 upstream_repository=https://github.com/Umiade/xenoid.git
 upstream_revision=c07e56b4aef8cd7e4d56eed11c84781369d29997
@@ -148,7 +149,8 @@ if [[ -e $upstream || -L $upstream ]]; then
         fail "The checkout at $upstream differs from the pinned revision."
     # The stock build replaces its tracked proxy sandbox binary with a validated artifact.
     git -C "$upstream" diff --quiet HEAD -- . ':(exclude)native/xenoid-proxy-sandbox/xenoid-proxy-sandbox' \
-        ':(exclude)scripts/build-daemon-standalone.sh' ':(exclude)scripts/build-keymint.sh' || \
+        ':(exclude)scripts/build-daemon-standalone.sh' ':(exclude)scripts/build-keymint.sh' \
+        ':(exclude)src/xenoid/protection.py' || \
         fail 'The installed Xenoid tracked sources have local changes.'
 else
     git init -q "$stage/upstream"
@@ -180,29 +182,34 @@ fi
 (
     cd "$source_tree"
     printf '%s  %s\n' "$fleet_sha256" xenoid-fleet "$toolchain_sha256" install-toolchain.sh \
-        "$daemon_patch_sha256" patches/standalone-manifest.patch "$keymint_patch_sha256" patches/keymint-paths.patch | \
+        "$daemon_patch_sha256" patches/standalone-manifest.patch "$keymint_patch_sha256" patches/keymint-paths.patch \
+        "$protection_patch_sha256" patches/shared-protection-inspect.patch | \
         sha256sum --check --status
-) || fail "The CLI, toolchain installer, or build patches did not match release $release."
+) || fail "The CLI, toolchain installer, or source patches did not match release $release."
 
-printf 'Preparing the pinned Xenoid build scripts\n'
-build_scripts=(scripts/build-daemon-standalone.sh scripts/build-keymint.sh)
+printf 'Preparing the pinned Xenoid source patches\n'
+patched_sources=(scripts/build-daemon-standalone.sh scripts/build-keymint.sh src/xenoid/protection.py)
 mkdir "$stage/reference"
-git -C "$upstream" archive HEAD -- "${build_scripts[@]}" | tar -x --no-same-permissions -C "$stage/reference"
-git -C "$stage/reference" apply "$source_tree/patches/standalone-manifest.patch" "$source_tree/patches/keymint-paths.patch"
-for script in "${build_scripts[@]}"; do
-    installed_script=$upstream/$script
-    [[ -f $installed_script && ! -L $installed_script && $(stat -c '%u:%g:%a' "$installed_script") == 0:0:755 ]] || \
-        fail "Check the ownership and mode of $installed_script."
-    if ! cmp -s "$installed_script" "$stage/reference/$script"; then
-        installed_blob=$(git -C "$upstream" hash-object --no-filters "$installed_script")
-        [[ $installed_blob == $(git -C "$upstream" rev-parse "HEAD:$script") ||
-            ( $script == scripts/build-daemon-standalone.sh && $installed_blob == "$v011_daemon_blob" ) ]] || \
-            fail "The installed Xenoid build script $script has local changes."
+git -C "$upstream" archive HEAD -- "${patched_sources[@]}" | tar -x --no-same-permissions -C "$stage/reference"
+git -C "$stage/reference" apply "$source_tree/patches/standalone-manifest.patch" "$source_tree/patches/keymint-paths.patch" \
+    "$source_tree/patches/shared-protection-inspect.patch"
+for source_file in "${patched_sources[@]}"; do
+    installed_source=$upstream/$source_file
+    expected_mode=755
+    if [[ $source_file == src/xenoid/protection.py ]]; then expected_mode=644; fi
+    [[ -f $installed_source && ! -L $installed_source &&
+        $(stat -c '%u:%g:%a' "$installed_source") == "0:0:$expected_mode" ]] || \
+        fail "Check the ownership and mode of $installed_source."
+    if ! cmp -s "$installed_source" "$stage/reference/$source_file"; then
+        installed_blob=$(git -C "$upstream" hash-object --no-filters "$installed_source")
+        [[ $installed_blob == $(git -C "$upstream" rev-parse "HEAD:$source_file") ||
+            ( $source_file == scripts/build-daemon-standalone.sh && $installed_blob == "$v011_daemon_blob" ) ]] || \
+            fail "The installed Xenoid source $source_file has local changes."
     fi
 done
-for script in "${build_scripts[@]}"; do
-    if ! cmp -s "$upstream/$script" "$stage/reference/$script"; then
-        mv -f -- "$stage/reference/$script" "$upstream/$script"
+for source_file in "${patched_sources[@]}"; do
+    if ! cmp -s "$upstream/$source_file" "$stage/reference/$source_file"; then
+        mv -f -- "$stage/reference/$source_file" "$upstream/$source_file"
     fi
 done
 

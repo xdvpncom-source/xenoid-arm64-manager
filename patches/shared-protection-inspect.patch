@@ -1,0 +1,51 @@
+diff --git a/src/xenoid/protection.py b/src/xenoid/protection.py
+--- a/src/xenoid/protection.py
++++ b/src/xenoid/protection.py
+@@ -13,7 +13,7 @@
+ from typing import Any, Mapping, Optional, Sequence
+ 
+ from .process import run_bounded
+-from .util import bounded_timeout, run
++from .util import bounded_timeout, command_timeout, run
+ 
+ 
+ SCHEMA = "dev.xenoid.shared-protection/v1"
+@@ -784,19 +784,25 @@
+             raise SharedProtectionError("shared_protection_ownership_ambiguous")
+         if not ids:
+             return RuntimeInventory(0, False, self._digest([]), 0)
+-        inspected = run(
+-            [*self.runtime.docker_base_cmd(), "inspect", *ids],
+-            timeout=30,
+-            env=self.runtime.docker_env(),
+-        )
+-        if inspected.returncode != 0:
+-            raise SharedProtectionError("shared_protection_ownership_ambiguous")
+-        try:
+-            rows = json.loads(inspected.stdout or "")
+-        except json.JSONDecodeError as exc:
+-            raise SharedProtectionError("shared_protection_ownership_ambiguous") from exc
+-        if not isinstance(rows, list) or len(rows) != len(ids):
+-            raise SharedProtectionError("shared_protection_ownership_ambiguous")
++        # The command runner retains only a bounded stdout tail. Inspect each
++        # container separately so the combined inventory cannot truncate JSON.
++        rows: list[Any] = []
++        with command_timeout(30):
++            for container_id in ids:
++                inspected = run(
++                    [*self.runtime.docker_base_cmd(), "inspect", container_id],
++                    timeout=30,
++                    env=self.runtime.docker_env(),
++                )
++                if inspected.returncode != 0:
++                    raise SharedProtectionError("shared_protection_ownership_ambiguous")
++                try:
++                    batch = json.loads(inspected.stdout or "")
++                except json.JSONDecodeError as exc:
++                    raise SharedProtectionError("shared_protection_ownership_ambiguous") from exc
++                if not isinstance(batch, list) or len(batch) != 1:
++                    raise SharedProtectionError("shared_protection_ownership_ambiguous")
++                rows.append(batch[0])
+         seen_instances: set[str] = set()
+         seen_tags: set[str] = set()
+         active = 0
