@@ -1,0 +1,29 @@
+diff --git a/scripts/build-keymint.sh b/scripts/build-keymint.sh
+--- a/scripts/build-keymint.sh
++++ b/scripts/build-keymint.sh
+@@ -176,7 +176,8 @@
+ export PATH RUSTC="$RUST_SYSROOT/bin/rustc"
+ # Remap rules are last-match-wins in both clang and rustc: the home prefix goes
+ # first so the more specific artifact/build dirs below can still win.
+-RUSTFLAGS="--remap-path-prefix=$HOME=.home --remap-path-prefix=$ARTIFACT_DIR=keymint"
++RUSTFLAGS="--remap-path-prefix=$HOME=.home --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=cargo"
++RUSTFLAGS="$RUSTFLAGS --remap-path-prefix=$RUST_SYSROOT=rust --remap-path-prefix=$ARTIFACT_DIR=keymint"
+ export RUSTFLAGS
+ export CARGO_INCREMENTAL=0 SOURCE_DATE_EPOCH=0 ZERO_AR_DATE=1
+ 
+@@ -206,13 +207,13 @@
+ # Persistent CMake build tree so unchanged objects are not recompiled. CMake's
+ # AIDL generation is guarded by a one-shot sentinel and the toolchain is fixed at
+ # configure time, so the tree is discarded whenever the dependency pins, NDK,
+-# SDK, or CMake/Ninja change.
++# SDK, CMake/Ninja, or Rust path remapping changes.
+ WORK="$ROOT/.xenoid/cache/keymint-build"
+ BUILD="$WORK/keymint"
+ LOG="$WORK/build.log"
+ STAMP="$(cat "$ROOT/scripts/fetch-keymint-deps.sh" "$ARTIFACT_DIR/CMakeLists.txt" \
+   | { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-64)"
+-STAMP="$STAMP $NDK $SDK $CMAKE $NINJA"
++STAMP="$STAMP $NDK $SDK $CMAKE $NINJA $RUSTFLAGS"
+ if [[ ! -f "$WORK/stamp" || "$(cat "$WORK/stamp")" != "$STAMP" ]]; then
+   rm -rf "$WORK"
+ fi

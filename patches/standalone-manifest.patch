@@ -1,0 +1,50 @@
+diff --git a/scripts/build-daemon-standalone.sh b/scripts/build-daemon-standalone.sh
+--- a/scripts/build-daemon-standalone.sh
++++ b/scripts/build-daemon-standalone.sh
+@@ -8,6 +8,7 @@
+ ANDROID_JAR="$SDK/platforms/android-$API/android.jar"
+ APP="$ROOT/daemon/app/src/main"
+ OUT="$ROOT/daemon/build/standalone"
++GRADLE_CONFIG="$ROOT/daemon/app/build.gradle"
+ APK_OUT="$ROOT/daemon/app/build/outputs/apk/debug/app-debug.apk"
+ 
+ for tool in "$BT/aapt2" "$BT/d8" "$BT/zipalign" "$BT/apksigner" javac keytool zip; do
+@@ -21,10 +22,36 @@
+ rm -rf "$OUT"
+ mkdir -p "$OUT/res" "$OUT/classes" "$OUT/dex" "$(dirname "$APK_OUT")" "$ROOT/.xenoid"
+ 
++# Supply the manifest and Java metadata Gradle normally generates.
++VERSION_CODE="$(sed -nE 's/^[[:space:]]*versionCode ([1-9][0-9]*)[[:space:]]*$/\1/p' "$GRADLE_CONFIG")"
++VERSION_NAME="$(sed -nE "s/^[[:space:]]*versionName '([0-9]+[.][0-9]+[.][0-9]+)'[[:space:]]*$/\1/p" "$GRADLE_CONFIG")"
++if [[ ! $VERSION_CODE =~ ^[1-9][0-9]*$ || ! $VERSION_NAME =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
++  printf 'Unexpected daemon version metadata in build.gradle\n' >&2
++  exit 1
++fi
++
++MANIFEST="$OUT/AndroidManifest.xml"
++{
++  if ! IFS= read -r manifest_opening || [[ $manifest_opening != '<manifest xmlns:android="http://schemas.android.com/apk/res/android">' ]]; then
++    printf 'Unexpected daemon manifest opening\n' >&2
++    exit 1
++  fi
++  printf '%s package="dev.xenoid.daemon" android:versionCode="%s" android:versionName="%s">\n' \
++    "${manifest_opening%>}" "$VERSION_CODE" "$VERSION_NAME"
++  cat
++} < "$APP/AndroidManifest.xml" > "$MANIFEST"
++
++cat > "$OUT/BuildConfig.java" <<EOF
++package dev.xenoid.daemon;
++public final class BuildConfig {
++    public static final String VERSION_NAME = "$VERSION_NAME";
++}
++EOF
++
+ "$BT/aapt2" compile --dir "$APP/res" -o "$OUT/res.zip"
+-"$BT/aapt2" link -o "$OUT/linked.apk" -I "$ANDROID_JAR" --manifest "$APP/AndroidManifest.xml" -R "$OUT/res.zip" --auto-add-overlay --rename-manifest-package dev.xenoid.daemon
++"$BT/aapt2" link -o "$OUT/linked.apk" -I "$ANDROID_JAR" --manifest "$MANIFEST" -R "$OUT/res.zip" --auto-add-overlay --rename-manifest-package dev.xenoid.daemon
+ 
+-find "$APP/java" -name '*.java' | sort > "$OUT/sources.txt"
++{ find "$APP/java" -name '*.java'; printf '%s\n' "$OUT/BuildConfig.java"; } | sort > "$OUT/sources.txt"
+ javac -source 8 -target 8 -classpath "$ANDROID_JAR" -d "$OUT/classes" @"$OUT/sources.txt"
+ "$BT/d8" --lib "$ANDROID_JAR" --output "$OUT/dex" $(find "$OUT/classes" -name '*.class' | sort)
+ cp "$OUT/linked.apk" "$OUT/unaligned.apk"

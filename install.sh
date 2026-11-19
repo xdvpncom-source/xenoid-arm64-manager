@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-release=v0.1.0
+release=v0.1.1
 fleet_repository=https://github.com/xdvpncom-source/xenoid-arm64-manager.git
 fleet_sha256=4fba151e18b71a12ad8904847d2ce90dc8a28fd9143cba45b399cd58a1e1faff
 toolchain_sha256=f657aba4c546b5c6c3a9c37b513db9ceca4fb31f26b33bf3106a5852052cf9c8
+daemon_patch_sha256=a9f59afedd9d03e83e19e42cc5fd6c9179a650c288d268aaa7a3298c167f96b6
+keymint_patch_sha256=5fd4a5fe25479ebe8fa068bd8cf55fe72ddf3245787e19feaf4a06f67859fa16
 upstream_repository=https://github.com/Umiade/xenoid.git
 upstream_revision=c07e56b4aef8cd7e4d56eed11c84781369d29997
 base_repository=redroid/redroid
@@ -132,7 +134,8 @@ if [[ -e $upstream || -L $upstream ]]; then
     [[ -d $upstream/.git && ! -L $upstream && $(git -C "$upstream" rev-parse HEAD) == "$upstream_revision" ]] || \
         fail "The checkout at $upstream differs from the pinned revision."
     # The stock build replaces its tracked proxy sandbox binary with a validated artifact.
-    git -C "$upstream" diff --quiet HEAD -- . ':(exclude)native/xenoid-proxy-sandbox/xenoid-proxy-sandbox' || \
+    git -C "$upstream" diff --quiet HEAD -- . ':(exclude)native/xenoid-proxy-sandbox/xenoid-proxy-sandbox' \
+        ':(exclude)scripts/build-daemon-standalone.sh' ':(exclude)scripts/build-keymint.sh' || \
         fail 'The installed Xenoid tracked sources have local changes.'
 else
     git init -q "$stage/upstream"
@@ -163,8 +166,30 @@ if [[ -z $source_tree || ! -f $source_tree/xenoid-fleet || ! -f $source_tree/ins
 fi
 (
     cd "$source_tree"
-    printf '%s  %s\n' "$fleet_sha256" xenoid-fleet "$toolchain_sha256" install-toolchain.sh | sha256sum --check --status
-) || fail "The CLI or toolchain installer did not match release $release."
+    printf '%s  %s\n' "$fleet_sha256" xenoid-fleet "$toolchain_sha256" install-toolchain.sh \
+        "$daemon_patch_sha256" patches/standalone-manifest.patch "$keymint_patch_sha256" patches/keymint-paths.patch | \
+        sha256sum --check --status
+) || fail "The CLI, toolchain installer, or build patches did not match release $release."
+
+printf 'Preparing the pinned Xenoid build scripts\n'
+build_scripts=(scripts/build-daemon-standalone.sh scripts/build-keymint.sh)
+mkdir "$stage/reference"
+git -C "$upstream" archive HEAD -- "${build_scripts[@]}" | tar -x --no-same-permissions -C "$stage/reference"
+git -C "$stage/reference" apply "$source_tree/patches/standalone-manifest.patch" "$source_tree/patches/keymint-paths.patch"
+for script in "${build_scripts[@]}"; do
+    installed_script=$upstream/$script
+    [[ -f $installed_script && ! -L $installed_script && $(stat -c '%u:%g:%a' "$installed_script") == 0:0:755 ]] || \
+        fail "Check the ownership and mode of $installed_script."
+    if ! cmp -s "$installed_script" "$stage/reference/$script"; then
+        [[ $(git -C "$upstream" hash-object --no-filters "$installed_script") == $(git -C "$upstream" rev-parse "HEAD:$script") ]] || \
+            fail "The installed Xenoid build script $script has local changes."
+    fi
+done
+for script in "${build_scripts[@]}"; do
+    if ! cmp -s "$upstream/$script" "$stage/reference/$script"; then
+        mv -f -- "$stage/reference/$script" "$upstream/$script"
+    fi
+done
 
 printf 'Preparing the Android build toolchain\n'
 XENOID_ACCEPT_ANDROID_SDK_LICENSES=$accept_licenses bash "$source_tree/install-toolchain.sh" "$prefix/toolchain"
