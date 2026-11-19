@@ -48,6 +48,8 @@ The optional profile uses Xenoid's `dev.xenoid.fingerprint/v1` JSON format. The 
 
 The arguments after `--` are sent to upstream Xenoid for the selected device or list of devices. Use the same coordinates and argument ordering as a direct upstream command.
 
+The [complete command reference](docs/commands.md) covers the installer, Fleet selectors, every command and option in the pinned Xenoid CLI, and the separate service commands.
+
 ```bash
 sudo -H xenoid-fleet run 2 -- status
 sudo -H xenoid-fleet run 2,3 -- input tap 540 1800
