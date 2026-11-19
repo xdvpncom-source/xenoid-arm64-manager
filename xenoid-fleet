@@ -159,7 +159,8 @@ class Upstream:
             raise FleetError(f"upstream {' '.join(arguments[:2])} exited with status {result.returncode}")
 
     def recreate(self, device_id: str) -> None:
-        arguments = ["start", "--recreate"]
+        # The following up converges ADB and the daemon on the replacement container.
+        arguments = ["start", "--recreate", "--no-wait"]
         result = self.call(arguments, device_id=device_id, capture=True)
         print(result.stdout, end="", flush=True)
         print(result.stderr, end="", file=sys.stderr, flush=True)

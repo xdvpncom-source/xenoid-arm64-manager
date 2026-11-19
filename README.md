@@ -7,7 +7,7 @@ Install Xenoid on an ARM64 Ubuntu server and manage headless Android 13 instance
 Use an **ARM64 (aarch64) server running Ubuntu 24.04**, such as a Hetzner CAX server. The installer requires root access, outbound HTTPS, and free disk space for the build toolchain, container images, and Android data. Install and management commands use the same operator account and Xenoid registry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.3/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.4/install.sh | sudo -H bash -s -- --accept-android-licenses
 ```
 
 The `--accept-android-licenses` flag accepts the Android SDK licenses for the pinned build tools from Google. The installer prepares the host and starts device `1`. Allow tens of minutes for the first build on a small server. The CLI is installed as `/usr/local/bin/xenoid-fleet` and the managed checkout lives under `/opt/xenoid-fleet/upstream`. Rerunning the installer reuses the toolchain and converges device `1` with its existing data.
@@ -25,7 +25,7 @@ sudo -H xenoid-fleet run 1 -- adb shell getprop sys.boot_completed
 To prepare the host and CLI before creating the first device, use `--install-only`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.3/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.4/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
 ```
 
 ## Devices
@@ -40,7 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manage
 | Show the resources that deletion would release | `sudo -H xenoid-fleet delete 2 --dry-run` |
 | Delete devices 2 and 3 and their Android data | `sudo -H xenoid-fleet delete 2,3 --yes` |
 
-Use a positive integer such as `2` as the device ID. Creating a registered device recreates its container and keeps its Android data. `delete` permanently removes the selected devices' owned volumes and Android data. Use `--dry-run` to verify the targets first. Both `delete` and `run` accept `all` for the numeric devices in the managed checkout.
+Use a positive integer such as `2` as the device ID. Creating a registered device recreates its container and keeps its Android data. Xenoid's `up` completes startup and verifies readiness before `create` applies the optional profile. `delete` permanently removes the selected devices' owned volumes and Android data. Use `--dry-run` to verify the targets first. Both `delete` and `run` accept `all` for the numeric devices in the managed checkout.
 
 The optional profile uses Xenoid's `dev.xenoid.fingerprint/v1` JSON format. The CLI validates the file before boot and applies it through upstream once the device is ready. Each device keeps its own instance identity. Use `--no-google-services` when creating a new instance that should omit the configured Google-services provider.
 

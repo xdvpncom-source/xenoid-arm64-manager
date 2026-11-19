@@ -45,7 +45,7 @@ name, command = args[1], args[2:]
 if os.environ.get("FLEET_FAIL") == f"{name}:{command[0]}":
     print(json.dumps({"ok": False, "error": "test failure"}))
     sys.exit(27)
-if command == ["start", "--recreate"] and "FLEET_RECOVER" in os.environ:
+if command == ["start", "--recreate", "--no-wait"] and "FLEET_RECOVER" in os.environ:
     marker = registry.with_name("recreate-attempted")
     if not marker.exists():
         marker.touch()
@@ -195,7 +195,7 @@ class FleetTest(unittest.TestCase):
         self.assertEqual(calls[1], ["--instance", "phone-1", "init", "--config",
                                     str(self.upstream / "examples/config-linux-arm.json")])
         self.assertEqual(calls[2], ["--instance", "phone-1", "up"])
-        self.assertEqual(calls[5:7], [["--instance", "phone-2", "start", "--recreate"],
+        self.assertEqual(calls[5:7], [["--instance", "phone-2", "start", "--recreate", "--no-wait"],
                                       ["--instance", "phone-2", "up"]])
         for index in (3, 7):
             self.assertEqual(calls[index][2:4], ["device", "apply"])
@@ -225,10 +225,11 @@ class FleetTest(unittest.TestCase):
                 commands = [args[2:] for args in self.calls() if args[:2] == ["--instance", "phone-2"]]
                 if code == "resource_conflict":
                     self.assertEqual(result.returncode, 1)
-                    self.assertEqual(commands, [["start", "--recreate"]])
+                    self.assertEqual(commands, [["start", "--recreate", "--no-wait"]])
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(commands, [["start", "--recreate"], ["up"], ["start", "--recreate"], ["up"]])
+                    recreate = ["start", "--recreate", "--no-wait"]
+                    self.assertEqual(commands, [recreate, ["up"], recreate, ["up"]])
 
     def test_provider_change_refused_for_existing_instance(self) -> None:
         self.set_instances("phone-2")
