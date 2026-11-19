@@ -18,15 +18,21 @@ from unittest.mock import patch
 FLEET = runpy.run_path(str(Path(__file__).resolve().parents[1] / "xenoid-fleet"))
 BASELINE = FLEET["ChromeBaseline"]
 FLEET_GLOBALS = BASELINE.load.__func__.__globals__
+BASE_IMAGE_ID = "sha256:" + "a" * 64
+RUNTIME_IMAGE_ID = "sha256:" + "b" * 64
+BOOT_INPUT = "c" * 64
 
 
 class Instance:
     root = Path("/fixture/upstream")
 
-    def __init__(self, existing=False, installed=None, installed_by_command=720418033):
+    def __init__(self, existing=False, installed=None, installed_by_command=720418033, image="stock"):
         self.existing = existing
         self.installed = installed
         self.installed_by_command = installed_by_command
+        self.image = image
+        self.library_sha256 = None
+        self.boot_input = BOOT_INPUT
         self.commands = []
 
     def registry(self):
@@ -40,6 +46,20 @@ class Instance:
 
     def document(self, command, _device):
         self.commands.append(command)
+        if command == ["config", "show"]:
+            return {"ok": True, "config": {"image": self.image, "docker_context": "qa-context"}}, 0
+        if command == ["status"]:
+            return {
+                "ok": True,
+                "running": True,
+                "runtimeIdentity": {"containerId": "native-container", "imageId": RUNTIME_IMAGE_ID},
+                "runtimeImage": {"baseImageId": BASE_IMAGE_ID, "bootInputSha256": BOOT_INPUT},
+                "runtimeImageIdentity": {"containerImageSha256": RUNTIME_IMAGE_ID,
+                                         "containerBootInputSha256": self.boot_input,
+                                         "desiredBootInputSha256": BOOT_INPUT},
+            }, 0
+        if command == ["adb", "shell", "sha256sum", FLEET["RUNTIME_LIBRARY"]]:
+            return {"ok": True, "stdout": f"{self.library_sha256}  {FLEET['RUNTIME_LIBRARY']}\n"}, 0
         output = f"package:com.android.chrome versionCode:{self.installed}\n" if self.installed is not None else ""
         return {"ok": True, "stdout": output}, 0
 
@@ -144,6 +164,143 @@ class ChromeBaselineTest(unittest.TestCase):
         manifest["trichrome"] = None
         self.manifest.write_text(json.dumps(manifest))
         (self.directory / "trichrome.apk").unlink(missing_ok=True)
+
+    def runtime_manifest(self):
+        self.set_library_free_manifest(1)
+        manifest = json.loads(self.manifest.read_text())
+        manifest["schema"] = FLEET["CHROME_RUNTIME_SCHEMA"]
+        manifest["runtime"] = self.apk("libcutils.so")
+        self.manifest.write_text(json.dumps(manifest))
+        return manifest
+
+    def test_v2_runtime_record_requires_exact_name_digest_modes_and_keys(self):
+        manifest = self.runtime_manifest()
+        self.assertEqual(BASELINE.load().runtime.sha256, manifest["runtime"]["sha256"])
+        path = self.directory / "libcutils.so"
+        path.chmod(0o644)
+        with self.assertRaisesRegex(FLEET["FleetError"], "private root-owned"):
+            BASELINE.load()
+        path.chmod(0o600)
+        path.write_bytes(b"different")
+        with self.assertRaisesRegex(FLEET["FleetError"], "SHA-256 mismatch"):
+            BASELINE.load()
+        manifest["runtime"]["file"] = "../libcutils.so"
+        self.manifest.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(FLEET["FleetError"], "invalid runtime library record"):
+            BASELINE.load()
+        del manifest["runtime"]
+        self.manifest.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(FLEET["FleetError"], "expected schema"):
+            BASELINE.load()
+
+    def test_v2_builds_single_copy_over_exact_parent_and_reuses_checked_tag(self):
+        self.runtime_manifest()
+        runtime = BASELINE.load().runtime
+        parent = FLEET["REDROID_BASE"]
+        parent_layer = "sha256:" + "1" * 64
+        current = {"Architecture": "arm64", "Os": "linux", "Id": parent.split("@")[1],
+                   "RootFS": {"Layers": [parent_layer]}}
+        derived = {
+            **current, "Id": BASE_IMAGE_ID,
+            "RootFS": {"Layers": [parent_layer, "sha256:" + "2" * 64]},
+            "Config": {"Labels": {"dev.xenoid.fleet.chrome-parent": parent,
+                                  "dev.xenoid.fleet.chrome-libcutils-sha256": runtime.sha256}},
+        }
+        commands = []
+
+        def docker_call(context, command):
+            self.assertEqual(context, "qa-context")
+            commands.append(command)
+            if command[0] == "build":
+                self.assertIn("--network=none", command)
+                self.assertIn("--pull=false", command)
+                self.assertIn(runtime.image, command)
+                stage = Path(command[-1])
+                self.assertEqual({path.name for path in stage.iterdir()}, {"Dockerfile", "libcutils.so"})
+                self.assertEqual((stage / "libcutils.so").read_bytes(), runtime.library.read_bytes())
+                self.assertEqual((stage / "Dockerfile").read_text().splitlines(), [
+                    f"FROM {parent}",
+                    f"COPY --chown=0:0 --chmod=0644 libcutils.so {FLEET['RUNTIME_LIBRARY']}",
+                ])
+                return CompletedProcess(command, 0, "", "")
+            if command[-1] == parent:
+                return CompletedProcess(command, 0, json.dumps(current), "")
+            self.assertEqual(command[-1], runtime.image)
+            if not any(prior[0] == "build" for prior in commands):
+                return CompletedProcess(command, 1, "", "No such image")
+            return CompletedProcess(command, 0, json.dumps(derived), "")
+
+        with patch.dict(FLEET_GLOBALS, {"docker_call": docker_call,
+                                        "fleet_lock": lambda _name: contextlib.nullcontext()}):
+            self.assertEqual(runtime.base_image_id("qa-context", build=True), BASE_IMAGE_ID)
+            self.assertEqual(runtime.base_image_id("qa-context", build=True), BASE_IMAGE_ID)
+            self.assertEqual(sum(command[0] == "build" for command in commands), 1)
+            derived["RootFS"]["Layers"][0] = "sha256:" + "3" * 64
+            with self.assertRaisesRegex(FLEET["FleetError"], "expected parent and library"):
+                runtime.base_image_id("qa-context", build=True)
+
+    def test_v2_only_explicit_create_changes_existing_image(self):
+        self.runtime_manifest()
+        baseline = BASELINE.load()
+        for existing, image, leading in (
+            (False, "stock", [["init", "--config", "/fixture/upstream/examples/config-linux-arm.json",
+                               "--image", baseline.runtime.image]]),
+            (True, "stock", [["config", "show"], ["config", "set", "--image", baseline.runtime.image]]),
+            (True, baseline.runtime.image, [["config", "show"], ["start", "--recreate", "--no-wait"]]),
+        ):
+            with self.subTest(existing=existing, image=image), contextlib.redirect_stderr(io.StringIO()):
+                instance = Instance(existing=existing, image=image)
+                instance.library_sha256 = baseline.runtime.sha256
+                with patch.dict(FLEET_GLOBALS, {"inspect_docker_image": lambda *_: {"Id": FLEET["REDROID_BASE"].split("@")[1]}}):
+                    with patch.object(FLEET["ChromeRuntime"], "base_image_id", return_value=BASE_IMAGE_ID) as base:
+                        FLEET["create_device"](instance, "1", Namespace(no_google_services=False), "/profile.json", baseline)
+                base.assert_called_once_with("qa-context" if existing else "default", build=True)
+                self.assertEqual(instance.commands[:len(leading)], leading)
+                self.assertEqual(instance.commands[len(leading):len(leading) + 4], [
+                    ["up"], ["device", "apply", "/profile.json", "--instance-identity"],
+                    ["status"], ["adb", "shell", "sha256sum", FLEET["RUNTIME_LIBRARY"]],
+                ])
+                self.assertEqual(instance.commands.count(["up"]), 1)
+                self.assertEqual(instance.commands[-2], ["app", "install", str(self.directory / "base.apk")])
+
+    def test_v2_keeps_an_unrelated_configured_image(self):
+        self.runtime_manifest()
+        instance = Instance(existing=True, image="qa/other:1")
+        with patch.dict(FLEET_GLOBALS, {"inspect_docker_image": lambda *_: {"Id": BASE_IMAGE_ID}}):
+            with self.assertRaisesRegex(FLEET["FleetError"], "cannot replace a separately configured Android base"):
+                FLEET["create_device"](instance, "1", Namespace(no_google_services=False), None, BASELINE.load())
+        self.assertEqual(instance.commands, [["config", "show"]])
+
+    def test_v2_plain_up_keeps_old_instances_and_checks_new_image_without_building(self):
+        self.runtime_manifest()
+        runtime = BASELINE.load().runtime
+        with patch.dict(FLEET_GLOBALS, {"device_lock": lambda _device: contextlib.nullcontext()}):
+            with patch.object(FLEET["ChromeRuntime"], "base_image_id", return_value=BASE_IMAGE_ID) as base:
+                old = Instance(existing=True)
+                self.assertEqual(FLEET["run_devices"](old, ["1"], ["up"]), 0)
+                self.assertEqual(old.commands, [["up"], ["config", "show"]])
+                base.assert_not_called()
+                new = Instance(existing=True, installed=720418034, image=runtime.image)
+                new.library_sha256 = runtime.sha256
+                self.assertEqual(FLEET["run_devices"](new, ["1"], ["up"]), 0)
+                base.assert_called_once_with("qa-context", build=False)
+                self.assertEqual([command[0] for command in new.commands], ["up", "config", "status", "adb", "adb"])
+
+    def test_v2_refuses_to_install_with_stale_runtime_or_wrong_library(self):
+        self.runtime_manifest()
+        baseline = BASELINE.load()
+        stale = Instance()
+        stale.boot_input = "d" * 64
+        with self.assertRaisesRegex(FLEET["FleetError"], "runtime is not active"):
+            baseline.converge(stale, "1", BASE_IMAGE_ID)
+        self.assertEqual(stale.commands, [["status"]])
+        wrong_library = Instance()
+        wrong_library.library_sha256 = "e" * 64
+        with self.assertRaisesRegex(FLEET["FleetError"], "running Android library does not match"):
+            baseline.converge(wrong_library, "1", BASE_IMAGE_ID)
+        self.assertEqual(wrong_library.commands, [
+            ["status"], ["adb", "shell", "sha256sum", FLEET["RUNTIME_LIBRARY"]],
+        ])
 
     def test_independent_single_apk_uses_native_app_install(self):
         self.set_library_free_manifest(1)

@@ -22,14 +22,19 @@ from typing import Iterator
 
 
 NAME_PREFIX = "phone-"
-VERSION = "v0.1.7"
+VERSION = "v0.1.8"
 DEVICE_ID = re.compile(r"[1-9][0-9]{0,25}")
 INSTALL_ROOT = Path(__file__).resolve().parent
 CHROME_SCHEMA = "dev.xenoid.fleet.chrome-baseline/v1"
+CHROME_RUNTIME_SCHEMA = "dev.xenoid.fleet.chrome-baseline/v2"
 CHROME_PACKAGE = "com.android.chrome"
 CHROME_VERSION_LINE = re.compile(r"package:com\.android\.chrome versionCode:([0-9]+)")
 CHROME_FILENAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,119}\.apk")
 ONE_SHA256 = re.compile(r"[0-9a-f]{64}")
+IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
+REDROID_BASE = "redroid/redroid@sha256:5a42a569ee1d7c71796c0385e906cbaa4c3e0a162a56d9f26b29bdb1befac13b"
+RUNTIME_LIBRARY = "/system/lib64/libcutils.so"
+RUNTIME_LIBRARY_LIMIT = 2 * 1024 * 1024
 LIFECYCLE_COMMANDS = {"init", "delete"}
 GLOBAL_COMMANDS = {
     "build", "install-runtime", "instance", "linux-binderfs",
@@ -69,13 +74,140 @@ def baseline_apk(directory: Path, value) -> Path:
             or not isinstance(expected, str) or not ONE_SHA256.fullmatch(expected)):
         raise FleetError("Chrome baseline has an invalid APK filename or SHA-256")
     path = directory / filename
+    verify_baseline_file(path, expected)
+    return path
+
+
+def verify_baseline_file(path: Path, expected: str) -> None:
     digest = hashlib.sha256()
     with private_baseline_file(path) as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     if digest.hexdigest() != expected:
-        raise FleetError(f"Chrome baseline SHA-256 mismatch for {filename}")
-    return path
+        raise FleetError(f"Chrome baseline SHA-256 mismatch for {path.name}")
+
+
+@dataclass(frozen=True)
+class ChromeRuntime:
+    library: Path
+    sha256: str
+
+    @classmethod
+    def load(cls, directory: Path, record) -> ChromeRuntime:
+        if (not isinstance(record, dict) or set(record) != {"file", "sha256"}
+                or record["file"] != "libcutils.so" or not isinstance(record["sha256"], str)
+                or not ONE_SHA256.fullmatch(record["sha256"])):
+            raise FleetError("Chrome baseline has an invalid runtime library record")
+        runtime = cls(directory / record["file"], record["sha256"])
+        runtime.library_bytes()
+        return runtime
+
+    def library_bytes(self) -> bytes:
+        with private_baseline_file(self.library) as stream:
+            body = stream.read(RUNTIME_LIBRARY_LIMIT + 1)
+        if not 0 < len(body) <= RUNTIME_LIBRARY_LIMIT:
+            raise FleetError("Chrome baseline runtime library has an invalid size")
+        if hashlib.sha256(body).hexdigest() != self.sha256:
+            raise FleetError("Chrome baseline SHA-256 mismatch for libcutils.so")
+        return body
+
+    @property
+    def image(self) -> str:
+        digest = hashlib.sha256(f"{REDROID_BASE}\n{self.sha256}".encode()).hexdigest()
+        return f"xenoid/redroid:chrome-memfd-{digest}"
+
+    def base_image_id(self, context: str, *, build: bool) -> str:
+        with fleet_lock("chrome-runtime-image") if build else contextlib.nullcontext():
+            return self._base_image_id(context, build=build)
+
+    def _base_image_id(self, context: str, *, build: bool) -> str:
+        parent = inspect_docker_image(context, REDROID_BASE)
+        if parent is None or parent.get("Id") != REDROID_BASE.split("@", 1)[1]:
+            raise FleetError("the pinned Redroid base image is unavailable")
+        parent_layers = docker_image_layers(parent)
+        labels = {"dev.xenoid.fleet.chrome-parent": REDROID_BASE, "dev.xenoid.fleet.chrome-libcutils-sha256": self.sha256}
+        image = inspect_docker_image(context, self.image)
+        if image is None and build:
+            with tempfile.TemporaryDirectory(prefix="xenoid-fleet-chrome-image-") as staging:
+                stage = Path(staging)
+                library = stage / "libcutils.so"
+                library.write_bytes(self.library_bytes())
+                (stage / "Dockerfile").write_text(
+                    f"FROM {REDROID_BASE}\nCOPY --chown=0:0 --chmod=0644 libcutils.so {RUNTIME_LIBRARY}\n",
+                    encoding="utf-8",
+                )
+                command = ["build", "--platform", "linux/arm64", "--pull=false", "--network=none", "--tag", self.image]
+                for key, value in labels.items():
+                    command.extend(("--label", f"{key}={value}"))
+                result = docker_call(context, [*command, staging])
+                if result.returncode:
+                    raise FleetError(f"Chrome-compatible Redroid image build failed: {result.stderr.strip()}")
+            image = inspect_docker_image(context, self.image)
+        if image is None:
+            raise FleetError("Chrome-compatible Redroid image is unavailable")
+        layers = docker_image_layers(image)
+        config = image.get("Config")
+        current_labels = config.get("Labels") if isinstance(config, dict) else None
+        image_id = image.get("Id")
+        if (len(layers) != len(parent_layers) + 1 or layers[:-1] != parent_layers
+                or not isinstance(current_labels, dict)
+                or any(current_labels.get(key) != value for key, value in labels.items())
+                or not isinstance(image_id, str) or not IMAGE_ID.fullmatch(image_id)):
+            raise FleetError("Chrome-compatible Redroid image does not match its expected parent and library")
+        return image_id
+
+    def verify_running(self, upstream: Upstream, device_id: str, base_id: str) -> None:
+        status, code = upstream.document(["status"], device_id)
+        runtime = status.get("runtimeIdentity")
+        image = status.get("runtimeImage")
+        identity = status.get("runtimeImageIdentity")
+        if (code or status.get("ok") is not True or status.get("running") is not True
+                or not all(isinstance(value, dict) for value in (runtime, image, identity))
+                or image.get("baseImageId") != base_id or not runtime.get("containerId")
+                or not IMAGE_ID.fullmatch(str(runtime.get("imageId")))
+                or identity.get("containerImageSha256") != runtime["imageId"]
+                or not ONE_SHA256.fullmatch(str(identity.get("desiredBootInputSha256")))
+                or identity.get("containerBootInputSha256") != identity["desiredBootInputSha256"]
+                or image.get("bootInputSha256") != identity["desiredBootInputSha256"]):
+            raise FleetError("the Chrome-compatible Xenoid runtime is not active")
+        result, code = upstream.document(["adb", "shell", "sha256sum", RUNTIME_LIBRARY], device_id)
+        stdout = result.get("stdout")
+        if (code or result.get("ok") is not True or not isinstance(stdout, str)
+                or stdout.split() != [self.sha256, RUNTIME_LIBRARY]):
+            raise FleetError("the running Android library does not match the Chrome baseline")
+
+
+def docker_call(context: str, arguments: list[str]) -> subprocess.CompletedProcess:
+    environment = dict(os.environ)
+    for key in ("DOCKER_HOST", "DOCKER_CONTEXT"):
+        environment.pop(key, None)
+    return subprocess.run(["docker", "--context", context, *arguments], env=environment,
+                          stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
+
+
+def inspect_docker_image(context: str, reference: str) -> dict | None:
+    result = docker_call(context, ["image", "inspect", "--format", "{{json .}}", reference])
+    if result.returncode:
+        if "no such image" in result.stderr.lower() or "no such object" in result.stderr.lower():
+            return None
+        raise FleetError(f"Docker could not inspect {reference}: {result.stderr.strip()}")
+    try:
+        image = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise FleetError("Docker returned an invalid image inspection result") from error
+    if not isinstance(image, dict):
+        raise FleetError("Docker returned an invalid image inspection result")
+    return image
+
+
+def docker_image_layers(image: dict) -> list[str]:
+    rootfs = image.get("RootFS")
+    layers = rootfs.get("Layers") if isinstance(rootfs, dict) else None
+    if (image.get("Architecture") != "arm64" or image.get("Os") != "linux"
+            or not isinstance(layers, list) or not layers
+            or not all(isinstance(layer, str) and IMAGE_ID.fullmatch(layer) for layer in layers)):
+        raise FleetError("Docker image has an invalid ARM64 root filesystem")
+    return layers
 
 
 @dataclass(frozen=True)
@@ -83,6 +215,7 @@ class ChromeBaseline:
     version_code: int
     chrome: tuple[Path, ...]
     trichrome: Path | None
+    runtime: ChromeRuntime | None = None
 
     @classmethod
     def load(cls) -> ChromeBaseline | None:
@@ -102,8 +235,12 @@ class ChromeBaseline:
             manifest = json.loads(body)
         except (UnicodeError, ValueError) as error:
             raise FleetError("Chrome baseline manifest is invalid JSON") from error
-        if (not isinstance(manifest, dict) or set(manifest) != {"schema", "version_code", "chrome", "trichrome"}
-                or manifest["schema"] != CHROME_SCHEMA or type(manifest["version_code"]) is not int
+        keys = {"schema", "version_code", "chrome", "trichrome"}
+        schema = manifest.get("schema") if isinstance(manifest, dict) else None
+        if schema == CHROME_RUNTIME_SCHEMA:
+            keys.add("runtime")
+        if (schema not in (CHROME_SCHEMA, CHROME_RUNTIME_SCHEMA) or set(manifest) != keys
+                or type(manifest["version_code"]) is not int
                 or not 1 <= manifest["version_code"] <= 2**63 - 1 or not isinstance(manifest["chrome"], list)
                 or not 1 <= len(manifest["chrome"]) <= 64):
             raise FleetError("Chrome baseline manifest does not match the expected schema")
@@ -114,9 +251,14 @@ class ChromeBaseline:
                 or any(apk.name == "trichrome.apk" for apk in chrome)
                 or (trichrome is not None and trichrome.name != "trichrome.apk")):
             raise FleetError("Chrome baseline requires base.apk first and unique split and library filenames")
-        return cls(manifest["version_code"], chrome, trichrome)
+        runtime = ChromeRuntime.load(directory, manifest["runtime"]) if schema == CHROME_RUNTIME_SCHEMA else None
+        return cls(manifest["version_code"], chrome, trichrome, runtime)
 
-    def converge(self, upstream: Upstream, device_id: str) -> None:
+    def converge(self, upstream: Upstream, device_id: str, base_id: str | None = None) -> None:
+        if self.runtime is not None:
+            if base_id is None:
+                raise FleetError("the Chrome-compatible Xenoid runtime could not be verified")
+            self.runtime.verify_running(upstream, device_id, base_id)
         installed = installed_chrome_version(upstream, device_id)
         if installed is not None and installed >= self.version_code:
             return
@@ -181,21 +323,25 @@ def validate_run_command(command: list[str], *, multiple: bool) -> None:
         raise FleetError("interactive or stdin-dependent commands require one device ID")
 
 
+def device_lock(device_id: str):
+    return fleet_lock(NAME_PREFIX + device_id)
+
+
 @contextlib.contextmanager
-def device_lock(device_id: str) -> Iterator[None]:
+def fleet_lock(name: str) -> Iterator[None]:
     directory = (Path.home() / ".xenoid").resolve() / "fleet-locks"
     directory.parent.mkdir(mode=0o700, exist_ok=True)
     directory.mkdir(mode=0o700, exist_ok=True)
     info = directory.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise FleetError("the fleet lock directory must be private and operator-owned")
-    descriptor = os.open(directory / f"{NAME_PREFIX}{device_id}.lock",
+    descriptor = os.open(directory / f"{name}.lock",
                          os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         info = os.fstat(descriptor)
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
                 or info.st_nlink != 1 or info.st_mode & 0o077):
-            raise FleetError("the device lock must be a private operator-owned regular file")
+            raise FleetError("the fleet lock must be a private operator-owned regular file")
         fcntl.flock(descriptor, fcntl.LOCK_EX)
         yield
     finally:
@@ -328,29 +474,68 @@ def check_registry_entry(device_id: str, row: dict | None) -> None:
         raise FleetError(f"registry entry for {NAME_PREFIX}{device_id} is unhealthy")
 
 
+def instance_settings(upstream: Upstream, device_id: str) -> dict:
+    result, code = upstream.document(["config", "show"], device_id)
+    settings = result.get("config")
+    if code or result.get("ok") is not True or not isinstance(settings, dict):
+        raise FleetError("could not read the instance configuration")
+    return settings
+
+
+def docker_context(settings: dict) -> str:
+    configured = settings.get("docker_context", "")
+    if not isinstance(configured, str):
+        raise FleetError("the instance has an invalid Docker context")
+    return configured.strip() or "default"
+
+
+def verify_migration_base(context: str, reference) -> None:
+    if not isinstance(reference, str) or not reference:
+        raise FleetError("could not verify the configured Android base image")
+    image = inspect_docker_image(context, reference)
+    if image is None:
+        raise FleetError("could not verify the configured Android base image")
+    labels = (image.get("Config") or {}).get("Labels") or {}
+    if (image.get("Id") != REDROID_BASE.split("@", 1)[1]
+            and labels.get("dev.xenoid.fleet.chrome-parent") != REDROID_BASE):
+        raise FleetError("the Chrome baseline cannot replace a separately configured Android base image")
+
+
 def create_device(upstream: Upstream, device_id: str, args: argparse.Namespace,
                   profile: str | None, baseline: ChromeBaseline | None) -> None:
     row = upstream.registry().get(device_id)
     check_registry_entry(device_id, row)
+    runtime = baseline.runtime if baseline is not None else None
+    base_id = None
     if row is None:
         command = ["init", "--config", str(upstream.root / "examples" / "config-linux-arm.json")]
         if args.no_google_services:
             command.append("--no-google-services")
+        if runtime is not None:
+            base_id = runtime.base_image_id("default", build=True)
+            command.extend(("--image", runtime.image))
         upstream.require(device_id, command)
     else:
+        settings = instance_settings(upstream, device_id) if args.no_google_services or runtime is not None else {}
         if args.no_google_services:
-            config, code = upstream.document(["config", "show"], device_id)
-            settings = config.get("config")
-            if code != 0 or config.get("ok") is not True or not isinstance(settings, dict):
-                raise FleetError("could not verify the configured Google-services provider")
             if settings.get("google_services_provider") != "none":
                 raise FleetError("Google services on an existing device require a new device ID to change")
-        upstream.recreate(device_id)
+        if runtime is not None:
+            context = docker_context(settings)
+            configured_image = settings.get("image")
+            if configured_image != runtime.image:
+                verify_migration_base(context, configured_image)
+            base_id = runtime.base_image_id(context, build=True)
+        if runtime is not None and settings.get("image") != runtime.image:
+            # Native up recreates the container when its configured boot image changes.
+            upstream.require(device_id, ["config", "set", "--image", runtime.image])
+        else:
+            upstream.recreate(device_id)
     upstream.require(device_id, ["up"])
     if profile is not None:
         upstream.require(device_id, ["device", "apply", profile, "--instance-identity"])
     if baseline is not None:
-        baseline.converge(upstream, device_id)
+        baseline.converge(upstream, device_id, base_id)
 
 
 def list_devices(upstream: Upstream, *, as_json: bool) -> int:
@@ -395,7 +580,13 @@ def run_devices(upstream: Upstream, ids: list[str], command: list[str]) -> int:
             with device_lock(device_id):
                 code = upstream.call(command, device_id=device_id, interactive=not multiple).returncode
                 if code == 0 and baseline is not None:
-                    baseline.converge(upstream, device_id)
+                    if baseline.runtime is None:
+                        baseline.converge(upstream, device_id)
+                    else:
+                        settings = instance_settings(upstream, device_id)
+                        if settings.get("image") == baseline.runtime.image:
+                            base_id = baseline.runtime.base_image_id(docker_context(settings), build=False)
+                            baseline.converge(upstream, device_id, base_id)
         except (OSError, FleetError) as error:
             report_failure(device_id, error)
             code = 1
