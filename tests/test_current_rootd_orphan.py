@@ -14,14 +14,14 @@ import unittest
 
 from test_proxy_observer_classification import patched_observer
 SOURCE='shipped-native-backend-patch'
-NAMES={'_recover_current_rootd_orphan','_terminate_rootd_process','_proc_start_time','ensure_rootd_root','_rootd_owned_process','_rootd_port_inodes'}
+NAMES={'_rootd_authentication','_rootd_owned_authentication','_rootd_deployed_candidate','_recover_current_rootd_orphan','_terminate_rootd_process','_proc_start_time','ensure_rootd_root','_rootd_owned_process','_rootd_port_inodes'}
 PATCHED_SOURCE=patched_observer()
 tree=ast.parse(PATCHED_SOURCE);methods=[n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name in NAMES]
-# Reviewed complete native backend SHA256 b376893a531eb54ad03e05ff419af55e0a4ea3ea5daaaab9f79affe6123e7e4c.
+# Reviewed complete native backend SHA256 c42b8f7cc122e6c597a44fd0cd1969d5e2b5f728e0366f7f0aa80387dd5b0ebc.
 assert len(methods)==len(NAMES)
-assert hashlib.sha256('\n'.join(ast.get_source_segment(PATCHED_SOURCE,n) for n in sorted(methods,key=lambda n:n.name)).encode()).hexdigest()=='8cd34c05a439d68dfc7b99bd9ab9fe60a5fa58fb84b4ee95198f4afa2beba19b'
+assert hashlib.sha256('\n'.join(ast.get_source_segment(PATCHED_SOURCE,n) for n in sorted(methods,key=lambda n:n.name)).encode()).hexdigest()=='96d03e60023df4a7c0af4a835fbc5c1b6fe676b8fc6e03e1296bae395c8a774d'
 class_node=ast.ClassDef(name='Native',bases=[],keywords=[],body=methods,decorator_list=[])
-namespace={'json':json,'Optional':__import__('typing').Optional,'Any':object,'Mapping':__import__('collections.abc',fromlist=['Mapping']).Mapping,'Path':Path,'hashlib':hashlib,'stat':stat,'re':re,'shlex':shlex,'time':time,'which':lambda name:'/usr/bin/'+name,'InstanceError':RuntimeError,'DaemonClient':object,'_ROOTD_PROVISION_TIMEOUT_SECONDS':30,'_ROOTD_REMOTE_PATH':'/data/local/tmp/xenoid-rootd','_ROOTD_LEGACY_PATH':'/data/local/tmp/.netd-helper','_ROOTD_RUN_DIRECTORY':'/data/local/tmp/xenoid-rootd-run','_ROOTD_PROCESS_RECORD':'/data/local/tmp/xenoid-rootd-run/process.json','_ROOTD_PROCESS_SCHEMA':'dev.xenoid.rootd-process/v1'}
+namespace={'subprocess':__import__('subprocess'),'json':json,'Optional':__import__('typing').Optional,'Any':object,'Mapping':__import__('collections.abc',fromlist=['Mapping']).Mapping,'Path':Path,'hashlib':hashlib,'stat':stat,'re':re,'shlex':shlex,'time':time,'which':lambda name:'/usr/bin/'+name,'InstanceError':RuntimeError,'DaemonClient':object,'_ROOTD_PROVISION_TIMEOUT_SECONDS':30,'_ROOTD_REMOTE_PATH':'/data/local/tmp/xenoid-rootd','_ROOTD_LEGACY_PATH':'/data/local/tmp/.netd-helper','_ROOTD_RUN_DIRECTORY':'/data/local/tmp/xenoid-rootd-run','_ROOTD_PROCESS_RECORD':'/data/local/tmp/xenoid-rootd-run/process.json','_ROOTD_PROCESS_SCHEMA':'dev.xenoid.rootd-process/v1'}
 exec(compile(ast.fix_missing_locations(ast.Module(body=[class_node],type_ignores=[])),str(SOURCE),'exec'),namespace)
 Native=namespace['Native'];CID='a'*64;TOKEN='b'*32;DIGEST=hashlib.sha256(b'published-rootd').hexdigest();PID=4182;START=4740166
 

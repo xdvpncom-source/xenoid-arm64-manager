@@ -196,7 +196,134 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
          return identity, "valid"
 
      def _rootd_authentication(
-@@ -9149,6 +9195,102 @@
+@@ -8955,6 +9001,12 @@
+         if timeout == 0.0:
+             return "rootd_unavailable"
+         status = client.root_status(timeout=timeout)
++        if isinstance(status, dict) and (
++            status.get("httpStatus") == 401
++            or status.get("error") in {"unauthorized", "rootd_unauthorized", "daemon_unauthorized"}
++            or status.get("errorCode") in {"rootd_unauthorized", "daemon_unauthorized"}
++        ):
++            return "rootd_unauthorized"
+         if (
+             isinstance(status, dict)
+             and status.get("ok") is True
+@@ -8965,13 +9017,108 @@
+             )
+         ):
+             return "ok"
+-        if isinstance(status, dict) and (
+-            status.get("httpStatus") == 401
+-            or status.get("error") in {"unauthorized", "rootd_unauthorized"}
+-            or status.get("errorCode") == "rootd_unauthorized"
++        return "rootd_unavailable"
++
++    def _rootd_owned_authentication(
++        self,
++        client: DaemonClient,
++        owned: Mapping[str, Any],
++        expected_container_id: str,
++        candidate_digest: str,
++        token: str,
++        *,
++        deadline: float,
++    ) -> str:
++        """Authenticate a current owned helper even while Android is restarting."""
++        try:
++            authentication = self._rootd_authentication(client, deadline=deadline)
++        except (OSError, subprocess.SubprocessError):
++            authentication = "rootd_unavailable"
++        if authentication != "rootd_unavailable":
++            return authentication
++        if (not isinstance(expected_container_id, str)
++                or re.fullmatch(r"[0-9a-f]{64}", expected_container_id) is None
++                or not isinstance(candidate_digest, str)
++                or re.fullmatch(r"[0-9a-f]{64}", candidate_digest) is None
++                or not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{32}", token) is None
++                or not isinstance(owned, Mapping)
++                or owned.get("digest") != candidate_digest
++                or owned.get("executable") != _ROOTD_REMOTE_PATH
++                or type(owned.get("pid")) is not int or owned["pid"] <= 1
++                or type(owned.get("startTime")) is not int or owned["startTime"] < 0):
++            return "rootd_resource_conflict"
++
++        def unchanged() -> bool:
++            remaining = deadline - time.monotonic()
++            if remaining <= 0:
++                return False
++            container, _ = self._owned_container_record(timeout=min(5.0, remaining))
++            if not isinstance(container, Mapping) or container.get("Id") != expected_container_id:
++                return False
++            current, state = self._rootd_owned_process(deadline=deadline)
++            if state != "valid" or current != owned or time.monotonic() >= deadline:
++                return False
++            container, _ = self._owned_container_record(timeout=min(5.0, deadline - time.monotonic()))
++            return (isinstance(container, Mapping) and container.get("Id") == expected_container_id
++                    and time.monotonic() < deadline)
++
++        if not unchanged():
++            return "rootd_unavailable" if time.monotonic() >= deadline else "rootd_resource_conflict"
++        try:
++            response = self._rootd_exec("id -u", token, deadline=deadline, timeout_ms=5000)
++        except (OSError, subprocess.SubprocessError):
++            return "rootd_unavailable"
++        if isinstance(response, Mapping) and (
++            response.get("httpStatus") == 401
++            or response.get("error") in {"unauthorized", "rootd_unauthorized", "daemon_unauthorized"}
++            or response.get("errorCode") in {"rootd_unauthorized", "daemon_unauthorized"}
+         ):
+             return "rootd_unauthorized"
+-        return "rootd_unavailable"
++        if (not isinstance(response, Mapping) or response.get("ok") is not True
++                or type(response.get("exitCode")) is not int or response["exitCode"] != 0
++                or not isinstance(response.get("stdout"), str) or response["stdout"].strip() != "0"):
++            return "rootd_unavailable"
++        if not unchanged():
++            return "rootd_unavailable" if time.monotonic() >= deadline else "rootd_resource_conflict"
++        return "ok"
++
++    def _rootd_deployed_candidate(
++        self,
++        expected_container_id: str,
++        candidate_digest: str,
++        candidate_size: int,
++        *,
++        deadline: float,
++    ) -> tuple[Optional[tuple], bool]:
++        """Prove an identical published file without depending on ADB transport.
++
++        The boolean separately proves container ownership. An untrusted or
++        missing file may use normal deployment; an unknown container may not.
++        """
++        def owned_container() -> bool:
++            remaining = deadline - time.monotonic()
++            if remaining <= 0:
++                return False
++            container, _ = self._owned_container_record(timeout=min(5.0, remaining))
++            return (isinstance(container, Mapping) and container.get("Id") == expected_container_id
++                    and time.monotonic() < deadline)
++
++        if (not isinstance(expected_container_id, str)
++                or re.fullmatch(r"[0-9a-f]{64}", expected_container_id) is None
++                or not isinstance(candidate_digest, str)
++                or re.fullmatch(r"[0-9a-f]{64}", candidate_digest) is None
++                or type(candidate_size) is not int or candidate_size <= 0
++                or not owned_container()):
++            return None, False
++        metadata = self._rootd_stat(_ROOTD_REMOTE_PATH, deadline=deadline)
++        proven = None
++        if (metadata is not None and metadata[2] == 0 and stat.S_ISREG(metadata[3])
++                and stat.S_IMODE(metadata[3]) == 0o755 and metadata[4] == 1
++                and metadata[5] == candidate_size
++                and self._rootd_remote_digest(_ROOTD_REMOTE_PATH, deadline=deadline) == candidate_digest
++                and self._rootd_stat(_ROOTD_REMOTE_PATH, deadline=deadline) == metadata):
++            proven = metadata
++        return (proven, True) if owned_container() else (None, False)
+
+     def _terminate_rootd_process(
+         self,
+@@ -9149,6 +9296,102 @@
              deadline=deadline,
          ), True
 
@@ -299,7 +426,37 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
      def _launch_rootd_with_token(
          self,
          container_id: str,
-@@ -9373,10 +9515,18 @@
+@@ -9277,6 +9520,7 @@
+             or re.fullmatch(r"[0-9a-f]{64}", container_id) is None
+         ):
+             return failure("rootd_resource_conflict")
++        expected_container_id = container_id
+         if not self._remove_legacy_android_rootd_token(
+             container_id,
+             deadline=deadline,
+@@ -9330,8 +9574,8 @@
+             return failure("rootd_unavailable")
+         legacy_adopted = False
+         if owned is not None:
+-            authentication = self._rootd_authentication(
+-                daemon_client,
++            authentication = self._rootd_owned_authentication(
++                daemon_client, owned, expected_container_id, candidate_digest, token,
+                 deadline=deadline,
+             )
+             if authentication == "ok" and owned["digest"] == candidate_digest:
+@@ -9344,6 +9588,10 @@
+                 }
+             if authentication == "rootd_unauthorized":
+                 return failure("rootd_unauthorized")
++            if owned["digest"] == candidate_digest:
++                # An unavailable Android API is not proof that this current
++                # owned helper is unhealthy. Keep it for an authenticated retry.
++                return failure(authentication)
+             if not self._terminate_rootd_process(owned, deadline=deadline):
+                 return failure(
+                     "rootd_unavailable"
+@@ -9373,10 +9621,18 @@
          if inodes or listener_conflict:
              if record_state != "absent" or listener_conflict:
                  return failure("rootd_resource_conflict")
@@ -322,6 +479,125 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
              if not adopted:
                  return failure(
                      "rootd_unavailable"
+@@ -9385,42 +9641,51 @@
+                 )
+             legacy_adopted = legacy_seen
+
+-        push_timeout = remaining(15.0)
+-        if push_timeout <= 0:
+-            return failure("rootd_unavailable")
+-        push = self.adb(
+-            ["push", str(candidate), _ROOTD_REMOTE_PATH],
+-            timeout=push_timeout,
+-        )
+-        if push.get("ok") is not True:
+-            return failure(
+-                "rootd_unavailable"
+-                if remaining() <= 0
+-                else "rootd_deploy_failed"
+-            )
+-        for command in (
+-            ["chown", "0:0", _ROOTD_REMOTE_PATH],
+-            ["chmod", "0755", _ROOTD_REMOTE_PATH],
+-        ):
+-            command_timeout = remaining()
+-            if command_timeout <= 0:
++        inodes, listener_conflict = self._rootd_port_inodes(deadline=deadline)
++        if inodes or listener_conflict:
++            return failure("rootd_unavailable" if remaining() <= 0 else "rootd_resource_conflict")
++        deployed, container_owned = self._rootd_deployed_candidate(
++            expected_container_id, candidate_digest, candidate_state.st_size, deadline=deadline,
++        )
++        if not container_owned:
++            return failure("rootd_unavailable" if remaining() <= 0 else "rootd_resource_conflict")
++        if deployed is None:
++            push_timeout = remaining(15.0)
++            if push_timeout <= 0:
+                 return failure("rootd_unavailable")
+-            prepared = self.docker_exec(command, timeout=command_timeout)
+-            if prepared.get("ok") is not True:
++            push = self.adb(
++                ["push", str(candidate), _ROOTD_REMOTE_PATH],
++                timeout=push_timeout,
++            )
++            if push.get("ok") is not True:
+                 return failure(
+                     "rootd_unavailable"
+                     if remaining() <= 0
+                     else "rootd_deploy_failed"
+                 )
+-        if self._rootd_remote_digest(
+-            _ROOTD_REMOTE_PATH,
+-            deadline=deadline,
+-        ) != candidate_digest:
+-            return failure(
+-                "rootd_unavailable"
+-                if remaining() <= 0
+-                else "rootd_deploy_failed"
+-            )
++            for command in (
++                ["chown", "0:0", _ROOTD_REMOTE_PATH],
++                ["chmod", "0755", _ROOTD_REMOTE_PATH],
++            ):
++                command_timeout = remaining()
++                if command_timeout <= 0:
++                    return failure("rootd_unavailable")
++                prepared = self.docker_exec(command, timeout=command_timeout)
++                if prepared.get("ok") is not True:
++                    return failure(
++                        "rootd_unavailable"
++                        if remaining() <= 0
++                        else "rootd_deploy_failed"
++                    )
++            if self._rootd_remote_digest(
++                _ROOTD_REMOTE_PATH,
++                deadline=deadline,
++            ) != candidate_digest:
++                return failure(
++                    "rootd_unavailable"
++                    if remaining() <= 0
++                    else "rootd_deploy_failed"
++                )
+         cleanup_timeout = remaining()
+         if cleanup_timeout <= 0:
+             return failure("rootd_unavailable")
+@@ -9436,9 +9701,15 @@
+         container_id = container.get("Id") if isinstance(container, dict) else None
+         if (
+             not isinstance(container_id, str)
+-            or re.fullmatch(r"[0-9a-f]{64}", container_id) is None
++            or container_id != expected_container_id
+         ):
+             return failure("rootd_resource_conflict")
++        if deployed is not None:
++            current, container_owned = self._rootd_deployed_candidate(
++                expected_container_id, candidate_digest, candidate_state.st_size, deadline=deadline,
++            )
++            if not container_owned or current != deployed:
++                return failure("rootd_unavailable" if remaining() <= 0 else "rootd_resource_conflict")
+         launch_timeout = remaining(10.0)
+         if launch_timeout <= 0 or not self._launch_rootd_with_token(
+             container_id,
+@@ -9455,8 +9726,8 @@
+                 and state == "valid"
+                 and process["digest"] == candidate_digest
+             ):
+-                last_authentication = self._rootd_authentication(
+-                    daemon_client,
++                last_authentication = self._rootd_owned_authentication(
++                    daemon_client, process, expected_container_id, candidate_digest, token,
+                     deadline=deadline,
+                 )
+                 if last_authentication == "ok":
+@@ -9468,7 +9739,7 @@
+                         "legacyAdopted": legacy_adopted,
+                         "port": self.lease.rootd_port,
+                     }
+-                if last_authentication == "rootd_unauthorized":
++                if last_authentication in {"rootd_unauthorized", "rootd_resource_conflict"}:
+                     break
+             sleep_for = remaining(0.2)
+             if sleep_for > 0:
 diff --git a/scripts/test-convergence.py b/scripts/test-convergence.py
 --- a/scripts/test-convergence.py
 +++ b/scripts/test-convergence.py
