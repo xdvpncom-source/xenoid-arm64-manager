@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-release=v0.1.12
+release=v0.1.13
 fleet_repository=https://github.com/xdvpncom-source/xenoid-arm64-manager.git
-fleet_sha256=c8fc4f4689e4fe81e692899929e66180b76ce8f8aa95bbb511c95f13cc6b4703
+fleet_sha256=161c7360c24114f8500b0c58f63f4f912589d96f66882f8d3387b0aa3f640fd0
 toolchain_sha256=f657aba4c546b5c6c3a9c37b513db9ceca4fb31f26b33bf3106a5852052cf9c8
 daemon_patch_sha256=a76a728fea8ebee104fc5e7230eb02ec69d11db5d24f51eff0f9edfa4f9ae467
 keymint_patch_sha256=5fd4a5fe25479ebe8fa068bd8cf55fe72ddf3245787e19feaf4a06f67859fa16
 protection_patch_sha256=1e57b90e7008a26a7f4a04a926ddcc82e9b79d78c367bba3562e41f4a19c26a3
-proxy_acceptance_patch_sha256=fb6da2a5e665527ce8a1e3daaa85ec65a3536a03269d3c4c76253a39a9ce3f19
-qa_manifest_sha256=24516584129034886b3b4b14ac4518dee474ae3f90ecf333f50b201ffd0c5c98
+proxy_acceptance_patch_sha256=6be5eacfd5b67c24a17fc4f4f11c87b6f2df5702d306689d63314d4c9662c0c5
+qa_manifest_sha256=686ca02ddf2ea74be3b3e695495d4d96ea72fa9a38baac6aed206d109c018594
 qa_installer_sha256=ab52866ddb793476e73c27f776999499b7d822a782e13b96077c65e659332483
+proxy_upgrader_sha256=9994aab4e2aa074a35aac44c2a3da9e11d9aa320d89aba8c4fcace6639a3c444
 v011_daemon_blob=ef4394904d9798a529fb8cf609989cf8526b4a89
+v012_live_observe_blob=86fd6204beb0446e7eb35e6ef9cd3ffbd159ecc3
 upstream_repository=https://github.com/Umiade/xenoid.git
 upstream_revision=c07e56b4aef8cd7e4d56eed11c84781369d29997
 base_repository=redroid/redroid
@@ -153,7 +155,9 @@ if [[ -e $upstream || -L $upstream ]]; then
     # The stock build replaces its tracked proxy sandbox binary with a validated artifact.
     git -C "$upstream" diff --quiet HEAD -- . ':(exclude)native/xenoid-proxy-sandbox/xenoid-proxy-sandbox' \
         ':(exclude)scripts/build-daemon-standalone.sh' ':(exclude)scripts/build-keymint.sh' \
-        ':(exclude)src/xenoid/protection.py' ':(exclude)src/xenoid/live_observe.py' || \
+        ':(exclude)src/xenoid/protection.py' ':(exclude)src/xenoid/live_observe.py' \
+        ':(exclude)src/xenoid/backend.py' \
+        ':(exclude)scripts/xenoid-proxy-engine.py' || \
         fail 'The installed Xenoid tracked sources have local changes.'
 else
     git init -q "$stage/upstream"
@@ -188,28 +192,30 @@ fi
         "$daemon_patch_sha256" patches/standalone-manifest.patch "$keymint_patch_sha256" patches/keymint-paths.patch \
         "$protection_patch_sha256" patches/shared-protection-inspect.patch \
         "$proxy_acceptance_patch_sha256" patches/proxy-live-acceptance.patch \
-        "$qa_manifest_sha256" qa/manifest.sha256 "$qa_installer_sha256" install-qa-addon.sh | \
+        "$qa_manifest_sha256" qa/manifest.sha256 "$qa_installer_sha256" install-qa-addon.sh \
+        "$proxy_upgrader_sha256" scripts/upgrade-proxy-control.py | \
         sha256sum --check --status
 ) || fail "The CLI, toolchain installer, or source patches did not match release $release."
 
 printf 'Preparing the pinned Xenoid source patches\n'
-patched_sources=(scripts/build-daemon-standalone.sh scripts/build-keymint.sh src/xenoid/protection.py src/xenoid/live_observe.py)
+patched_sources=(scripts/build-daemon-standalone.sh scripts/build-keymint.sh src/xenoid/protection.py src/xenoid/live_observe.py src/xenoid/backend.py scripts/xenoid-proxy-engine.py)
 mkdir "$stage/reference"
 git -C "$upstream" archive HEAD -- "${patched_sources[@]}" | tar -x --no-same-permissions -C "$stage/reference"
 git -C "$stage/reference" apply "$source_tree/patches/standalone-manifest.patch" "$source_tree/patches/keymint-paths.patch" \
     "$source_tree/patches/shared-protection-inspect.patch"
-git -C "$stage/reference" apply --include=src/xenoid/live_observe.py "$source_tree/patches/proxy-live-acceptance.patch"
+git -C "$stage/reference" apply --include=src/xenoid/live_observe.py --include=src/xenoid/backend.py --include=scripts/xenoid-proxy-engine.py "$source_tree/patches/proxy-live-acceptance.patch"
 for source_file in "${patched_sources[@]}"; do
     installed_source=$upstream/$source_file
     expected_mode=755
-    if [[ $source_file == *.py ]]; then expected_mode=644; fi
+    if [[ $source_file == src/xenoid/*.py ]]; then expected_mode=644; fi
     [[ -f $installed_source && ! -L $installed_source &&
         $(stat -c '%u:%g:%a' "$installed_source") == "0:0:$expected_mode" ]] || \
         fail "Check the ownership and mode of $installed_source."
     if ! cmp -s "$installed_source" "$stage/reference/$source_file"; then
         installed_blob=$(git -C "$upstream" hash-object --no-filters "$installed_source")
         [[ $installed_blob == $(git -C "$upstream" rev-parse "HEAD:$source_file") ||
-            ( $source_file == scripts/build-daemon-standalone.sh && $installed_blob == "$v011_daemon_blob" ) ]] || \
+            ( $source_file == scripts/build-daemon-standalone.sh && $installed_blob == "$v011_daemon_blob" ) ||
+            ( $source_file == src/xenoid/live_observe.py && $installed_blob == "$v012_live_observe_blob" ) ]] || \
             fail "The installed Xenoid source $source_file has local changes."
     fi
 done
@@ -234,6 +240,10 @@ fi
 
 printf 'Installing panel-controlled QA helpers and host resource services\n'
 bash "$source_tree/install-qa-addon.sh"
+install -m 0755 "$source_tree/scripts/upgrade-proxy-control.py" "$stage/upgrade-proxy-control.py"
+mv -f -- "$stage/upgrade-proxy-control.py" "$prefix/upgrade-proxy-control.py"
+printf 'Refreshing enabled running proxies for the verified native control revision\n'
+python3 "$prefix/upgrade-proxy-control.py" --all
 
 if (( ! install_only )); then
     cd "$upstream"

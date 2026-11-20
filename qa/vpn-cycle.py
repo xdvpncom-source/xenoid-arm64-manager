@@ -8,6 +8,7 @@ import math
 import random
 import re
 import time
+import uuid
 from xenoid_device import Device
 
 RUN_SETTINGS = {
@@ -38,6 +39,13 @@ CONTINUE_AFTER_CYCLE_ERROR = True
 FAILED_CYCLE_BACKOFF_SECONDS = 15
 RETRY_EXIT_CODE = 75
 DISMISS_ANDROID_CRASH_DIALOGS = True
+# Draw once after a successful app cycle and cleanup. A matching draw runs the
+# official Xenoid identity regeneration, including its Android soft restart.
+REGENERATE_ENABLED = True
+REGENERATE_RANDOM_RANGE = (1, 10)
+REGENERATE_TRIGGER = 5
+REGENERATE_TIMEOUT = 0                 # 0 waits without a setup deadline.
+REGENERATE_RETRY_SECONDS = 15
 
 # Explicit resource IDs or labels can be added here for a particular APK.
 # Example: ({"resource_id": "com.example.vpn:id/ad_close"},)
@@ -46,14 +54,41 @@ TERMS_CLOSE_SELECTORS = ()
 CONNECT_SELECTORS = ()
 CONNECT_POSITION = None               # Optional explicit (x, y); otherwise an observed Connect control is required.
 TAP_BACKEND = "native"                 # Official Xenoid input; "adb" is an explicit optional alternative.
-GEOMETRIC_AD_CLOSE = True              # Uses a real ImageButton on a recognized ad window.
+GEOMETRIC_AD_CLOSE = True              # Uses an observed clickable corner control on a recognized ad.
 TERMS_BACK_FALLBACK = False            # Enable only if Back is known to dismiss this app's terms dialog.
+AD_ACTIVITY_HINTS = ("AdActivity", "Interstitial", "RewardedAd", "RewardedVideo", "AdUnitActivity")
+AD_ACTIVITY_NAMESPACE_PREFIXES = (
+    "com.google.android.gms.ads.", "com.applovin.", "com.unity3d.services.ads.",
+    "com.mbridge.", "com.bytedance.sdk.openadsdk.", "com.ironsource.", "com.vungle.", "com.chartboost.",
+)
 
 CLOSE_WORDS = {"close", "close ad", "close advertisement", "close button", "dismiss",
                "dismiss ad", "skip ad", "بستن", "بستن تبلیغ", "بستن آگهی", "رد کردن تبلیغ"}
 CLOSE_IDS = {"close", "close_button", "ad_close", "ad_close_button", "close_ad_button",
              "interstitial_close_button", "close_ad", "closebutton", "skip_ad", "skip_button"}
 CLOSE_SYMBOLS = {"×", "✕", "✖", "x"}
+CLOSE_ACTION_TOKENS = {"close", "dismiss", "skip", "بستن", "ببند", "ببندید"}
+CLOSE_LABEL_TOKENS = CLOSE_ACTION_TOKENS | {
+    "ad", "ads", "advert", "advertisement", "advertisements", "advertising", "interstitial",
+    "video", "rewarded", "reward", "fullscreen", "full", "screen", "end", "card", "endcard",
+    "this", "the", "current", "a", "an", "to", "tap", "click", "press", "please", "now",
+    "button", "btn", "icon", "image", "view", "popup", "pop", "up", "dialog", "window",
+    "admob", "google", "gms", "unity", "unityads", "applovin", "mbridge", "pangle",
+    "تبلیغ", "تبلیغات", "آگهی", "این", "را", "کردن", "شدن", "رد", "عبور", "گذشتن", "از", "دکمه",
+}
+CLOSE_REJECT_TOKENS = {
+    "buy", "purchase", "shop", "install", "download", "get", "learn", "more", "open", "visit",
+    "claim", "subscribe", "register", "login", "account", "delete", "share", "rate",
+    "closed",
+    "mute", "unmute", "sound", "audio", "volume", "play", "pause", "replay", "report", "feedback",
+    "not", "no", "never", "cannot", "cant", "dont", "disabled", "unavailable", "locked",
+    "wait", "waiting", "soon", "remaining", "after",
+    "خرید", "نصب", "دانلود", "دریافت", "بیشتر", "صدا", "بیصدا",
+    "نبند", "نبندید", "نشود", "نمی", "نیست", "غیرفعال", "انتظار", "بعد", "پس", "مانده",
+}
+AD_CLOSE_INFO_TOKENS = {"adchoices", "choices", "choice", "info", "information", "about", "privacy", "policy",
+                        "disclosure", "اطلاعات", "حریم"}
+GEOMETRIC_CLOSE_LABELS = {"button", "imagebutton", "image button", "image", "icon", "view"}
 TERMS_WORDS = {"terms of service", "terms and conditions", "privacy policy", "data collection disclosure",
                "قوانین", "شرایط استفاده", "سیاست حریم خصوصی", "شفافیت جمع آوری داده"}
 CONNECT_WORDS = {"connect", "اتصال", "وصل شدن"}
@@ -78,6 +113,33 @@ def normalized(value):
 
 def labels(control):
     return {normalized(control.get(key, "")) for key in ("text", "content_desc")} - {""}
+
+
+def close_tokens(value):
+    value = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", str(value))
+    value = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
+    value = normalized(value.replace("'", "").replace("’", "")).replace("ي", "ی").replace("ك", "ک")
+    return set(re.findall(r"[^\W\d_]+|\d+", value, re.UNICODE))
+
+
+def close_rejected(control, *, ad=False):
+    values = [control.get(key, "") for key in ("text", "content_desc")]
+    tokens = set().union(*(close_tokens(value) for value in values))
+    if ad:
+        tokens |= close_tokens(control.get("resource_id", "").rsplit("/", 1)[-1])
+    # A close-like ID cannot override a CTA, negation or an unfinished countdown.
+    return (bool(tokens & (CLOSE_REJECT_TOKENS | (AD_CLOSE_INFO_TOKENS if ad else set())))
+            or any(int(number) > 0 for value in values for number in re.findall(r"\d+", str(value))))
+
+
+def semantic_close_label(control):
+    for field in ("text", "content_desc"):
+        tokens = close_tokens(control.get(field, ""))
+        action = bool(tokens & CLOSE_ACTION_TOKENS) or (
+            bool(tokens & {"رد", "عبور", "گذشتن"}) and bool(tokens & {"تبلیغ", "تبلیغات", "آگهی"}))
+        if action and all(token in CLOSE_LABEL_TOKENS or token.isdecimal() and int(token) == 0 for token in tokens):
+            return True
+    return False
 
 
 def bounds(control):
@@ -161,8 +223,16 @@ def is_notification(window):
 
 
 def is_ad_activity(window):
-    activity = normalized(window.get("component", ""))
-    return any(word in activity for word in ("adactivity", "interstitial", "rewardedad"))
+    component = str(window.get("component", ""))
+    activity = component.partition("/")[2] or component
+    words = close_tokens(activity.rsplit(".", 1)[-1])
+    if any(close_tokens(hint) <= words for hint in AD_ACTIVITY_HINTS):
+        return True
+    # Fullscreen/video alone is also used by ordinary media apps. Require a
+    # configured ad namespace before treating those broader names as an ad.
+    sdk = activity.casefold().startswith(AD_ACTIVITY_NAMESPACE_PREFIXES)
+    return sdk and "activity" in words and (
+        bool(words & {"fullscreen", "video", "ad", "reward", "rewarded"}) or {"full", "screen"} <= words)
 
 
 def is_ad(window):
@@ -316,26 +386,32 @@ class Cycle:
         if selected:
             return selected
         scored = []
+        ad = is_ad(window) and not is_terms(window)
         for control in controls(window):
+            if close_rejected(control, ad=ad):
+                continue
             words = labels(control)
             tail = control.get("resource_id", "").rsplit("/", 1)[-1].casefold()
-            if words & CLOSE_WORDS:
-                scored.append((100, control))
-            elif tail in CLOSE_IDS:
+            actionable = control.get("clickable") or control.get("class_name", "").rsplit(".", 1)[-1] in {"Button", "ImageButton"}
+            if tail in CLOSE_IDS or ad and close_tokens(control.get("resource_id", "").rsplit("/", 1)[-1]) & {"close", "dismiss", "skip"}:
                 scored.append((110, control))
-            elif words & CLOSE_SYMBOLS:
+            elif words & CLOSE_WORDS or ad and actionable and semantic_close_label(control):
+                scored.append((100, control))
+            elif actionable and words & CLOSE_SYMBOLS:
                 scored.append((90, control))
-        selected = choose_unique(scored)
-        if selected or not geometric:
-            return selected
-        # Geometry is used only for a real exposed button, never a blind corner tap.
+        if scored or not geometric or not ad:
+            return choose_unique(scored)
+        # An ambiguous semantic match stays ambiguous. Geometry uses only actual
+        # observed clickable controls, with no CTA/countdown or descriptive copy.
         all_boxes = [bounds(control) for control in controls(window)]
         width = max((box[2] for box in all_boxes), default=0)
         height = max((box[3] for box in all_boxes), default=0)
         for control in controls(window):
             left, top, right, bottom = bounds(control)
             w, h = right - left, bottom - top
-            if ("ImageButton" in control.get("class_name", "") and not labels(control)
+            if (control.get("class_name", "").rsplit(".", 1)[-1] in {"Button", "ImageButton", "ImageView", "View"}
+                    and control.get("clickable") and not close_rejected(control, ad=True)
+                    and labels(control) <= GEOMETRIC_CLOSE_LABELS
                     and top <= height * .18 and (right <= width * .22 or left >= width * .78)
                     and 0 < w <= width * .18 and 0 < h <= height * .18 and .65 <= w / h <= 1.6):
                 scored.append((20, control))
@@ -617,8 +693,69 @@ class Cycle:
         if failure:
             raise failure
         self.check_target_crash()
+        self.regenerate_after_success()
         self.log("QA cycle completed successfully")
 
+    def regenerate_after_success(self):
+        if not REGENERATE_ENABLED:
+            return False
+        validate_regeneration_settings()
+        low, high = REGENERATE_RANDOM_RANGE
+        selected = random.randint(low, high)
+        self.log(f"Regeneration draw: {selected} (range {low}..{high}; trigger {REGENERATE_TRIGGER})")
+        if selected != REGENERATE_TRIGGER:
+            return False
+        # Keep this key across transport/recovery attempts. The host persists a
+        # receipt so a lost response cannot request a second identity rotation.
+        operation_key = uuid.uuid4().hex
+        self.log("Official Xenoid regenerate selected; waiting for Android reload")
+        while True:
+            try:
+                result = self.device.regenerate(timeout=REGENERATE_TIMEOUT, operation_key=operation_key)
+                required = ("ok", "native_ready", "profile_ready", "container_id_preserved",
+                            "instance_id_preserved", "resource_tag_preserved", "identities_changed")
+                if (not isinstance(result, dict) or result.get("phase") != "committed"
+                        or result.get("runtimeOnly") is not True or result.get("containerRecreated") is not False
+                        or any(result.get(key) is not True for key in required)):
+                    raise RuntimeError("Official regeneration readiness was not confirmed")
+                break
+            except (RuntimeError, OSError) as error:
+                self.log("Regeneration waiting: " + str(error))
+                # No UI/ADB crash probing while an identity transaction may be
+                # pending. Resume the same recorded operation after this pause.
+                time.sleep(REGENERATE_RETRY_SECONDS)
+        # The official restart replays the regenerated native display profile.
+        # Restore the administrator's script settings after that replay finishes.
+        # A display retry must not invoke regenerate again or draw a new number.
+        while True:
+            try:
+                if DISPLAY_FPS is not None:
+                    self.device.set_frame_rate(DISPLAY_FPS, timeout=DISPLAY_SETUP_TIMEOUT)
+                configure_display(self.device, DISPLAY_SCALE)
+                break
+            except (RuntimeError, OSError) as error:
+                self.log("Waiting to restore display after regeneration: " + str(error))
+                time.sleep(REGENERATE_RETRY_SECONDS)
+        self.log("Official Xenoid regeneration committed; Android reload and display settings verified")
+        return True
+
+
+def validate_regeneration_settings():
+    if type(REGENERATE_ENABLED) is not bool:
+        raise ValueError("REGENERATE_ENABLED must be Boolean")
+    if not REGENERATE_ENABLED:
+        return
+    if (not isinstance(REGENERATE_RANDOM_RANGE, (tuple, list)) or len(REGENERATE_RANDOM_RANGE) != 2
+            or any(type(value) is not int for value in REGENERATE_RANDOM_RANGE)
+            or REGENERATE_RANDOM_RANGE[0] > REGENERATE_RANDOM_RANGE[1]
+            or type(REGENERATE_TRIGGER) is not int
+            or not REGENERATE_RANDOM_RANGE[0] <= REGENERATE_TRIGGER <= REGENERATE_RANDOM_RANGE[1]):
+        raise ValueError("Use an integer regeneration range and a trigger inside that range")
+    if type(REGENERATE_TIMEOUT) is not int or REGENERATE_TIMEOUT < 0:
+        raise ValueError("REGENERATE_TIMEOUT must be a nonnegative integer; 0 is unlimited")
+    if (type(REGENERATE_RETRY_SECONDS) not in (int, float)
+            or not math.isfinite(REGENERATE_RETRY_SECONDS) or REGENERATE_RETRY_SECONDS < 0):
+        raise ValueError("REGENERATE_RETRY_SECONDS must be a nonnegative finite number")
 
 
 def display_state(device):
@@ -732,6 +869,7 @@ def main():
                 or START_WAIT_SECONDS[1] < START_WAIT_SECONDS[0] or POLL_SECONDS <= 0
                 or CRASH_POLL_SECONDS <= 0 or FAILED_CYCLE_BACKOFF_SECONDS < 0):
             raise ValueError("Invalid script timing settings")
+        validate_regeneration_settings()
         cycle.package = package
         if DISPLAY_FPS is not None:
             device.set_frame_rate(DISPLAY_FPS, timeout=DISPLAY_SETUP_TIMEOUT)

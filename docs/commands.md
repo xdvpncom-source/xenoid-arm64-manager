@@ -1,6 +1,6 @@
 # Xenoid Fleet command reference
 
-This reference covers Fleet `v0.1.12` and the Xenoid CLI at commit `c07e56b4aef8cd7e4d56eed11c84781369d29997`. Use `-h` or `--help` at each command level to see the installed parser's help. Brackets mark optional arguments. Uppercase words in syntax are values to supply. [Fleet launcher](../xenoid-fleet) · [Pinned Xenoid parser](https://github.com/Umiade/xenoid/blob/c07e56b4aef8cd7e4d56eed11c84781369d29997/src/xenoid/cli.py#L4058)
+This reference covers Fleet `v0.1.13` and the Xenoid CLI at commit `c07e56b4aef8cd7e4d56eed11c84781369d29997`. Use `-h` or `--help` at each command level to see the installed parser's help. Brackets mark optional arguments. Uppercase words in syntax are values to supply. [Fleet launcher](../xenoid-fleet) · [Pinned Xenoid parser](https://github.com/Umiade/xenoid/blob/c07e56b4aef8cd7e4d56eed11c84781369d29997/src/xenoid/cli.py#L4058)
 
 برای دستگاه اول `run 1 --`، برای چند دستگاه `run 1,3 --` و برای همهٔ دستگاه‌های عددی این میزبان `run all --` را قبل از فرمان Xenoid بگذارید. مثال‌های ساخت، حذف، خواندن مشخصات و گرفتن عکس در همین صفحه آمده‌اند.
 
@@ -9,8 +9,8 @@ This reference covers Fleet `v0.1.12` and the Xenoid CLI at commit `c07e56b4aef8
 The installer requires native ARM64 Ubuntu 24.04 and starts device `1` after installation. `--accept-android-licenses` accepts the Android SDK licenses during the installation. `--install-only` prepares the host so device creation can be scheduled separately.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.12/install.sh | sudo -H bash -s -- --accept-android-licenses
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.12/install.sh | sudo -H bash -s -- --accept-android-licenses --install-only
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.13/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.13/install.sh | sudo -H bash -s -- --accept-android-licenses --install-only
 bash install.sh --help
 ```
 
@@ -29,6 +29,7 @@ Use `sudo -H` for the root registry created by the installer. Numeric ID `2` sel
 | `xenoid-fleet run SELECTOR -- COMMAND [ARG ...]` | `sudo -H xenoid-fleet run all -- status` | Pass the remaining arguments to upstream Xenoid with the matching instance selected. |
 | `xenoid-fleet qa configure --json-stdin` | `sudo -H xenoid-fleet qa configure --json-stdin < qa-resources.json` | Atomically store panel-controlled resource defaults. |
 | `xenoid-fleet qa reconcile SELECTOR [--force]` | `sudo -H xenoid-fleet qa reconcile all --force` | Apply defaults to running devices; force explicitly reapplies a previously marked boot. |
+| `xenoid-fleet qa upgrade-proxy SELECTOR [--timeout SECONDS]` | `sudo -H xenoid-fleet qa upgrade-proxy all --timeout 180` | Refresh enabled running proxies to the installed native control revision and verify the original source/binding. Zero permits an unlimited lock/setup wait. |
 
 ```bash
 sudo -H xenoid-fleet --help
@@ -166,6 +167,24 @@ sudo -H xenoid-fleet run 1 -- view
 | `device regenerate [--dry-run]` | `./xenoid --instance phone-2 device regenerate --dry-run` |
 | `device generate-frida [--out PATH] [--keep-unique] PROFILE` | `./xenoid --instance phone-2 device generate-frida --help` |
 | `device generate-service-frida [--out PATH] [--keep-unique] PROFILE` | `./xenoid --instance phone-2 device generate-service-frida --help` |
+
+Managed panel scripts also expose `Device.regenerate(timeout=0,
+operation_key=key)` through the device SDK. Bash aliases are
+`device regenerate [TIMEOUT [OPERATION_KEY]]` and
+`xenoid device regenerate [TIMEOUT [OPERATION_KEY]]`; use `0` before an explicit
+key, for example `device regenerate 0 after-cleanup`. These SDK aliases use
+durable receipts scoped to the current managed run and iteration. Retain the
+same key across uncertain responses to resume or confirm the original operation;
+omitting the key creates a fresh UUID for each call.
+
+The SDK waits under the native instance lock, preserves the same container,
+instance ID, resource tag and storage, and verifies native reload, profile and
+changed identities before reporting success. Safe official `up` preparation can
+finish an earlier startup journal, but image/container/storage replacement and
+seed operations are rejected. Native readiness checks remain active. Pending
+operations must be resumed with the same key. Reapply script-selected display
+settings after the native profile replay. The host CLI above keeps its official
+`--dry-run` syntax; it does not use the SDK positional timeout/key arguments.
 | `device keybox set FILE` | `./xenoid --instance phone-2 device keybox set --help` |
 | `device keybox status` | `./xenoid --instance phone-2 device keybox status` |
 | `device keybox clear` | `./xenoid --instance phone-2 device keybox clear --help` |

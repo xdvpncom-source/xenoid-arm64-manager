@@ -10,6 +10,7 @@ pins = {"fleet_sha256": "xenoid-fleet", "toolchain_sha256": "install-toolchain.s
         "keymint_patch_sha256": "patches/keymint-paths.patch",
         "protection_patch_sha256": "patches/shared-protection-inspect.patch",
         "proxy_acceptance_patch_sha256": "patches/proxy-live-acceptance.patch",
+        "proxy_upgrader_sha256": "scripts/upgrade-proxy-control.py",
         "qa_manifest_sha256": "qa/manifest.sha256", "qa_installer_sha256": "install-qa-addon.sh"}
 for name, filename in pins.items():
     expected = re.search(r"^" + name + r"=([0-9a-f]{64})$", source, re.M)

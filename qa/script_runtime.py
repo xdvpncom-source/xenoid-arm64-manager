@@ -9,6 +9,7 @@ import shutil
 import shlex
 import time
 import sys
+import uuid
 from xml.etree import ElementTree
 
 
@@ -42,6 +43,16 @@ class Element:
 
 
 class Device:
+    def regenerate(self, timeout=0, operation_key=None):
+        """Regenerate/reload through official Xenoid, preserving the container.
+
+        Zero waits without a deadline. Retain an explicit operation_key when
+        retrying an uncertain request; a new call otherwise gets a fresh key.
+        Display tuning remains a separate script-controlled step.
+        """
+        key = uuid.uuid4().hex if operation_key is None else operation_key
+        return request("regenerate", [timeout, key])
+
     def set_frame_rate(self, fps, timeout=None):
         """Set integral display FPS; None preserves it, 0 restores native modes.
 
@@ -214,8 +225,10 @@ class Device:
 
 def cli(program, args):
     if program == "xenoid":
+        if args[:2] == ["device", "regenerate"]:
+            return cli("device", ["regenerate", *args[2:]])
         if args[:1] != ["adb"]:
-            raise ValueError("Use xenoid adb followed by a command for this device")
+            raise ValueError("Use xenoid adb or xenoid device regenerate for this device")
         program, args = "adb", args[1:]
     if program == "adb":
         if args[:1] == ["-s"]:
@@ -226,6 +239,8 @@ def cli(program, args):
     if not args:
         raise ValueError("Usage: device open-url|page-json|close-chrome|ui-dump|tap|adb ...")
     action, *args = args
+    if action == "regenerate" and len(args) <= 2:
+        return Device().regenerate(int(args[0]) if args else 0, args[1] if len(args) == 2 else None)
     if action == "page-json":
         return json.dumps(Device().page_json(int(args[0]) if args else 35), ensure_ascii=False)
     if action == "tap" and len(args) == 2:

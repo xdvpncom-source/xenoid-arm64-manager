@@ -9,6 +9,7 @@ import fcntl
 import gzip
 import hashlib
 import http.client
+import importlib.util
 import json
 import math
 import os
@@ -23,6 +24,7 @@ import signal
 import socket
 import socketserver
 import sqlite3
+import stat
 import struct
 import subprocess
 import sys
@@ -41,6 +43,7 @@ UPSTREAM = Path("/opt/xenoid-fleet/upstream")
 STATE = Path("/var/lib/xenoid-panel-scripts")
 SERVICE = "xenoid-panel-script"
 UNIT = Path("/etc/systemd/system") / (SERVICE + "@.service")
+NATIVE_ENV_FILE = Path("/opt/xenoid-fleet/toolchain/env.sh")
 TERMINAL = {"stopped", "completed", "failed"}
 CHROME = "com.android.chrome"
 MAX_MESSAGE = 2048
@@ -145,6 +148,38 @@ WantedBy=multi-user.target
 
 def now():
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def adopt_native_environment():
+    """Load the official toolchain exports before native modules cache paths."""
+    try:
+        info = NATIVE_ENV_FILE.lstat()
+    except FileNotFoundError:
+        return False  # Older installations can still run their existing ADB scripts.
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+        raise RuntimeError("The official toolchain environment must be private from other writers")
+    # Match Connection.root + official Upstream.call, including sudo's HOME
+    # and secure_path. Native artifact identities hash these environment inputs;
+    # inheriting systemd's shorter PATH makes installed artifacts appear stale.
+    result = subprocess.run(["sudo", "-n", "-H", "--", "/bin/bash", "-e", "-c", 'source "$1" >/dev/null; exec /usr/bin/env -0',
+                             "xenoid-panel-native-env", str(NATIVE_ENV_FILE)],
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30, check=False)
+    if result.returncode:
+        raise RuntimeError("The official native toolchain environment could not be loaded")
+    values = dict(item.decode().split("=", 1) for item in result.stdout.split(b"\0") if b"=" in item)
+    # Pinned native artifacts._BASE_ENV and per-target environment declarations,
+    # plus the toolchain/ADB compiler variables already supported by the SDK.
+    allowed = {"HOME", "PATH", "TMPDIR", "JAVA_HOME", "RUSTUP_HOME", "CARGO_HOME", "ANDROID_HOME", "ANDROID_SDK_ROOT",
+               "ANDROID_NDK_HOME", "ANDROID_NDK_ROOT", "XENOID_NDK_VERSION", "ANDROID_API", "ANDROID_BUILD_TOOLS",
+               "XENOID_ANDROID_API", "DEVELOPER_DIR", "SDKROOT", "DOCKER_HOST", "DOCKER_CONTEXT", "COLIMA_PROFILE",
+               "XENOID_DOCKER_CONTEXT", "XENOID_STANDALONE_APK", "XENOID_PROXY_CC", "NDK_HOME", "TEMP", "TMP",
+               "CC", "CXX", "AR", "RANLIB"}
+    for key in allowed:
+        if key in values:
+            os.environ[key] = values[key]
+        else:
+            os.environ.pop(key, None)
+    return True
 
 
 def integer(value, low, high):
@@ -253,6 +288,10 @@ def prepare(folder):
           level TEXT NOT NULL, message TEXT NOT NULL, iteration INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS run_events ON events(run_id,seq);
+        CREATE TABLE IF NOT EXISTS regeneration_receipts (
+          run_id TEXT NOT NULL, iteration INTEGER NOT NULL, operation_key TEXT NOT NULL,
+          document TEXT NOT NULL, PRIMARY KEY(run_id,iteration,operation_key)
+        );
         """)
         if "pruned_through" not in {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}:
             conn.execute("ALTER TABLE runs ADD COLUMN pruned_through INTEGER NOT NULL DEFAULT 0")
@@ -269,6 +308,30 @@ def record(conn, run, iteration, level, message):
     if cutoff is not None:
         conn.execute("UPDATE runs SET pruned_through=? WHERE id=?", (cutoff[0], run))
         conn.execute("DELETE FROM events WHERE run_id=? AND seq<=?", (run, cutoff[0]))
+
+
+class RegenerationReceipts:
+    """Private, durable operation decisions and native checkpoints, outside Android."""
+
+    def __init__(self, folder, run, iteration):
+        self.folder, self.run, self.iteration = Path(folder), run, iteration
+
+    def load(self, key):
+        with db(self.folder) as conn:
+            row = conn.execute("SELECT document FROM regeneration_receipts WHERE run_id=? AND iteration=? AND operation_key=?",
+                               (self.run, self.iteration, key)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def save(self, key, document):
+        with db(self.folder) as conn:
+            conn.execute("INSERT OR REPLACE INTO regeneration_receipts VALUES(?,?,?,?)",
+                         (self.run, self.iteration, key, json.dumps(document, sort_keys=True)))
+
+    def pending(self):
+        with db(self.folder) as conn:
+            rows = conn.execute("SELECT * FROM regeneration_receipts ORDER BY rowid").fetchall()
+        return [(row["run_id"], row["iteration"], row["operation_key"], json.loads(row["document"]))
+                for row in rows if json.loads(row["document"]).get("status") != "committed"]
 
 
 def update(folder, run, state, iteration, message, level="info", resume_at=0):
@@ -488,6 +551,14 @@ class RuntimeIdentityError(RuntimeError):
     """The assigned container identity changed; never retry against a new target."""
 
 
+class RegenerationPending(RuntimeError):
+    """Only a sanitized native code may cross the unprivileged SDK boundary."""
+
+    def __init__(self, code):
+        self.code = code if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,99}", code) else "device_regeneration_failed"
+        super().__init__("Official regeneration pending: " + self.code)
+
+
 def foreground_window(dump):
     focused = re.findall(r"(?m)^[ \t]*mCurrentFocus=(\S.*)$", dump)
     if len(focused) != 1:
@@ -632,6 +703,326 @@ class Broker:
         self.app_test = options.get("app_test")
         self.assigned_apk = options.get("assigned_apk")
         self.app_cache = app_cache if app_cache is not None else {}
+        self.regeneration_receipts = None
+
+    @staticmethod
+    def regeneration_cli():
+        name = "xenoid._panel_regeneration_" + secrets.token_hex(8)
+        spec = importlib.util.spec_from_file_location(name, UPSTREAM / "src/xenoid/cli.py")
+        if spec is None or spec.loader is None:
+            raise RegenerationPending("native_regeneration_unavailable")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.modules.pop(name, None)
+        return module
+
+    def regeneration_binding(self, manager, *, running=True):
+        context = manager.context
+        if (context.resource_tag != self.config["resource_tag"] or
+                self.config.get("instance_id") is not None and context.instance_id != self.config["instance_id"]):
+            raise RuntimeIdentityError("The registered device changed during regeneration")
+        owned, _reason = manager._owned_container_record(timeout=8)
+        if owned is None or not re.fullmatch(r"[0-9a-f]{64}", str(owned.get("Id"))):
+            raise RegenerationPending("native_runtime_unavailable")
+        if self.container_id is not None and owned["Id"] != self.container_id:
+            raise RuntimeIdentityError("The assigned Android runtime changed during regeneration")
+        if running and (owned.get("State") or {}).get("Running") is not True:
+            raise RegenerationPending("native_runtime_stopped")
+        self.container_id = owned["Id"]
+        return {"instance_id": context.instance_id, "resource_tag": context.resource_tag, "container_id": owned["Id"]}
+
+    def invalidate_regeneration_caches(self):
+        self.app_cache.clear()
+        self.resolved_app = self.window_offer = self.url = None
+        self._hierarchy_focus_observed = False
+        self._hierarchy_focus = None
+
+    def regeneration_data_fence(self, manager):
+        owned, _reason = manager._owned_container_record(timeout=8)
+        if owned is None or owned.get("Id") != self.container_id:
+            raise RuntimeIdentityError("The regeneration preparation runtime changed")
+        mounts = sorted(({key: row.get(key) for key in ("Type", "Name", "Source", "Destination", "RW")}
+                         for row in owned.get("Mounts", [])), key=lambda row: str(row.get("Destination")))
+        return hashlib.sha256(json.dumps({"image": owned.get("Image"), "mounts": mounts}, sort_keys=True).encode()).hexdigest()
+
+    @staticmethod
+    def regeneration_preparation_plan(plan, retained, observation, binding):
+        runtime = observation.get("runtime") or {}
+        if (observation.get("instanceId") != binding["instance_id"] or runtime.get("containerId") != binding["container_id"]
+                or any(runtime.get(key) is not True for key in ("ownershipValid", "integrationIdentityValid", "storageValid"))):
+            raise RegenerationPending("regeneration_preparation_binding_changed")
+        if any(not isinstance(runtime.get(key), str) or not re.fullmatch(r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", runtime[key])
+               for key in ("dataUuid", "rootfsUuid")):
+            raise RegenerationPending("regeneration_preparation_storage_unverified")
+        if plan.resolution != "complete" or plan.boot_seed_action != "none":
+            raise RegenerationPending("regeneration_preparation_requires_maintenance")
+        selected = observation.get("selectedImageRecord") or {}
+        if not binding.get("image_id") or selected.get("imageId") != binding["image_id"]:
+            raise RegenerationPending("regeneration_preparation_image_change_required")
+        for field, desired, journal_key in (("imageInputSha256", plan.desired_image_input_sha256, "selectedImageInputSha256"),
+                                             ("imageBootInputSha256", plan.desired_image_boot_input_sha256, "selectedImageBootInputSha256")):
+            selected_key = "inputSha256" if field == "imageInputSha256" else "bootInputSha256"
+            if (not isinstance(desired, str) or not re.fullmatch(r"[0-9a-f]{64}", desired)
+                    or runtime.get(field) != desired or selected.get(selected_key) != desired
+                    or retained is not None and retained.get(journal_key) != desired):
+                raise RegenerationPending("regeneration_preparation_image_change_required")
+        if retained is None:
+            if plan.image_action != "reuse-selected" or plan.runtime_action not in {"reuse", "start", "restart"}:
+                raise RegenerationPending("regeneration_preparation_requires_recreation")
+        else:
+            if (retained.get("regenerationTransactionId") is not None or retained.get("bootSeedTarget") is not None
+                    or retained.get("instanceId") != binding["instance_id"]):
+                raise RegenerationPending("regeneration_preparation_foreign_transaction")
+            completed = set(retained.get("completed", []))
+            if plan.image_action == "ensure-desired" and "image_ensured" not in completed:
+                raise RegenerationPending("regeneration_preparation_image_change_required")
+            if plan.runtime_action in {"create", "recreate"}:
+                required = {"storage_converged", "container_created", "runtime_started"}
+                if plan.runtime_action == "recreate":
+                    required.add("container_removed")
+                if not required <= completed or retained.get("newContainerId") != binding["container_id"]:
+                    raise RegenerationPending("regeneration_preparation_requires_recreation")
+            for key, observed in (("observedDataUuid", "dataUuid"), ("observedRootfsUuid", "rootfsUuid")):
+                if retained.get(key) != runtime.get(observed):
+                    raise RegenerationPending("regeneration_preparation_storage_changed")
+
+    def prepare_regeneration(self, cli, manager, args, binding, receipt, store, operation_key, check_budget):
+        preflight = cli._regeneration_runtime_preflight(manager)
+        if preflight.get("ok") is True:
+            return
+        if preflight.get("error") != "device_regeneration_runtime_not_converged":
+            raise RegenerationPending(preflight.get("error"))
+        native_executor = cli.ConvergenceExecutor
+        inspected = native_executor(manager)
+        observation = inspected._observe(skip_build=True)
+        retained = inspected.journal.load()
+        raw_plan = retained["plan"] if retained is not None else (preflight.get("convergence") or {}).get("plan")
+        plan = cli.ConvergencePlan.from_dict(raw_plan)
+        owned, _reason = manager._owned_container_record(timeout=8)
+        plan_binding = {**binding, "image_id": (owned or {}).get("Image")}
+        self.regeneration_preparation_plan(plan, retained, observation, plan_binding)
+        fence = self.regeneration_data_fence(manager)
+        data = {key: (observation.get("runtime") or {}).get(key) for key in ("dataUuid", "rootfsUuid")}
+        prior = receipt.get("preparation")
+        if prior and (prior.get("data_fence") != fence or prior.get("storage") != data):
+            raise RegenerationPending("regeneration_preparation_storage_changed")
+        receipt["preparation"] = {"status": "pending", "data_fence": fence, "storage": data,
+                                  "plan_digest": plan.plan_digest}
+        store.save(operation_key, receipt)
+        broker = self
+        error_type = native_executor._execute_plan.__globals__["ConvergenceError"]
+
+        class PreparedExecutor(native_executor):
+            def _execute_plan(inner, candidate, **kwargs):
+                try:
+                    check_budget()
+                    broker.regeneration_preparation_plan(candidate, kwargs.get("retained"), kwargs["initial_observation"], plan_binding)
+                    if broker.regeneration_data_fence(manager) != fence:
+                        raise RegenerationPending("regeneration_preparation_storage_changed")
+                except RegenerationPending as error:
+                    raise error_type(error.code, phase="inspecting") from None
+                return super()._execute_plan(candidate, **kwargs)
+
+            def _phase_call(inner, phase, method_name, reporter, outer_deadline, **kwargs):
+                # Guard the actual phase too: a native input replan must never
+                # turn preparation into an implicit image/container replacement.
+                if method_name in {"remove_owned_container_for_recreate", "converge_storage", "create_owned_container",
+                                   "start_seed_runtime", "initialize_seed_runtime", "ensure_runtime_image"}:
+                    raise error_type("regeneration_preparation_requires_maintenance", phase=phase)
+                try:
+                    check_budget()
+                    broker.regeneration_binding(manager, running=False)
+                    if broker.regeneration_data_fence(manager) != fence:
+                        raise RegenerationPending("regeneration_preparation_storage_changed")
+                except RegenerationPending as error:
+                    raise error_type(error.code, phase=phase) from None
+                return super()._phase_call(phase, method_name, reporter, outer_deadline, **kwargs)
+
+        captured = []
+        previous_executor, previous_print, previous_progress = cli.ConvergenceExecutor, cli.print_json, cli._write_up_progress
+        cli.ConvergenceExecutor = PreparedExecutor
+        cli.print_json = lambda value: captured.append(value)
+        cli._write_up_progress = lambda _event: None
+        args.skip_build = True
+        try:
+            code = cli.cmd_up(args)
+            answer = captured[-1] if captured else {}
+            if code or answer.get("ok") is not True:
+                raise RegenerationPending(answer.get("error") or answer.get("errorCode") or "native_preparation_failed")
+        finally:
+            cli.ConvergenceExecutor, cli.print_json, cli._write_up_progress = previous_executor, previous_print, previous_progress
+        after = native_executor(manager)._observe(skip_build=True)
+        if (self.regeneration_binding(manager) != binding or self.regeneration_data_fence(manager) != fence
+                or any((after.get("runtime") or {}).get(key) != value for key, value in data.items())):
+            raise RegenerationPending("regeneration_preparation_binding_changed")
+        strict = cli._regeneration_runtime_preflight(manager)
+        if strict.get("ok") is not True:
+            raise RegenerationPending(strict.get("error"))
+        receipt["preparation"]["status"] = "committed"
+        identity = cli.DeviceIdentityStore(manager.context).load()
+        receipt["before_digest"] = cli.stable_identity_digest(identity["stable"])
+        store.save(operation_key, receipt)
+
+    def regenerate(self, timeout=0, operation_key=None):
+        if type(timeout) is not int or timeout < 0:
+            raise ValueError("Regeneration timeout must be a nonnegative integer; zero is unlimited")
+        if not isinstance(operation_key, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", operation_key):
+            raise ValueError("Supply a nonempty regeneration operation key")
+        try:
+            return self._regenerate(timeout, operation_key)
+        except (RuntimeIdentityError, RegenerationPending):
+            raise
+        except Exception as error:
+            raise RegenerationPending(getattr(error, "code", None)) from None
+
+    def _regenerate(self, timeout, operation_key):
+        store = self.regeneration_receipts
+        if store is None:
+            raise RuntimeError("Regeneration receipts are unavailable outside a managed script iteration")
+        if self.stopping.is_set():
+            raise RegenerationPending("script_stopping")
+        deadline = time.monotonic() + timeout if timeout else None
+        manager = self.verify() if self.verify else self.manager
+        # The official in-process command shares this native ContextVar. Never
+        # launch a child CLI while holding the native lock.
+        with manager.instance_operation_lock(timeout_seconds=timeout or None):
+            binding = self.regeneration_binding(manager, running=False)
+            receipt = store.load(operation_key)
+            if receipt is not None and receipt.get("binding") != binding:
+                raise RuntimeIdentityError("The regeneration receipt belongs to a different runtime")
+            if receipt is not None and receipt.get("status") == "committed":
+                self.regeneration_binding(manager)
+                self.invalidate_regeneration_caches()
+                with self.display_raw_docker(manager, deadline):
+                    execute = lambda values, **options: self.native_display_exec(manager, values, deadline=deadline, **options)
+                    self.display_bootstrap(manager, execute, deadline)
+                return {**receipt["result"], "replayed": True}
+            for run, iteration, key, pending in store.pending():
+                if (run, iteration, key) != (store.run, store.iteration, operation_key) and pending.get("binding") == binding:
+                    raise RegenerationPending("another_regeneration_is_pending")
+            cli = self.regeneration_cli()
+            native_journal = cli.RegenerationJournal
+            live_state = native_journal(manager.context).load()
+            identity = cli.DeviceIdentityStore(manager.context).load()
+            if identity is None:
+                raise RegenerationPending("device_identity_required")
+            digest = cli.stable_identity_digest(identity["stable"])
+            if receipt is None:
+                self.regeneration_binding(manager)
+                receipt = {"status": "pending", "binding": binding, "timeout": timeout,
+                           "before_digest": digest, "created_at": now()}
+                store.save(operation_key, receipt)
+            saved_state = receipt.get("native_journal")
+            if saved_state is not None:
+                saved_state = native_journal(manager.context).validate(saved_state)
+                if live_state is not None and live_state["transactionId"] != saved_state["transactionId"]:
+                    raise RegenerationPending("regeneration_transaction_changed")
+                if live_state is None and saved_state["phase"] != "committed":
+                    raise RegenerationPending("regeneration_checkpoint_without_journal")
+            elif (live_state is None and receipt["before_digest"] != digest
+                  and (receipt.get("preparation") or {}).get("status") != "pending"):
+                raise RegenerationPending("regeneration_outcome_ambiguous")
+
+            def checkpoint(state):
+                if state is not None:
+                    if state.get("instanceId") != binding["instance_id"]:
+                        raise RuntimeIdentityError("The native regeneration journal changed device")
+                    previous = receipt.get("native_journal")
+                    if previous is not None and previous["transactionId"] != state["transactionId"]:
+                        raise RegenerationPending("regeneration_transaction_changed")
+                    receipt["native_journal"] = state
+                    store.save(operation_key, receipt)
+
+            def check_budget():
+                if self.stopping.is_set():
+                    raise RegenerationPending("script_stopping")
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise RegenerationPending("regeneration_timeout")
+
+            class ObservedJournal(native_journal):
+                def load(inner):
+                    state = super().load()
+                    checkpoint(state)
+                    return state
+
+                def _write(inner, state):
+                    state = super()._write(state)
+                    checkpoint(state)
+                    check_budget()
+                    return state
+
+                def clear(inner):
+                    checkpoint(super().load())
+                    check_budget()
+                    return super().clear()
+
+            captured = []
+            cli.RegenerationJournal = ObservedJournal
+            cli.runtime = lambda _args: manager
+            cli.print_json = lambda value: captured.append(value)
+            args = argparse.Namespace(context=manager.context, config=manager.cfg, lease=manager.lease,
+                                      dry_run=False, _operation_lock_held=True)
+            self.cleanup()
+            self.invalidate_regeneration_caches()
+            previous_operation_lock = getattr(manager, "operation_lock_held", False)
+            manager.operation_lock_held = True
+            try:
+                with self.display_raw_docker(manager, deadline):
+                    check_budget()
+                    if live_state is None and saved_state is None:
+                        self.prepare_regeneration(cli, manager, args, binding, receipt, store, operation_key, check_budget)
+                    if live_state is None and saved_state is not None:
+                        verified = cli._verify_regeneration_target_state(manager, cli.DeviceIdentityStore(manager.context), saved_state)
+                        google = cli._regeneration_google_runtime_postcondition(manager)
+                        if google.get("ok") is not True:
+                            raise RegenerationPending(google.get("error"))
+                        answer = cli._regeneration_success_result(saved_state, resumed=True, cleaned=True,
+                                                                 google_identity=verified["googleIdentity"])
+                    else:
+                        code = cli.cmd_device_regenerate(args)
+                        answer = captured[-1] if captured else {}
+                        if code or answer.get("ok") is not True:
+                            raise RegenerationPending(answer.get("error"))
+                    if (answer.get("schema") != "dev.xenoid.device-regenerate/v3" or answer.get("phase") != "committed"
+                            or answer.get("runtimeOnly") is not True or answer.get("containerRecreated") is not False):
+                        raise RegenerationPending("native_regeneration_result_unverified")
+                    state = receipt.get("native_journal")
+                    if state is None or state.get("phase") != "committed":
+                        raise RegenerationPending("native_regeneration_checkpoint_missing")
+                    execute = lambda values, **options: self.native_display_exec(manager, values, deadline=deadline, **options)
+                    self.display_bootstrap(manager, execute, deadline)
+                    refreshed = self.verify() if self.verify else manager
+                    if self.regeneration_binding(refreshed) != binding:
+                        raise RuntimeIdentityError("The runtime binding changed during official regeneration")
+                    self.manager = refreshed
+                    result = {"ok": True, "phase": "committed", "runtimeOnly": True, "containerRecreated": False,
+                              "native_ready": True, "profile_ready": True, "container_id_preserved": True,
+                              "instance_id_preserved": True, "resource_tag_preserved": True,
+                              "identities_changed": state["before"]["stableDigest"] != state["target"]["stableDigest"],
+                              "stable_digest_before": state["before"]["stableDigest"],
+                              "stable_digest_after": state["target"]["stableDigest"],
+                              "boot_id_changed": state["before"]["bootId"] != state["target"]["bootId"],
+                              "runtime_epoch_changed": True, "operation_key": operation_key, "replayed": False}
+                    if not result["identities_changed"] or not result["boot_id_changed"]:
+                        raise RegenerationPending("native_regeneration_identity_unchanged")
+                    receipt.update(status="committed", result=result, completed_at=now())
+                    store.save(operation_key, receipt)
+                    if self.log:
+                        self.log("action", "Official regeneration committed; container binding preserved and native profile ready")
+                    return result
+            except RuntimeIdentityError:
+                raise
+            except Exception as error:
+                pending = error if isinstance(error, RegenerationPending) else RegenerationPending(getattr(error, "code", None))
+                receipt["last_error"] = pending.code
+                store.save(operation_key, receipt)
+                raise pending from None
+            finally:
+                manager.operation_lock_held = previous_operation_lock
+                self.invalidate_regeneration_caches()
 
 
     @contextmanager
@@ -1471,6 +1862,8 @@ done
     def dispatch(self, action, args):
         if not isinstance(args, list):
             raise ValueError("Expected an argument list")
+        if action == "regenerate" and len(args) == 2:
+            return self.regenerate(*args)
         if action == "set-frame-rate" and 1 <= len(args) <= 2:
             return self.set_frame_rate(*args)
         if action == "settings" and not args:
@@ -1632,7 +2025,7 @@ def jail_layout(root, config):
     return file.name
 
 
-def sandbox_command(number, manager, config, root, filename, name):
+def sandbox_command(number, manager, config, root, filename, name, iteration=None):
     properties = [
         f"RootDirectory={root}", "WorkingDirectory=/tmp", "DynamicUser=yes", "PrivateNetwork=yes",
         "RestrictAddressFamilies=AF_UNIX", "PrivateDevices=yes", "NoNewPrivileges=yes",
@@ -1654,6 +2047,8 @@ def sandbox_command(number, manager, config, root, filename, name):
     env = {"PATH": "/work/bin:/usr/bin:/bin", "HOME": "/tmp", "TMPDIR": "/tmp", "LANG": "C.UTF-8",
            "PYTHONUNBUFFERED": "1", "PYTHONDONTWRITEBYTECODE": "1", "ANDROID_SERIAL": manager.adb_target,
            "XENOID_INSTANCE": f"phone-{number}", "XENOID_DEVICE_ID": str(number), "XENOID_RUN_ID": config["run_id"]}
+    if iteration is not None:
+        env["XENOID_ITERATION"] = str(iteration)
     for key, value in env.items():
         command.extend(["--setenv", f"{key}={value}"])
     command.extend(["/usr/bin/python3", "-s", "/work/xenoid_device.py", "--launch", config["language"], "/work/" + filename])
@@ -1712,6 +2107,7 @@ def run_iteration(folder, number, config, manager, iteration, app_cache=None):
             record(conn, run, iteration, level, message)
 
     broker = Broker(manager, log, verify=lambda: trusted_device(number, config), config=config, app_cache=app_cache)
+    broker.regeneration_receipts = RegenerationReceipts(folder, run, iteration)
     with tempfile.TemporaryDirectory(prefix=f"xp-{number}-", dir="/run") as temp:
         root = Path(temp) / "root"
         root.mkdir()
@@ -1741,7 +2137,7 @@ def run_iteration(folder, number, config, manager, iteration, app_cache=None):
             thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
             thread.start()
             try:
-                command = sandbox_command(number, manager, config, root, filename, name)
+                command = sandbox_command(number, manager, config, root, filename, name, iteration=iteration)
                 with subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                       stderr=subprocess.STDOUT) as process:
                     try:
@@ -1764,11 +2160,35 @@ class Shutdown(BaseException):
     pass
 
 
+def resume_regeneration_receipts(folder, number, config, iteration, app_cache):
+    """Finish recorded native transactions before any new user app actions."""
+    store = RegenerationReceipts(folder, config["run_id"], iteration)
+    recovered_current = False
+    manager = trusted_device(number, config)
+    for run, index, key, receipt in store.pending():
+        binding = receipt.get("binding") or {}
+        if (binding.get("instance_id") != manager.context.instance_id
+                or binding.get("resource_tag") != manager.context.resource_tag):
+            continue  # Never adopt a deleted/replaced immutable device.
+        pinned = {"run_id": run, "instance_id": binding["instance_id"], "resource_tag": binding["resource_tag"],
+                  "expected_container_id": binding["container_id"]}
+        def log(level, message):
+            with db(folder) as conn:
+                record(conn, config["run_id"], iteration, level, message)
+        log("warning", "Resuming a recorded official regeneration before the next app iteration")
+        broker = Broker(manager, log, verify=lambda: trusted_device(number, pinned), config=pinned, app_cache=app_cache)
+        broker.regeneration_receipts = RegenerationReceipts(folder, run, index)
+        broker.regenerate(receipt.get("timeout", 0), key)
+        recovered_current |= run == config["run_id"]
+    return recovered_current
+
+
 def supervisor(folder, number):
     def on_signal(_signo, _frame):
         raise Shutdown
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
+    prepare(folder)
     with db(folder) as conn:
         row = conn.execute("SELECT * FROM runs WHERE current=1").fetchone()
     if row is None or row["state"] in TERMINAL:
@@ -1777,15 +2197,22 @@ def supervisor(folder, number):
     run, index = config["run_id"], row["iteration"]
     app_cache = {}
     try:
+        recovered = resume_regeneration_receipts(folder, number, config, index, app_cache)
         if row["state"] == "running":
             # A power loss leaves it unknown whether a UI action finished. Never silently execute it twice.
-            raise RuntimeError("Previous iteration was interrupted; start a new run to retry")
+            if not recovered or config["repeat_count"] and index >= config["repeat_count"]:
+                raise RuntimeError("Previous iteration was interrupted; start a new run to retry")
+            due = time.time() + config["interval"]
+            update(folder, run, "waiting", index, "Recorded regeneration recovered; interrupted script attempt will retry",
+                   "error", resume_at=due)
+            row = {"state": "waiting", "resume_at": due}
         due = row["resume_at"]
         last_wait = None
         reconnect_after = 0
         while True:
             if due > time.time():
                 time.sleep(max(0, due - time.time()))
+            resume_regeneration_receipts(folder, number, config, index, app_cache)
             manager = trusted_device(number, config)
             try:
                 probe = Broker(manager, None, config=config, app_cache=app_cache)
@@ -1872,6 +2299,7 @@ def main():
         # The pinned native CLI derives canonical relative build inputs from its checkout cwd.
         os.chdir(UPSTREAM)
         os.environ["XENOID_PROJECT"] = str(UPSTREAM)
+        adopt_native_environment()
     if args.action == "worker":
         supervisor(folder, number)
     elif args.action in {"start", "stop"}:

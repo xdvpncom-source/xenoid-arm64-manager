@@ -7,7 +7,7 @@ Install Xenoid on an ARM64 Ubuntu server and manage headless Android 13 instance
 Use an **ARM64 (aarch64) server running Ubuntu 24.04**, such as a Hetzner CAX server. The installer requires root access, outbound HTTPS, and free disk space for the build toolchain, container images, and Android data. Install and management commands use the same operator account and Xenoid registry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.12/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.13/install.sh | sudo -H bash -s -- --accept-android-licenses
 ```
 
 The `--accept-android-licenses` flag accepts the Android SDK licenses for the pinned build tools from Google. The installer prepares the host and starts device `1`. Allow tens of minutes for the first build on a small server. The CLI is installed as `/usr/local/bin/xenoid-fleet` and the managed checkout lives under `/opt/xenoid-fleet/upstream`. Rerunning the installer reuses the toolchain and converges device `1` with its existing data.
@@ -22,10 +22,10 @@ Check that Android booted. The command output includes the value `1` after boot 
 sudo -H xenoid-fleet run 1 -- adb shell getprop sys.boot_completed
 ```
 
-Use `--install-only` to prepare the host before creating the first device or upgrade an existing installation without issuing a device start.
+Use `--install-only` to prepare the host before creating the first device or upgrade an existing installation without issuing a device start. Upgrades also refresh enabled proxies on already-running devices when their native control/process revision has not been verified.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.12/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.13/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
 ```
 
 ## Devices
@@ -62,9 +62,41 @@ After startup, Fleet imports this source through the native Xenoid CLI on unconf
 
 The pinned Xenoid patch reads live host quarantine status during boot acceptance. The native acceptance checks still require a verified data plane before accepting an enabled proxy.
 
+The patch also preserves the rules and traffic counters already verified during
+candidate staging when committing that candidate. Commit checks the pending
+process, health, current structure and runtime identity before promoting its
+metadata. Acceptance reads fresh host counters after the daemon report and
+continues to require matching generation, runtime epoch, capabilities and
+counter proof. Stale snapshots cannot accept an unverified or reset data plane.
+Startup planning uses that same combined daemon/host proof, allowing a healthy
+enabled proxy to converge instead of remaining permanently pending on the
+host-only disabled-state flag.
+
+The installer refreshes each running, configured, enabled proxy through native
+prerequisite, quarantine, agent stop and desired-state reconciliation. It checks
+the original container, instance identity, data mount and complete source/policy
+fingerprint, then requires strict live proxy proof. It preserves the selected
+node and never starts stopped devices or enables disabled/unconfigured proxies.
+Pending native identity transactions are left for their own resume path.
+
+Successful refresh markers bind the engine source/control digest and native
+server process identity to the immutable device. Later installer runs require
+that marker, current installed files and fresh proof before skipping. The native
+server record does not attest its loaded script digest, so a missing marker
+requires one verified rebootstrap even if files on disk are already current.
+Failures remain explicit and keep the original runtime quarantined when its
+binding is still valid. Retry selected devices with:
+
+```bash
+sudo -H xenoid-fleet qa upgrade-proxy 1,2 --timeout 180
+```
+
+`all` selects all registered numeric instances; `--timeout 0` waits without a
+lock/setup deadline. The same refresh runs for `--install-only` upgrades.
+
 ### Panel-controlled QA defaults
 
-Version v0.1.12 installs the QA SDK/backend, the native logical-to-raw input
+Version v0.1.13 installs the QA SDK/backend, the native logical-to-raw input
 coordinate correction, and configurable resource defaults for all instances,
 including devices with no APK or shared script assignment. The stock pinned
 Redroid image, each native instance identity, persistent data, and saved proxy
@@ -98,13 +130,12 @@ the panel's saved version governs execution on existing and newly assigned
 devices, so changing ad selectors or timing does not require a Fleet upgrade.
 
 `qa/vpn-cycle.py` is the release-time reference protected by the installer
-manifest. The latest tested panel workflow is mirrored in
-[`examples/current-vpn-cycle.py`](examples/current-vpn-cycle.py) on `main` and as
-the separately versioned
-[`vpn-cycle-v11.py` release asset](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.12/vpn-cycle-v11.py).
-Its [SHA-256 sidecar](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.12/vpn-cycle-v11.py.sha256)
-identifies the exact exported panel source. Updating this
-example or asset does not alter the immutable v0.1.12 tag or installer checksums.
+manifest. The current panel workflow is also mirrored in
+[`examples/current-vpn-cycle.py`](examples/current-vpn-cycle.py) and exported as
+the [`vpn-cycle-v12.py` release asset](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.13/vpn-cycle-v12.py)
+with a [SHA-256 sidecar](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.13/vpn-cycle-v12.py.sha256).
+The historical v0.1.12 `vpn-cycle-v11.py` asset remains unchanged. Updating the
+editable workflow never rewrites an existing release tag or its installer pins.
 
 ```bash
 printf '%s\n' '{"enabled":true,"fps":30,"scale":"minimum","min_side":240,"dpi":96,"timeout":180}' |
@@ -150,6 +181,58 @@ For an existing Fleet host, the verified source checkout also provides
 `sudo -H bash install-qa-addon.sh`. This installs the addon and services without
 building or recreating Android. `qa reconcile all` applies it to running devices.
 It requires a previously installed pinned Fleet/upstream runtime.
+
+### Official regeneration from a managed script
+
+The Python SDK provides `Device.regenerate(timeout=0, operation_key=key)`. It
+executes the pinned Xenoid `device regenerate` command under the same native
+instance lock and waits for the official Android reload, profile and identity
+verification. Container ID, immutable native instance ID, resource tag, Android
+data volume and installed APK code stay bound to the same device. Android and
+Google identities change according to Xenoid's official regeneration procedure.
+The command retains the native single-user and readiness preconditions.
+
+Use one operation key for a logical regeneration request, including every retry:
+
+```python
+import uuid
+from xenoid_device import Device
+
+device = Device()
+operation_key = uuid.uuid4().hex  # Retain this value if the response is uncertain.
+result = device.regenerate(timeout=0, operation_key=operation_key)
+```
+
+`timeout=0` has no overall deadline. A positive integer limits the request's
+setup time. Host-side receipts persist before native journal transitions and
+verify an already committed result after a lost response, so retrying the same
+key resumes or confirms that operation within the same managed run/iteration.
+A fresh key requests a new rotation. An unfinished operation is reported as
+pending; the script must retain its key and wait rather than request another
+rotation. Display settings are a separate script choice and should be reapplied
+after the official profile replay.
+
+When an older native startup journal remains unfinished, the SDK may first
+resume official `up` only after verifying that the remaining plan preserves the
+same image, container and storage. It blocks image builds, container replacement,
+storage migration and seed operations during this preparation. Native readiness
+and proxy data-plane verification remain required; there is no direct-network
+fallback. A failed acceptance check leaves the request pending.
+
+The bundled workflow draws one integer from `1..10` after a successful app
+cycle and cleanup. Only `5` requests regeneration; it waits for completion,
+restores the script's display settings and begins the next cycle. Its editor
+settings `REGENERATE_ENABLED`, `REGENERATE_RANDOM_RANGE`, `REGENERATE_TRIGGER`,
+`REGENERATE_TIMEOUT` and `REGENERATE_RETRY_SECONDS` control this behavior. Failed
+cycles do not draw. Existing saved scripts keep their own behavior until the
+administrator selects a newer version.
+
+Managed Bash scripts can use `device regenerate [TIMEOUT [OPERATION_KEY]]` or
+`xenoid device regenerate [TIMEOUT [OPERATION_KEY]]` through the same SDK bridge.
+For example, `device regenerate 0 after-cleanup` retains one key per managed
+iteration. The ordinary host CLI remains
+`xenoid-fleet run ID -- device regenerate [--dry-run]`.
+
 
 ## Run Xenoid commands
 

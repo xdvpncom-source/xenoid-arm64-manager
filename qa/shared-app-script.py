@@ -30,6 +30,8 @@ class Device(RuntimeDevice):
     rate, 0 restores native display modes. Changing FPS restarts Android apps.
     Scheduling: settings(), configure_run(repeat_count=0, timeout=0, ...),
     sleep(seconds). Legacy V2 helpers remain available.
+    Official identity reload: regenerate(timeout=0, operation_key=key). Keep the
+    same key for retries; reapply your display settings after it completes.
     """
 
 
@@ -39,6 +41,7 @@ def run(device):
 
     # Examples (uncomment and adapt):
     # device.set_frame_rate(20, timeout=180)  # Setup budget only; 0 = unlimited.
+    # device.regenerate(timeout=0, operation_key="my-retained-operation-key")
     # device.app_open()
     # device.tap(540, 960)
     # device.find(resource_id="com.android.vpndialogs:id/always").click()

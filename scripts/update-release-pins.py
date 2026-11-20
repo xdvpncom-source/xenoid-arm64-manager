@@ -15,7 +15,10 @@ def digest(path):
 (root / "qa/manifest.sha256").write_text("".join(
     digest(path) + "  " + str(path.relative_to(root)) + "\n" for path in files))
 source = (root / "install.sh").read_text()
-for name, filename in {"fleet_sha256": "xenoid-fleet", "qa_manifest_sha256": "qa/manifest.sha256",
+for name, filename in {"fleet_sha256": "xenoid-fleet",
+                       "proxy_acceptance_patch_sha256": "patches/proxy-live-acceptance.patch",
+                       "proxy_upgrader_sha256": "scripts/upgrade-proxy-control.py",
+                       "qa_manifest_sha256": "qa/manifest.sha256",
                        "qa_installer_sha256": "install-qa-addon.sh"}.items():
     source, count = re.subn(r"^" + name + r"=\S+$", name + "=" + digest(root / filename), source, flags=re.M)
     assert count == 1, name

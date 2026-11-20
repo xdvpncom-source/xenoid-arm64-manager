@@ -8,6 +8,7 @@ import math
 import random
 import re
 import time
+import uuid
 from xenoid_device import Device
 
 RUN_SETTINGS = {
@@ -38,6 +39,13 @@ CONTINUE_AFTER_CYCLE_ERROR = True
 FAILED_CYCLE_BACKOFF_SECONDS = 15
 RETRY_EXIT_CODE = 75
 DISMISS_ANDROID_CRASH_DIALOGS = True
+# Draw once after a successful app cycle and cleanup. A matching draw runs the
+# official Xenoid identity regeneration, including its Android soft restart.
+REGENERATE_ENABLED = True
+REGENERATE_RANDOM_RANGE = (1, 10)
+REGENERATE_TRIGGER = 5
+REGENERATE_TIMEOUT = 0                 # 0 waits without a setup deadline.
+REGENERATE_RETRY_SECONDS = 15
 
 # Explicit resource IDs or labels can be added here for a particular APK.
 # Example: ({"resource_id": "com.example.vpn:id/ad_close"},)
@@ -685,8 +693,69 @@ class Cycle:
         if failure:
             raise failure
         self.check_target_crash()
+        self.regenerate_after_success()
         self.log("QA cycle completed successfully")
 
+    def regenerate_after_success(self):
+        if not REGENERATE_ENABLED:
+            return False
+        validate_regeneration_settings()
+        low, high = REGENERATE_RANDOM_RANGE
+        selected = random.randint(low, high)
+        self.log(f"Regeneration draw: {selected} (range {low}..{high}; trigger {REGENERATE_TRIGGER})")
+        if selected != REGENERATE_TRIGGER:
+            return False
+        # Keep this key across transport/recovery attempts. The host persists a
+        # receipt so a lost response cannot request a second identity rotation.
+        operation_key = uuid.uuid4().hex
+        self.log("Official Xenoid regenerate selected; waiting for Android reload")
+        while True:
+            try:
+                result = self.device.regenerate(timeout=REGENERATE_TIMEOUT, operation_key=operation_key)
+                required = ("ok", "native_ready", "profile_ready", "container_id_preserved",
+                            "instance_id_preserved", "resource_tag_preserved", "identities_changed")
+                if (not isinstance(result, dict) or result.get("phase") != "committed"
+                        or result.get("runtimeOnly") is not True or result.get("containerRecreated") is not False
+                        or any(result.get(key) is not True for key in required)):
+                    raise RuntimeError("Official regeneration readiness was not confirmed")
+                break
+            except (RuntimeError, OSError) as error:
+                self.log("Regeneration waiting: " + str(error))
+                # No UI/ADB crash probing while an identity transaction may be
+                # pending. Resume the same recorded operation after this pause.
+                time.sleep(REGENERATE_RETRY_SECONDS)
+        # The official restart replays the regenerated native display profile.
+        # Restore the administrator's script settings after that replay finishes.
+        # A display retry must not invoke regenerate again or draw a new number.
+        while True:
+            try:
+                if DISPLAY_FPS is not None:
+                    self.device.set_frame_rate(DISPLAY_FPS, timeout=DISPLAY_SETUP_TIMEOUT)
+                configure_display(self.device, DISPLAY_SCALE)
+                break
+            except (RuntimeError, OSError) as error:
+                self.log("Waiting to restore display after regeneration: " + str(error))
+                time.sleep(REGENERATE_RETRY_SECONDS)
+        self.log("Official Xenoid regeneration committed; Android reload and display settings verified")
+        return True
+
+
+def validate_regeneration_settings():
+    if type(REGENERATE_ENABLED) is not bool:
+        raise ValueError("REGENERATE_ENABLED must be Boolean")
+    if not REGENERATE_ENABLED:
+        return
+    if (not isinstance(REGENERATE_RANDOM_RANGE, (tuple, list)) or len(REGENERATE_RANDOM_RANGE) != 2
+            or any(type(value) is not int for value in REGENERATE_RANDOM_RANGE)
+            or REGENERATE_RANDOM_RANGE[0] > REGENERATE_RANDOM_RANGE[1]
+            or type(REGENERATE_TRIGGER) is not int
+            or not REGENERATE_RANDOM_RANGE[0] <= REGENERATE_TRIGGER <= REGENERATE_RANDOM_RANGE[1]):
+        raise ValueError("Use an integer regeneration range and a trigger inside that range")
+    if type(REGENERATE_TIMEOUT) is not int or REGENERATE_TIMEOUT < 0:
+        raise ValueError("REGENERATE_TIMEOUT must be a nonnegative integer; 0 is unlimited")
+    if (type(REGENERATE_RETRY_SECONDS) not in (int, float)
+            or not math.isfinite(REGENERATE_RETRY_SECONDS) or REGENERATE_RETRY_SECONDS < 0):
+        raise ValueError("REGENERATE_RETRY_SECONDS must be a nonnegative finite number")
 
 
 def display_state(device):
@@ -800,6 +869,7 @@ def main():
                 or START_WAIT_SECONDS[1] < START_WAIT_SECONDS[0] or POLL_SECONDS <= 0
                 or CRASH_POLL_SECONDS <= 0 or FAILED_CYCLE_BACKOFF_SECONDS < 0):
             raise ValueError("Invalid script timing settings")
+        validate_regeneration_settings()
         cycle.package = package
         if DISPLAY_FPS is not None:
             device.set_frame_rate(DISPLAY_FPS, timeout=DISPLAY_SETUP_TIMEOUT)

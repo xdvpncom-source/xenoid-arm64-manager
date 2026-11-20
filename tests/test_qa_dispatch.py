@@ -13,6 +13,19 @@ G = FLEET["qa_reconcile"].__globals__
 
 
 class QADispatchTest(unittest.TestCase):
+    def test_proxy_upgrade_forwards_selected_devices_and_preserves_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'upgrade-proxy-control.py').touch()
+            args = argparse.Namespace(action='qa', qa_action='upgrade-proxy', ids='2,81', timeout=0)
+            with patch.dict(G, {'INSTALL_ROOT': root, 'Upstream': lambda: object(),
+                                'selection': lambda _upstream, selected: ['2', '81']}), \
+                    patch.object(subprocess, 'run') as call:
+                call.return_value.returncode = 7
+                self.assertEqual(FLEET['execute'](args, []), 7)
+                self.assertEqual(call.call_args.args[0][2:],
+                                 ['--timeout', '0', '--device', 'phone-2', '--device', 'phone-81'])
+
     def test_explicit_reconcile_requires_installed_addon(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(G, {"INSTALL_ROOT": Path(directory)}):
             with self.assertRaisesRegex(FLEET["FleetError"], "missing"):

@@ -1,9 +1,16 @@
 diff --git a/src/xenoid/live_observe.py b/src/xenoid/live_observe.py
 --- a/src/xenoid/live_observe.py
 +++ b/src/xenoid/live_observe.py
-@@ -766,15 +766,13 @@
+@@ -764,17 +764,19 @@
+             "observations.proxyEngine",
+             "components.proxy.engine",
          )
-         if not host:
+-        if not host:
++        if callable(getattr(manager, "proxy_engine_status", None)):
++            # Daemon reports are collected after the planner snapshot. Read the
++            # host counters after that report, too; an older cached sample can
++            # precede a successful probe. A failed fresh read must not fall back
++            # to stale proof or conceal a reset/generation/runtime change.
              host = self._optional_call(manager, "proxy_engine_status", budget)
 -        snapshot_quarantine = _first_bool(
 -            _at(snapshot, "proxyQuarantined"),
@@ -24,6 +31,67 @@ diff --git a/src/xenoid/live_observe.py b/src/xenoid/live_observe.py
 
          disabled_proof = False
          if enabled is True:
+diff --git a/scripts/xenoid-proxy-engine.py b/scripts/xenoid-proxy-engine.py
+--- a/scripts/xenoid-proxy-engine.py
++++ b/scripts/xenoid-proxy-engine.py
+@@ -1050,7 +1050,12 @@
+  if commit:
+   if o["phase"]!="applied-pending" or not isinstance(o.get("candidate"),dict):raise Error("apply_not_pending")
+   meta=o["candidate"];path=Path(meta["path"]);_,tp,dp,cp,secret,udp_allowed,ipv6_allowed=candidate_config(m,path,meta["name"]);pending=checked_process(m,proc_path(m,"pending-process"),meta["generation"],meta["name"])
+-  configure(m,meta["name"],tp,dp,udp_allowed,ipv6_allowed);health(m,None,(tp,dp,cp),secret,udp_allowed,ipv6_allowed,{"stateName":"pending-process","generation":pending["generation"],"candidate":pending["candidate"]});activate(m,meta["name"])
++  # Staging already configured/activated this candidate before the agent's
++  # successful Android probe. Reapplying those rules here would flush the
++  # meters and invalidate that proof without changing generation/runtimeEpoch.
++  health(m,None,(tp,dp,cp),secret,udp_allowed,ipv6_allowed,{"stateName":"pending-process","generation":pending["generation"],"candidate":pending["candidate"]})
++  observed=status(m,o,expected_generation=meta["generation"])
++  if (observed.get("ok") is not True or observed.get("structuralApplied") is not True or observed.get("phase")!="active" or observed.get("generation")!=meta["generation"] or any(observed.get(key)!=m[key] for key in ("instanceId","resourceTag","runtimeEpoch","manifestDigest"))):raise Error("engine_structure_mismatch")
+   config_path=Path(m["paths"]["config"]);candidate_bytes=path.read_bytes();proxy_user=pwd.getpwnam(m["users"]["proxy"])
+   stop(m,"process");os.replace(proc_path(m,"pending-process"),proc_path(m,"process"));atomic(config_path,candidate_bytes,0o640,0,proxy_user.pw_gid)
+   o["appliedGeneration"],o["activeCandidate"]=meta["generation"],meta["name"];o["candidate"]=o["previous"]=None;o["phase"]="applied";save_owner(m,o);return
+diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
+--- a/src/xenoid/backend.py
++++ b/src/xenoid/backend.py
+@@ -7332,16 +7332,31 @@
+             and isinstance(proxy_engine.get("generation"), int)
+             else None
+         )
++        # The host engine proves structure/counters; the daemon's matching
++        # report and Android probe prove the enabled data plane. Use the same
++        # strict live acceptance contract as final startup, not the host's
++        # dataPlaneVerified flag (which is intentionally true only for off).
++        try:
++            from .live_observe import LiveAcceptance, _Budget, _Checks
++
++            proxy_checks = _Checks()
++            LiveAcceptance(self)._proxy_checks(
++                self,
++                {"proxyEngine": proxy_engine},
++                {"proxyGeneration": proxy_generation,
++                 "runtimeEpoch": bootstrap.get("runtimeEpoch") if isinstance(bootstrap, Mapping) else None},
++                {},
++                {"proxy": proxy_desired if isinstance(proxy_desired, Mapping) else {},
++                 "bootstrap": bootstrap if isinstance(bootstrap, Mapping) else {}},
++                _Budget(None),
++                proxy_checks,
++            )
++            proxy_matching = proxy_checks.first_failure() is None
++        except Exception:
++            proxy_matching = False
+         proxy_state = (
+-            "matching"
+-            if isinstance(proxy_engine, Mapping)
+-            and proxy_engine.get("ok") is True
+-            and (
+-                proxy_engine.get("dataPlaneVerified") is True
+-                or proxy_engine.get("phase") in {"off", "disabled"}
+-            )
+-            else "pending"
+-            if isinstance(proxy_daemon, Mapping)
++            "matching" if proxy_matching
++            else "pending" if isinstance(proxy_daemon, Mapping)
+             else "unknown"
+         )
+         pending = self._observe_pending_operations()
 diff --git a/scripts/test-convergence.py b/scripts/test-convergence.py
 --- a/scripts/test-convergence.py
 +++ b/scripts/test-convergence.py
