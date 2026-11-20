@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-release=v0.1.16
+release=v0.1.17
 fleet_repository=https://github.com/xdvpncom-source/xenoid-arm64-manager.git
-fleet_sha256=f3c73566e0c036f0710fa2cf0a35a5226c02140b17927820b371936857e41607
+fleet_sha256=917ba126ca9710ec5812a1238dda07bf310c5af0e1a41aacab17cd2b64ea3946
 toolchain_sha256=f657aba4c546b5c6c3a9c37b513db9ceca4fb31f26b33bf3106a5852052cf9c8
 daemon_patch_sha256=a76a728fea8ebee104fc5e7230eb02ec69d11db5d24f51eff0f9edfa4f9ae467
 keymint_patch_sha256=5fd4a5fe25479ebe8fa068bd8cf55fe72ddf3245787e19feaf4a06f67859fa16
 protection_patch_sha256=1e57b90e7008a26a7f4a04a926ddcc82e9b79d78c367bba3562e41f4a19c26a3
-proxy_acceptance_patch_sha256=8af58a1b7f2e2c5a121ec6002c313dfb98aaba71d7884fed8c69c48626de60ae
+proxy_acceptance_patch_sha256=c3978cddb6c270ee41ffbe5a08f1e318f69d9aa08becb097e9d48f2cfa0ce63b
 qa_manifest_sha256=e19b9135e4226ccdd4a33b39beaa50b077409cd13c2213ee6bb2e97d824890c9
 qa_installer_sha256=dcb29dd76e6a22f4061775a330242ac4e7fc680651c3507ca3379c020e916fa4
 proxy_upgrader_sha256=9994aab4e2aa074a35aac44c2a3da9e11d9aa320d89aba8c4fcace6639a3c444
 v011_daemon_blob=ef4394904d9798a529fb8cf609989cf8526b4a89
 v012_live_observe_blob=86fd6204beb0446e7eb35e6ef9cd3ffbd159ecc3
 v013_backend_blob=d570f5aa45e33f8dece813d2a5b06fdb6acbd303
+v016_backend_blob=de60c7bff3cc8c78facd787192b3ee3f8bc24e6a
 upstream_repository=https://github.com/Umiade/xenoid.git
 upstream_revision=c07e56b4aef8cd7e4d56eed11c84781369d29997
 base_repository=redroid/redroid
@@ -217,7 +218,8 @@ for source_file in "${patched_sources[@]}"; do
         [[ $installed_blob == $(git -C "$upstream" rev-parse "HEAD:$source_file") ||
             ( $source_file == scripts/build-daemon-standalone.sh && $installed_blob == "$v011_daemon_blob" ) ||
             ( $source_file == src/xenoid/live_observe.py && $installed_blob == "$v012_live_observe_blob" ) ||
-            ( $source_file == src/xenoid/backend.py && $installed_blob == "$v013_backend_blob" ) ]] || \
+            ( $source_file == src/xenoid/backend.py && $installed_blob == "$v013_backend_blob" ) ||
+            ( $source_file == src/xenoid/backend.py && $installed_blob == "$v016_backend_blob" ) ]] || \
             fail "The installed Xenoid source $source_file has local changes."
     fi
 done

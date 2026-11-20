@@ -1,6 +1,6 @@
 # Xenoid Fleet command reference
 
-This reference covers Fleet `v0.1.16` and the Xenoid CLI at commit `c07e56b4aef8cd7e4d56eed11c84781369d29997`. Use `-h` or `--help` at each command level to see the installed parser's help. Brackets mark optional arguments. Uppercase words in syntax are values to supply. [Fleet launcher](../xenoid-fleet) · [Pinned Xenoid parser](https://github.com/Umiade/xenoid/blob/c07e56b4aef8cd7e4d56eed11c84781369d29997/src/xenoid/cli.py#L4058)
+This reference covers Fleet `v0.1.17` and the Xenoid CLI at commit `c07e56b4aef8cd7e4d56eed11c84781369d29997`. Use `-h` or `--help` at each command level to see the installed parser's help. Brackets mark optional arguments. Uppercase words in syntax are values to supply. [Fleet launcher](../xenoid-fleet) · [Pinned Xenoid parser](https://github.com/Umiade/xenoid/blob/c07e56b4aef8cd7e4d56eed11c84781369d29997/src/xenoid/cli.py#L4058)
 
 برای دستگاه اول `run 1 --`، برای چند دستگاه `run 1,3 --` و برای همهٔ دستگاه‌های عددی این میزبان `run all --` را قبل از فرمان Xenoid بگذارید. مثال‌های ساخت، حذف، خواندن مشخصات و گرفتن عکس در همین صفحه آمده‌اند.
 
@@ -9,8 +9,8 @@ This reference covers Fleet `v0.1.16` and the Xenoid CLI at commit `c07e56b4aef8
 The installer requires native ARM64 Ubuntu 24.04 and starts device `1` after installation. `--accept-android-licenses` accepts the Android SDK licenses during the installation. `--install-only` prepares the host so device creation can be scheduled separately.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.16/install.sh | sudo -H bash -s -- --accept-android-licenses
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.16/install.sh | sudo -H bash -s -- --accept-android-licenses --install-only
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.17/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.17/install.sh | sudo -H bash -s -- --accept-android-licenses --install-only
 bash install.sh --help
 ```
 
@@ -301,6 +301,12 @@ focus is checked again before official native input.
 | `hide deploy-overlay [PATH] [--remote-path PATH]` | `./xenoid --instance phone-2 hide deploy-overlay --help` |
 | `hide overlay-status` | `./xenoid --instance phone-2 hide overlay-status` |
 | `hide cleanup-overlay` | `./xenoid --instance phone-2 hide cleanup-overlay --help` |
+
+Native helper setup can recover a recordless current-version process only after
+exact binary, process, instance-listener and current-protocol authentication
+checks, followed by ownership revalidation and normal helper provisioning.
+Unverified or foreign helpers remain rejected. Failed record/socket reads are
+unknown state, never proof that a helper is absent.
 
 `root exec` sends a command to the Android root helper for the selected instance. Frida's fetch defaults are the latest release and `android-arm64`. Its default listen port is `27042`. After an instrumentation session, stop instrumentation and restart the complete runtime before production acceptance.
 

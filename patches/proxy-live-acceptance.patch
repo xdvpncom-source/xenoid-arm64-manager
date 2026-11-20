@@ -145,6 +145,183 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
              else "unknown"
          )
          pending = self._observe_pending_operations()
+@@ -8765,7 +8799,7 @@
+                 deadline=deadline,
+             )
+             if output is None:
+-                continue
++                return set(), True  # An unreadable listener table is not a free port.
+             for line in output.splitlines()[1:]:
+                 fields = line.split()
+                 if len(fields) < 10 or fields[3] != "0A":
+@@ -8872,11 +8906,14 @@
+         deadline: Optional[float] = None,
+     ) -> tuple[Optional[dict[str, Any]], str]:
+         exists = self._rootd_output(
+-            ["test", "-e", _ROOTD_PROCESS_RECORD],
++            ["sh", "-c", f"if [ -e {_ROOTD_PROCESS_RECORD} ] || [ -L {_ROOTD_PROCESS_RECORD} ]; "
++             "then printf present; else printf absent; fi"],
+             deadline=deadline,
+         )
+-        if exists is None:
++        if exists == "absent":
+             return None, "absent"
++        if exists != "present":
++            return None, "invalid"
+         directory = self._rootd_stat(
+             _ROOTD_RUN_DIRECTORY,
+             deadline=deadline,
+@@ -8925,6 +8962,15 @@
+             deadline=deadline,
+         )
+         if current_stat is None:
++            presence = self._rootd_output(
++                ["sh", "-c", f"if [ -d /proc/{document['pid']} ]; then printf present; else printf absent; fi"],
++                deadline=deadline,
++            )
++            return None, "stale" if presence == "absent" else "invalid"
++        current_start = self._proc_start_time(current_stat)
++        if current_start is None:
++            return None, "invalid"
++        if current_start != document["startTime"]:
+             return None, "stale"
+         identity = self._rootd_process_identity(
+             document["pid"],
+@@ -8938,7 +8984,7 @@
+             identity is None
+             or identity["startTime"] != document["startTime"]
+         ):
+-            return None, "stale"
++            return None, "invalid"
+         return identity, "valid"
+
+     def _rootd_authentication(
+@@ -9149,6 +9195,102 @@
+             deadline=deadline,
+         ), True
+
++    def _recover_current_rootd_orphan(
++        self,
++        expected_container_id: str,
++        candidate_digest: str,
++        token: str,
++        *,
++        deadline: float,
++    ) -> tuple[bool, bool]:
++        """Replace only a fully proven, authenticated current rootd orphan.
++
++        A replaced executable can leave its old listener alive after the stale
++        process record was removed. Never manufacture an ownership record or
++        apply legacy GET authentication to this current POST protocol.
++        """
++        pids = self._rootd_output(["pidof", "xenoid-rootd"], limit=256, deadline=deadline)
++        if pids is None:
++            return False, False
++        values = pids.split()
++        if len(values) != 1 or not values[0].isdigit() or int(values[0]) <= 1:
++            return False, True
++        pid = int(values[0])
++        if re.fullmatch(r"[0-9a-f]{64}", candidate_digest) is None:
++            return False, True
++
++        def inspect() -> Optional[dict[str, Any]]:
++            container, _ = self._owned_container_record(timeout=max(0.0, min(5.0, deadline - time.monotonic())))
++            if not isinstance(container, Mapping) or container.get("Id") != expected_container_id:
++                return None
++            absent = self._rootd_output(
++                ["sh", "-c", f"test ! -e {_ROOTD_PROCESS_RECORD} && test ! -L {_ROOTD_PROCESS_RECORD}"],
++                deadline=deadline,
++            )
++            directory = self._rootd_stat(_ROOTD_RUN_DIRECTORY, deadline=deadline)
++            deployed = self._rootd_stat(_ROOTD_REMOTE_PATH, deadline=deadline)
++            if (absent is None or directory is None or directory[2] != 0
++                    or not stat.S_ISDIR(directory[3]) or stat.S_IMODE(directory[3]) != 0o700
++                    or deployed is None or deployed[2] != 0 or not stat.S_ISREG(deployed[3])
++                    or stat.S_IMODE(deployed[3]) != 0o755 or deployed[4] != 1):
++                return None
++            process = self._rootd_output(["cat", f"/proc/{pid}/stat"], deadline=deadline)
++            status = self._rootd_output(["cat", f"/proc/{pid}/status"], limit=64 * 1024, deadline=deadline)
++            executable = self._rootd_output(["readlink", f"/proc/{pid}/exe"], deadline=deadline)
++            command = self._rootd_output(["cat", f"/proc/{pid}/cmdline"], deadline=deadline)
++            if process is None or status is None or command is None:
++                return None
++            start = self._proc_start_time(process)
++            uid = next((line.partition(":")[2].split() for line in status.splitlines() if line.startswith("Uid:")), [])
++            arguments = command.removesuffix("\0").split("\0")
++            if (start is None or uid != ["0"] * 4
++                    or executable not in {_ROOTD_REMOTE_PATH, _ROOTD_REMOTE_PATH + " (deleted)"}
++                    or arguments != [_ROOTD_REMOTE_PATH, str(self.lease.rootd_port), _ROOTD_RUN_DIRECTORY]):
++                return None
++            running = self._rootd_stat(f"/proc/{pid}/exe", follow=True, deadline=deadline)
++            if (running is None or running[2] != 0 or not stat.S_ISREG(running[3])
++                    or stat.S_IMODE(running[3]) != 0o755 or running[0] != deployed[0]
++                    or running[5] != deployed[5]):
++                return None
++            if executable.endswith(" (deleted)"):
++                if running[4] != 0 or running[:2] == deployed[:2]:
++                    return None
++            elif running[4] != 1 or running[:2] != deployed[:2]:
++                return None
++            if (self._rootd_remote_digest(f"/proc/{pid}/exe", deadline=deadline) != candidate_digest
++                    or self._rootd_remote_digest(_ROOTD_REMOTE_PATH, deadline=deadline) != candidate_digest):
++                return None
++            inodes, conflict = self._rootd_port_inodes(deadline=deadline)
++            descriptors = self._rootd_output(["ls", "-l", f"/proc/{pid}/fd"], limit=64 * 1024, deadline=deadline)
++            if conflict or len(inodes) != 1 or descriptors is None:
++                return None
++            inode = next(iter(inodes))
++            if f"socket:[{inode}]" not in descriptors:
++                return None
++            # Require a sole process owning this listener, not just a matching
++            # descriptor in one candidate process. No command lines are read.
++            owners = self._rootd_output([
++                "sh", "-c", "set -o pipefail; ls -l /proc/[0-9]*/fd 2>/dev/null | awk -v needle="
++                + shlex.quote(f"socket:[{inode}]")
++                + " '/^\\/proc\\/[0-9]+\\/fd:$/ {split($0,a,\"/\"); pid=a[3]} $NF==needle {print pid}'",
++            ], limit=256, deadline=deadline)
++            if owners is None or set(owners.split()) != {str(pid)}:
++                return None
++            return {"pid": pid, "startTime": start, "digest": candidate_digest, "executable": executable,
++                    "containerId": expected_container_id, "directory": directory,
++                    "runningStat": running, "deployedStat": deployed, "socketInode": inode}
++
++        identity = inspect()
++        if identity is None:
++            return False, True
++        authenticated = self._rootd_exec("id -u", token, deadline=deadline, timeout_ms=5000)
++        if (not isinstance(authenticated, Mapping) or authenticated.get("ok") is not True
++                or authenticated.get("exitCode") != 0 or str(authenticated.get("stdout", "")).strip() != "0"):
++            return False, True
++        if inspect() != identity:
++            return False, True
++        return self._terminate_rootd_process(identity, deadline=deadline), True
++
+     def _launch_rootd_with_token(
+         self,
+         container_id: str,
+@@ -9373,10 +9515,18 @@
+         if inodes or listener_conflict:
+             if record_state != "absent" or listener_conflict:
+                 return failure("rootd_resource_conflict")
+-            adopted, legacy_seen = self._adopt_legacy_rootd(
+-                token,
+-                deadline=deadline,
+-            )
++            recovered, current_seen = self._recover_current_rootd_orphan(
++                container_id, candidate_digest, token, deadline=deadline,
++            )
++            if current_seen:
++                if not recovered:
++                    return failure("rootd_resource_conflict")
++                adopted, legacy_seen = True, False
++            else:
++                adopted, legacy_seen = self._adopt_legacy_rootd(
++                    token,
++                    deadline=deadline,
++                )
+             if not adopted:
+                 return failure(
+                     "rootd_unavailable"
 diff --git a/scripts/test-convergence.py b/scripts/test-convergence.py
 --- a/scripts/test-convergence.py
 +++ b/scripts/test-convergence.py

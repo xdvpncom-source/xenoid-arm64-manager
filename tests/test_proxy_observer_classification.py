@@ -21,6 +21,7 @@ from unittest.mock import patch
 
 import test_proxy_counter_acceptance as acceptance
 from native_backend_history_fixture import OLD_HISTORY
+from native_backend_rootd_fixture import OLD_ROOTD
 
 ROOT = Path(__file__).resolve().parents[1]
 OLD_OBSERVER_SHA256 = '5abe1d53901108c4c60687068de16410c36ff2071d494fffcce0217b141665c1'
@@ -93,7 +94,7 @@ def patched_observer():
         temporary = Path(directory)
         path = temporary / 'src/xenoid/backend.py'
         path.parent.mkdir(parents=True)
-        path.write_text('class RuntimeManager:\n' + OLD_HISTORY + '\n' + OLD_OBSERVER)
+        path.write_text('class RuntimeManager:\n' + OLD_HISTORY + '\n' + OLD_OBSERVER + '\n' + OLD_ROOTD)
         subprocess.run(['git', 'apply', '--include=src/xenoid/backend.py',
                         str(ROOT / 'patches/proxy-live-acceptance.patch')],
                        cwd=temporary, check=True, capture_output=True)
