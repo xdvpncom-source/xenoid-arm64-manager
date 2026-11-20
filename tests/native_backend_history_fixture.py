@@ -1,0 +1,23 @@
+"""Unmodified pinned native history method, for complete offline backend patch tests."""
+import base64
+import gzip
+import hashlib
+
+OLD_HISTORY_SHA256 = '9dfecbf839fe913387b4f3c3b7e6c9ac1e9f268de6f8872348d7d7dec0c122c9'
+OLD_HISTORY_GZIP = (
+    'H4sIAAAAAAAC/61WXW/TMBR951dYkZASaEtWYELVOqmUApWmTVoBgarI8hK3s0jsyHZGy9T/znXiJE5HoaD1YUvs+3HuucfXQQih'
+    'hK4QzlgsxRrTDdP4likt5NZXNF31UE7i72RN1QgpqpdKy6gHLiRJGacjtEoF0QHqn6OExeV2D034Nho9QfZXcHJHWEpuUorG6N4T'
+    '370Rek9SRXvIi0VC4dVbC7FOKVZU3rGYKpxLAf8ULrjSxtMD24RqiGOsDco5X4nPbWhv1ySUNCOMM76GdDVQ1EeaZXSQCS604Cz2'
+    'g8aerRyXszEKW+xVOF1I7pbRbOdkC+UnkMdQNcAkucHqlqYp1nSj/U6YpZcUWa62ypRCYs3umN6aZ1NMn0E1XtTreBjAotDjjHF/'
+    'GA7CHsrIxj8xDw3eIGh9OhXV0JhClwLqFxJB5fXyAPrEcj84ulLKTadMpXWEasX3Cr3qvzF1SJqnJKZeB0ZKuW99A3SOhq9P0TN0'
+    'Eg5fHZ1Z0ljIRDUc50QqWunUkOZbPK1O9xpbeTs0GEh22UB6OTwaSpGblmDoSV7oQ01fejHRho8XRsMvKh9obdPOk7BFSHMR3/41'
+    'YEJ0eQCeP1WHAv2E4v4hzs9DcYAyI5NupVY7LtijOdNy27W1oRV0gJdtLSeI38k4UHnKtB8swyjoOHPxw/FkXPsuqFrVDr+bmOYa'
+    '+V9IWtCZlAKm05wndFM+Hy//GyE0LlNBWhdEf68eR7YpvSNcj5y5mMJcXXbHZBSZmWilO0LLCK2AbfsOBTaqbsebMaj0a/atkruV'
+    '1P5ju7307IoXdezKOVGZmgaX4Szsjp35QXma8YLuUUaU4I3iZl/nn/D1bLK4usRvv+Hp1bvZYE21X6OozKdm5u81tjyqZSx7Uh8C'
+    '+EN76mkJd0WW/25SNJsNlGbFnATfPT5Ar+cFD7VkYbZ5/hdpJ8iZq60+Og2PZr5q1NI2MBqQPKc88e8ty3BPVg9w4NtiR23qXVsa'
+    'KBpYKy9I88e5Gx019uASAE6ocnUyYJpmav8iiSVRtxioBg8IHHY2TUgTaWvi2JC/49AqqzStpbOn3z3l8IcyXOD5h8ur69nDBAeZ'
+    'PSbo+8n8Al9dTg/EtQJ4jG+dlVdPh93ovsK0c751jgU8vZ4sPuLpxWSxQIQnZcf7NbfOWTDfP6dheIAut63Px+hkX9Ydg/MxGh48'
+    'G49NTZn5Qoi88x3opvokCyeTObhuLPO+e/IL7oGDoQ4LAAA='
+)
+OLD_HISTORY = gzip.decompress(base64.b64decode(OLD_HISTORY_GZIP)).decode()
+assert hashlib.sha256(OLD_HISTORY.encode()).hexdigest() == OLD_HISTORY_SHA256

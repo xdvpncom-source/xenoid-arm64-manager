@@ -43,6 +43,14 @@ class Element:
 
 
 class Device:
+    def input_status(self, timeout=None):
+        """Read official input readiness and foreground without touching/repairing.
+
+        The script decides which package/window to act on. Zero timeout waits
+        without a deadline; None uses the panel's command_timeout setting.
+        """
+        return request("input-status", [] if timeout is None else [timeout])
+
     def regenerate(self, timeout=0, operation_key=None):
         """Regenerate/reload through official Xenoid, preserving the container.
 
@@ -241,6 +249,8 @@ def cli(program, args):
     action, *args = args
     if action == "regenerate" and len(args) <= 2:
         return Device().regenerate(int(args[0]) if args else 0, args[1] if len(args) == 2 else None)
+    if action == "input-status" and len(args) <= 1:
+        return Device().input_status(int(args[0]) if args else None)
     if action == "page-json":
         return json.dumps(Device().page_json(int(args[0]) if args else 35), ensure_ascii=False)
     if action == "tap" and len(args) == 2:

@@ -160,6 +160,8 @@ class RegenerationRuntimeTests(unittest.TestCase):
         self.broker.display_raw_docker=lambda *_args,**_kwargs:contextlib.nullcontext()
         self.broker.display_bootstrap=lambda *_args:None
         self.broker.owned_call=lambda *_args,**_kwargs:{'ok':True}
+        readiness=patch.object(h.Broker,'ensure_native_interaction',return_value={'ready':True,'foreground':{'ready':True}})
+        self.readiness=readiness.start();self.addCleanup(readiness.stop)
 
     def test_sdk_default_new_key_per_call_and_explicit_key_retained(self):
         with patch.object(sdk,'request',side_effect=lambda action,args:(action,args)):
@@ -196,6 +198,26 @@ class RegenerationRuntimeTests(unittest.TestCase):
         result=later.regenerate(0,'same-key')
         self.assertTrue(result['replayed']);self.assertEqual(result['stable_digest_after'],first['stable_digest_after'])
         self.assertEqual(self.manager.commands,1);self.assertEqual(self.manager.rotations,1)
+
+    def test_input_readiness_failure_keeps_native_target_pending_and_retry_does_not_rotate_again(self):
+        import qa_input_ready
+        self.readiness.side_effect=[qa_input_ready.NativeInputBindingError('reader not ready'),{'ready':True,'foreground':{'ready':True}}]
+        with self.assertRaises(h.RegenerationPending) as raised:self.broker.regenerate(0,'input-retry')
+        self.assertEqual(raised.exception.code,'native_input_binding_invalid')
+        saved=self.broker.regeneration_receipts.load('input-retry')
+        self.assertEqual(saved['status'],'pending');self.assertEqual(saved['native_journal']['phase'],'committed')
+        self.assertEqual(self.manager.rotations,1);self.assertIsNone(self.manager.journal)
+        result=self.broker.regenerate(0,'input-retry')
+        self.assertTrue(result['input_ready'] and result['foreground_ready']);self.assertEqual(self.manager.rotations,1);self.assertEqual(self.manager.commands,1)
+
+    def test_committed_replay_rechecks_input_without_a_second_native_rotation(self):
+        import qa_input_ready
+        self.broker.regenerate(0,'replay-input')
+        self.readiness.side_effect=qa_input_ready.NativeInputBindingError('reader missing')
+        with self.assertRaises(h.RegenerationPending):self.broker.regenerate(0,'replay-input')
+        self.assertEqual(self.manager.rotations,1);self.assertEqual(self.manager.commands,1)
+        self.readiness.side_effect=None
+        self.assertTrue(self.broker.regenerate(0,'replay-input')['replayed']);self.assertEqual(self.manager.rotations,1)
 
     def test_two_explicit_calls_with_new_keys_in_same_iteration_are_allowed(self):
         self.broker.regenerate(0,'one');self.broker.regenerate(0,'two')

@@ -51,7 +51,60 @@ diff --git a/scripts/xenoid-proxy-engine.py b/scripts/xenoid-proxy-engine.py
 diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
 --- a/src/xenoid/backend.py
 +++ b/src/xenoid/backend.py
-@@ -7332,16 +7332,31 @@
+@@ -4780,17 +4780,32 @@
+         records = self._parse_exit_info(payload, packages)
+         if records is None or len(records) > 32:
+             return unavailable
++        # A container keeps the host kernel's uptime across Android soft
++        # reboots. Exit records from a previous Android userspace must not
++        # permanently poison a healthy new boot. Pin the current system_server
++        # process on both sides of the guest-clock sample; never erase history
++        # or accept a boot boundary that cannot be independently read back.
++        server_before = self._microg_process_identity("system_server")
++        ticks_output = self._adb_shell_text(["getconf", "CLK_TCK"], timeout=10)
+         uptime_output = self._adb_shell_text(["cat", "/proc/uptime"], timeout=10)
+         epoch_output = self._adb_shell_text(["date", "+%s"], timeout=10)
+         zone_output = self._adb_shell_text(["date", "+%z"], timeout=10)
+-        if not uptime_output or not epoch_output:
++        server_after = self._microg_process_identity("system_server")
++        if (server_before is None or server_after != server_before
++                or not ticks_output or not uptime_output or not epoch_output):
+             return unavailable
+         try:
++            ticks_per_second = int(ticks_output.strip())
+             uptime_seconds = float(uptime_output.split()[0])
+             now_seconds = int(epoch_output.strip())
+-        except (ValueError, IndexError):
++            start_ticks = server_before[1]
++            if (ticks_per_second <= 0 or type(start_ticks) is not int or start_ticks <= 0
++                    or not 0 <= uptime_seconds < float("inf") or now_seconds <= 0
++                    or start_ticks / ticks_per_second > uptime_seconds + 1):
++                return unavailable
++            boot_epoch = now_seconds - uptime_seconds + start_ticks / ticks_per_second
++        except (ValueError, IndexError, TypeError, OverflowError, ZeroDivisionError):
+             return unavailable
+-        boot_epoch = now_seconds - uptime_seconds
+         relevant: dict[str, list[dict[str, Any]]] = {package: [] for package in packages}
+         for record in records:
+             package = record["package"]
+@@ -4802,10 +4817,14 @@
+             timestamp = self._parse_exit_timestamp(record["timestamp"], (zone_output or "").strip())
+             if timestamp is None:
+                 return unavailable
+-            if timestamp < boot_epoch - 60:
++            # Guest date has one-second precision. Keep boundary-adjacent
++            # records rather than classifying a fresh ANR as an old one.
++            if timestamp > now_seconds + 1:
++                return unavailable
++            if timestamp < boot_epoch - 1:
+                 continue
+             relevant[package].append({"reason": reason, "timestamp": timestamp})
+-        now = time.time()
++        now = now_seconds
+         for package, entries in relevant.items():
+             crash_recent = 0
+             for entry in entries:
+@@ -7332,16 +7351,31 @@
              and isinstance(proxy_engine.get("generation"), int)
              else None
          )

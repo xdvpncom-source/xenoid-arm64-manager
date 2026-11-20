@@ -7,7 +7,7 @@ Install Xenoid on an ARM64 Ubuntu server and manage headless Android 13 instance
 Use an **ARM64 (aarch64) server running Ubuntu 24.04**, such as a Hetzner CAX server. The installer requires root access, outbound HTTPS, and free disk space for the build toolchain, container images, and Android data. Install and management commands use the same operator account and Xenoid registry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.13/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.14/install.sh | sudo -H bash -s -- --accept-android-licenses
 ```
 
 The `--accept-android-licenses` flag accepts the Android SDK licenses for the pinned build tools from Google. The installer prepares the host and starts device `1`. Allow tens of minutes for the first build on a small server. The CLI is installed as `/usr/local/bin/xenoid-fleet` and the managed checkout lives under `/opt/xenoid-fleet/upstream`. Rerunning the installer reuses the toolchain and converges device `1` with its existing data.
@@ -25,7 +25,7 @@ sudo -H xenoid-fleet run 1 -- adb shell getprop sys.boot_completed
 Use `--install-only` to prepare the host before creating the first device or upgrade an existing installation without issuing a device start. Upgrades also refresh enabled proxies on already-running devices when their native control/process revision has not been verified.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.13/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.14/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
 ```
 
 ## Devices
@@ -96,7 +96,7 @@ lock/setup deadline. The same refresh runs for `--install-only` upgrades.
 
 ### Panel-controlled QA defaults
 
-Version v0.1.13 installs the QA SDK/backend, the native logical-to-raw input
+Version v0.1.14 installs the QA SDK/backend, the native logical-to-raw input
 coordinate correction, and configurable resource defaults for all instances,
 including devices with no APK or shared script assignment. The stock pinned
 Redroid image, each native instance identity, persistent data, and saved proxy
@@ -106,6 +106,21 @@ Resource transactions wait for the native instance lock using the configured
 timeout (`0` waits without a deadline), then hold it through FPS and display
 writes. Normal script input/ADB lock behavior stays unchanged. Failure reports
 include a safe native reason code or exception class, never raw exception text.
+
+Native touches now require the official driver's kernel axes and DIRECT property
+to match Android's InputReader and InputDispatcher mapping. A healthy driver
+that Android missed while its event node was being published is reannounced
+using the same verified character-device inode. No touch event, alternate input
+backend, driver replacement or image rebuild is used for this repair. The SDK
+checks this before each official tap and before confirming or replaying a
+completed regeneration receipt.
+
+`Device.input_status(timeout=None)` reads readiness without repairing or sending
+input. It returns the `xenoid_native` backend, `ready`, mapping and foreground
+context, and `events_injected: false`. A missing timeout uses the panel command
+timeout; `0` waits without a deadline. Input readiness does not establish an
+app's VPN connection or the health of its remote servers. The host dependency
+`qa_input_ready.py` is installed and integrity-pinned alongside the SDK.
 
 The default profile is `/etc/xenoid-fleet/qa-resources.json`:
 
@@ -218,6 +233,18 @@ same image, container and storage. It blocks image builds, container replacement
 storage migration and seed operations during this preparation. Native readiness
 and proxy data-plane verification remain required; there is no direct-network
 fallback. A failed acceptance check leaves the request pending.
+
+An officially supported daemon-only live update can reuse the selected image
+after verifying unchanged boot inputs, base/context/tool inputs, non-daemon
+artifacts and storage, plus the native daemon signing/shared-user contract and
+installed APK. This does not permit an input-driver update, image build or
+container replacement during regeneration preparation.
+
+Google process-exit history is scoped to the current Android userspace boot,
+using the verified `system_server` start time. An ANR from an earlier Android
+reload cannot permanently block a later regeneration. Fresh ANRs, crashes,
+invalid clocks and a changing `system_server` identity still fail readiness;
+the fix does not clear history or relax the native Google checks.
 
 The bundled workflow draws one integer from `1..10` after a successful app
 cycle and cleanup. Only `5` requests regeneration; it waits for completion,

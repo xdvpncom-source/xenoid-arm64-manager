@@ -11,7 +11,8 @@ qa_target=/opt/xenoid-fleet/panel-scripts
 install -d -o root -g root -m 0755 "$qa_target"
 exec 8>"$qa_target/.installer-lock"
 flock 8
-for qa_file in script_host.py script_runtime.py shared_policy.py qa_lifecycle.py qa_vpn_probe.py shared-app-script.py vpn-cycle.py qa_resources.py restore-display.py restore-default-display.py; do
+# Publish host dependencies before the entrypoint that imports them.
+for qa_file in qa_vpn_probe.py qa_lifecycle.py qa_input_ready.py script_runtime.py shared_policy.py script_host.py shared-app-script.py vpn-cycle.py qa_resources.py restore-display.py restore-default-display.py; do
     qa_temp=$(mktemp "$qa_target/.install.XXXXXXXX")
     install -o root -g root -m 0755 "$qa_source/qa/$qa_file" "$qa_temp"
     mv -f "$qa_temp" "$qa_target/$qa_file"

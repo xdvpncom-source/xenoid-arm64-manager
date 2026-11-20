@@ -19,4 +19,16 @@ for name, filename in pins.items():
     assert actual == expected[1], filename + " does not match its installer pin"
 version = re.search(r'^VERSION = "([^\"]+)"$', (root / "xenoid-fleet").read_text(), re.M)[1]
 assert "release=" + version + "\n" in source
+installer = (root / "install-qa-addon.sh").read_text()
+installed = re.search(r"^for qa_file in (.+); do$", installer, re.M)[1].split()
+manifest_rows = [line.split(maxsplit=1) for line in (root / "qa/manifest.sha256").read_text().splitlines()]
+manifest_paths = [row[1].strip() for row in manifest_rows]
+assert len(manifest_paths) == len(set(manifest_paths)), "Duplicate QA manifest paths"
+required = {"script_host.py", "script_runtime.py", "shared_policy.py", "qa_lifecycle.py",
+            "qa_vpn_probe.py", "qa_input_ready.py"}
+assert required <= set(installed), "Required QA host module is not installed"
+assert all(installed.index(name) < installed.index("script_host.py") for name in required - {"script_host.py"}), "Host dependency installs after entrypoint"
+for filename in installed:
+    assert "qa/" + filename in manifest_paths, filename + " has no integrity pin"
+    assert (root / "qa" / filename).is_file(), filename + " is missing from release"
 print("Release integrity pins match " + version)

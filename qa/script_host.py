@@ -642,6 +642,10 @@ def native_touch_point(dump, profile, x, y):
                     dispatcher, "dispatcher display transform is missing")[1]
     logical = match(r"^    logicalSize=(\d+)x(\d+)", section, "logical display size is missing")
     logical_width, logical_height = map(int, logical.groups())
+    # A readiness observation validates the same mapping at its centre without
+    # injecting an event. official_tap still requires explicit integer inputs.
+    if x is None and y is None:
+        x, y = (logical_width - 1) // 2, (logical_height - 1) // 2
     if not 0 <= x < logical_width or not 0 <= y < logical_height:
         raise ValueError("Touch coordinates are outside the current logical display")
     matrix = match(r"^        transform[^\n]*\n\s*(" + number + r")\s+(" + number + r")\s+(" + number +
@@ -749,6 +753,67 @@ class Broker:
         return hashlib.sha256(json.dumps({"image": owned.get("Image"), "mounts": mounts}, sort_keys=True).encode()).hexdigest()
 
     @staticmethod
+    def daemon_only_boot_compatible(current, desired):
+        """Prove the native daemon live-update case, without accepting boot drift."""
+        if not isinstance(current, dict) or not isinstance(desired, dict):
+            return False
+        for key in ("baseImageId", "bootInputSha256", "contextInputs", "googleInputs", "toolInputs", "builderInputs"):
+            if key not in current or current[key] != desired.get(key):
+                return False
+        if current.get("inputSha256") == desired.get("inputSha256"):
+            return False
+        old_seed, new_seed = current.get("daemonSeedContract"), desired.get("daemonSeedContract")
+        if not isinstance(old_seed, dict) or not isinstance(new_seed, dict) or set(old_seed) != set(new_seed):
+            return False
+        if any(old_seed[key] != new_seed[key] for key in old_seed if key != "apkSha256"):
+            return False
+        try:
+            old = {row["target"]: row for row in current["artifactTuples"]}
+            new = {row["target"]: row for row in desired["artifactTuples"]}
+            if set(old) != set(new) or len(old) != len(current["artifactTuples"]) or len(new) != len(desired["artifactTuples"]):
+                return False
+            if any(old[name] != new[name] for name in old if name != "daemon"):
+                return False
+            before, after = old["daemon"], new["daemon"]
+            if any(before.get(key) != after.get(key) for key in ("target", "inputSha256", "toolSha256")):
+                return False
+            if len(before["outputs"]) != 1 or len(after["outputs"]) != 1:
+                return False
+            a, b = before["outputs"][0], after["outputs"][0]
+            return (a["path"] == b["path"] and a["path"].endswith(".apk") and a["mode"] == b["mode"]
+                    and a["sha256"] == old_seed["apkSha256"] and b["sha256"] == new_seed["apkSha256"]
+                    and a["sha256"] != b["sha256"])
+        except (KeyError, TypeError):
+            return False
+
+    def regeneration_daemon_compatibility(self, manager, plan, observation, binding):
+        """Use native content records and installed APK proof for one safe UP."""
+        runtime = observation.get("runtime") or {}
+        if (plan.resolution != "complete" or plan.boot_seed_action != "none"
+                or runtime.get("imageInputSha256") == plan.desired_image_input_sha256):
+            return None
+        selected = observation.get("selectedImageRecord") or {}
+        desired = manager.runtime_image_input_record()
+        if (selected.get("imageId") != binding["image_id"]
+                or selected.get("inputSha256") != runtime.get("imageInputSha256")
+                or desired.get("inputSha256") != plan.desired_image_input_sha256
+                or desired.get("bootInputSha256") != plan.desired_image_boot_input_sha256
+                or not self.daemon_only_boot_compatible(selected, desired)
+                or manager._runtime_seed_incompatibility(selected, desired) is not None):
+            raise RegenerationPending("regeneration_preparation_image_change_required")
+        # Either the pinned stock daemon is still installed, or the same
+        # official live update already finished before an interrupted reply.
+        installed = manager._daemon_live_update_matches(desired)
+        if installed.get("ok") is not True:
+            installed = manager._daemon_live_update_matches(selected)
+        if (installed.get("ok") is not True or installed.get("signingLineageMatches") is not True
+                or installed.get("sharedUserIdMatches") is not True):
+            raise RegenerationPending("regeneration_preparation_daemon_unverified")
+        return {"image_id": binding["image_id"], "current_input": selected["inputSha256"],
+                "desired_input": desired["inputSha256"], "boot_input": desired["bootInputSha256"],
+                "storage": {key: runtime.get(key) for key in ("dataUuid", "rootfsUuid")}}
+
+    @staticmethod
     def regeneration_preparation_plan(plan, retained, observation, binding):
         runtime = observation.get("runtime") or {}
         if (observation.get("instanceId") != binding["instance_id"] or runtime.get("containerId") != binding["container_id"]
@@ -762,9 +827,31 @@ class Broker:
         selected = observation.get("selectedImageRecord") or {}
         if not binding.get("image_id") or selected.get("imageId") != binding["image_id"]:
             raise RegenerationPending("regeneration_preparation_image_change_required")
+        compatible = binding.get("daemon_compatibility")
+        compatible_retained = retained is None or bool(
+            retained.get("regenerationTransactionId") is None and retained.get("bootSeedTarget") is None
+            and retained.get("instanceId") == binding["instance_id"]
+            and retained.get("oldContainerId") == binding["container_id"]
+            and retained.get("newContainerId") in {None, binding["container_id"]}
+            and retained.get("selectedImageInputSha256") == runtime.get("imageInputSha256")
+            and retained.get("selectedImageBootInputSha256") == runtime.get("imageBootInputSha256")
+            and not set(retained.get("completed", ())) & {"container_removed", "container_created", "storage_converged", "seed_runtime_started", "seed_initialized"})
+        daemon_update = bool(isinstance(compatible, dict)
+            and compatible.get("image_id") == binding.get("image_id")
+            and compatible.get("current_input") == runtime.get("imageInputSha256") == selected.get("inputSha256")
+            and compatible.get("desired_input") == plan.desired_image_input_sha256
+            and compatible.get("boot_input") == plan.desired_image_boot_input_sha256 == runtime.get("imageBootInputSha256") == selected.get("bootInputSha256")
+            and compatible.get("storage") == {key: runtime.get(key) for key in ("dataUuid", "rootfsUuid")}
+            and compatible_retained and plan.runtime_action == "reuse" and plan.image_action == "reuse-selected"
+            and all(getattr(plan, name, None) == "reuse" for name in ("identity_action", "location_action", "keybox_action", "camera_action", "google_action", "protection_action"))
+            and getattr(plan, "daemon_action", None) in {"reuse", "install", "reconcile"}
+            and getattr(plan, "proxy_action", None) in {"reuse", "reconcile"}
+            and not getattr(plan, "deploy_components", None))
         for field, desired, journal_key in (("imageInputSha256", plan.desired_image_input_sha256, "selectedImageInputSha256"),
                                              ("imageBootInputSha256", plan.desired_image_boot_input_sha256, "selectedImageBootInputSha256")):
             selected_key = "inputSha256" if field == "imageInputSha256" else "bootInputSha256"
+            if field == "imageInputSha256" and daemon_update:
+                continue
             if (not isinstance(desired, str) or not re.fullmatch(r"[0-9a-f]{64}", desired)
                     or runtime.get(field) != desired or selected.get(selected_key) != desired
                     or retained is not None and retained.get(journal_key) != desired):
@@ -803,6 +890,7 @@ class Broker:
         plan = cli.ConvergencePlan.from_dict(raw_plan)
         owned, _reason = manager._owned_container_record(timeout=8)
         plan_binding = {**binding, "image_id": (owned or {}).get("Image")}
+        plan_binding["daemon_compatibility"] = self.regeneration_daemon_compatibility(manager, plan, observation, plan_binding)
         self.regeneration_preparation_plan(plan, retained, observation, plan_binding)
         fence = self.regeneration_data_fence(manager)
         data = {key: (observation.get("runtime") or {}).get(key) for key in ("dataUuid", "rootfsUuid")}
@@ -899,7 +987,9 @@ class Broker:
                 with self.display_raw_docker(manager, deadline):
                     execute = lambda values, **options: self.native_display_exec(manager, values, deadline=deadline, **options)
                     self.display_bootstrap(manager, execute, deadline)
-                return {**receipt["result"], "replayed": True}
+                    self.ensure_native_interaction(manager, deadline, repair=True, foreground=True)
+                return {**receipt["result"], "input_ready": True, "foreground_ready": True,
+                        "touch_backend": "xenoid_native", "replayed": True}
             for run, iteration, key, pending in store.pending():
                 if (run, iteration, key) != (store.run, store.iteration, operation_key) and pending.get("binding") == binding:
                     raise RegenerationPending("another_regeneration_is_pending")
@@ -994,12 +1084,14 @@ class Broker:
                         raise RegenerationPending("native_regeneration_checkpoint_missing")
                     execute = lambda values, **options: self.native_display_exec(manager, values, deadline=deadline, **options)
                     self.display_bootstrap(manager, execute, deadline)
+                    self.ensure_native_interaction(manager, deadline, repair=True, foreground=True)
                     refreshed = self.verify() if self.verify else manager
                     if self.regeneration_binding(refreshed) != binding:
                         raise RuntimeIdentityError("The runtime binding changed during official regeneration")
                     self.manager = refreshed
                     result = {"ok": True, "phase": "committed", "runtimeOnly": True, "containerRecreated": False,
                               "native_ready": True, "profile_ready": True, "container_id_preserved": True,
+                              "input_ready": True, "foreground_ready": True, "touch_backend": "xenoid_native",
                               "instance_id_preserved": True, "resource_tag_preserved": True,
                               "identities_changed": state["before"]["stableDigest"] != state["target"]["stableDigest"],
                               "stable_digest_before": state["before"]["stableDigest"],
@@ -1069,14 +1161,8 @@ class Broker:
         seconds = self.config.get("command_timeout", 0)
         deadline = time.monotonic() + seconds if seconds else None
         with self.owned_manager() as manager:
-            state = self.native_display_exec(manager, ["sh", "-c",
-                "cat /data/local/tmp/xenoid-profile/effective.json; "
-                "printf '\\nXENOID_INPUT_MAPPING\\n'; dumpsys input"], deadline=deadline)
-            try:
-                raw_profile, dump = state.stdout.decode().split("\nXENOID_INPUT_MAPPING\n", 1)
-                raw_x, raw_y, _ = native_touch_point(dump, json.loads(raw_profile), x, y)
-            except (ValueError, UnicodeError) as error:
-                raise TransportUnavailable(f"Native touch mapping could not be read: {error}") from error
+            state = self.ensure_native_interaction(manager, deadline, repair=True)
+            raw_x, raw_y, _ = native_touch_point(state["dump"], state["profile"], x, y)
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
                 raise TransportUnavailable("Native touch mapping timed out before injection")
@@ -1085,6 +1171,101 @@ class Broker:
         shared_policy("native_tap", result=result)
         self.log("action", f"Xenoid native tap logical ({x}, {y}) → raw ({raw_x}, {raw_y}) via /dev/uinput")
         return result
+
+    def native_interaction_snapshot(self, manager, deadline, *, foreground=False):
+        """Read the actual InputReader mapping; never send a pointer event."""
+        command = ("cat /data/local/tmp/xenoid-profile/effective.json; "
+                   "printf '\\nXENOID_INPUT_MAPPING\\n'; dumpsys input")
+        if foreground:
+            command += "; printf '\\nXENOID_FOREGROUND_WINDOW\\n'; dumpsys window"
+        response = self.native_display_exec(manager, ["sh", "-c", command], deadline=deadline)
+        try:
+            profile_bytes, raw = response.stdout.split(b"\nXENOID_INPUT_MAPPING\n", 1)
+            profile = json.loads(profile_bytes)
+            focus_dump = None
+            if foreground:
+                raw, focus_dump = raw.split(b"\nXENOID_FOREGROUND_WINDOW\n", 1)
+            dump = raw.decode()
+        except (ValueError, UnicodeError) as error:
+            raise TransportUnavailable("Native touch mapping could not be read") from error
+        focus = foreground_window(focus_dump.decode()) if focus_dump is not None else None
+        window = {"ready": focus is not None, "package": focus[2] if focus else "",
+                  "component": (focus[2] + "/" + focus[3]) if focus and focus[2] else ""}
+        try:
+            _x, _y, mapping = native_touch_point(dump, profile, None, None)
+        except TransportUnavailable:
+            mapping = None
+        return {"ready": mapping is not None, "mapping": mapping, "profile": profile,
+                "profile_sha256": hashlib.sha256(profile_bytes).hexdigest(), "dump": dump,
+                "foreground": window}
+
+    def native_input_rootd(self, manager, command, deadline):
+        """Use the same token-gated official rootd transport as soft_reboot."""
+        def verify():
+            owned, _reason = manager._owned_container_record(timeout=8)
+            if owned is None or owned.get("Id") != self.container_id:
+                raise RuntimeIdentityError("The assigned runtime changed during input readiness")
+        verify()
+        options = {} if deadline is None else {"timeout": max(0.0, deadline - time.monotonic())}
+        if options and options["timeout"] <= 0:
+            raise TransportUnavailable("Native input readiness exceeded the configured timeout")
+        with self.display_raw_docker(manager, deadline):
+            client = manager.daemon_client(**options)
+            token = client.read_private_token(force=True, **options)
+            if token is None:
+                raise TransportUnavailable("Native input control token is unavailable")
+            reply = manager._rootd_exec(command, token, deadline=deadline)
+        verify()
+        if not isinstance(reply, dict) or reply.get("ok") is not True or reply.get("exitCode") != 0:
+            raise TransportUnavailable("Official native input readiness command did not complete")
+        return reply.get("stdout", "")
+
+    def ensure_native_interaction(self, manager, deadline, *, repair=False, foreground=False):
+        """Require the real strict mapping; repair only its owned event inode.
+
+        A rootd repair is not a tap, a new driver, a fingerprint application or
+        proof of readiness. Only a fresh InputReader/dispatcher mapping passes.
+        The caller's configured deadline is the entire wait budget (0 = none).
+        """
+        repaired = False
+        while True:
+            if self.stopping.is_set():
+                raise TransportUnavailable("Device script is stopping")
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TransportUnavailable("Native interaction readiness exceeded the configured timeout")
+            state = self.native_interaction_snapshot(manager, deadline, foreground=foreground)
+            if state["ready"] and (not foreground or state["foreground"]["ready"]):
+                return state
+            if not repair:
+                return state
+            if not state["ready"] and not repaired:
+                from qa_input_ready import (NativeInputBindingError, parse_probe,
+                                            parse_repair, probe_command, repair_command)
+                evidence = self.native_input_rootd(manager, probe_command(), deadline)
+                binding = parse_probe(evidence, state["profile"])
+                if binding.profile_sha != state["profile_sha256"]:
+                    raise NativeInputBindingError("The native profile changed during input readiness")
+                answer = self.native_input_rootd(manager, repair_command(binding), deadline)
+                parse_repair(answer, binding)
+                repaired = True
+                if self.log:
+                    self.log("action", "Reannounced the same official Xenoid input inode; no pointer event was sent")
+            delay = 0.5 if deadline is None else min(0.5, max(0.0, deadline - time.monotonic()))
+            if self.stopping.wait(delay):
+                raise TransportUnavailable("Device script is stopping")
+
+    def input_status(self, timeout=None):
+        """Read mapping/focus only; a script chooses what window to act on."""
+        seconds = self.config.get("command_timeout", 0) if timeout is None else timeout
+        if type(seconds) is not int or seconds < 0:
+            raise ValueError("Input inspection timeout must be nonnegative; zero is unlimited")
+        deadline = time.monotonic() + seconds if seconds else None
+        manager = self.verify() if self.verify else self.manager
+        with manager.instance_operation_lock(timeout_seconds=seconds or None):
+            with self.owned_manager() as manager:
+                state = self.native_interaction_snapshot(manager, deadline, foreground=True)
+        return {"ready": state["ready"], "backend": "xenoid_native", "mapping": state["mapping"],
+                "foreground": state["foreground"], "events_injected": False}
 
     def native_display_exec(self, manager, args, *, data=None, deadline=None, check=True, stopping=True):
         """Use the pinned native Docker context; ADB runs as shell, not Android root."""
@@ -1864,6 +2045,8 @@ done
             raise ValueError("Expected an argument list")
         if action == "regenerate" and len(args) == 2:
             return self.regenerate(*args)
+        if action == "input-status" and len(args) <= 1:
+            return self.input_status(*args)
         if action == "set-frame-rate" and 1 <= len(args) <= 2:
             return self.set_frame_rate(*args)
         if action == "settings" and not args:

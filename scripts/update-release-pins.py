@@ -5,6 +5,13 @@ from pathlib import Path
 import re
 
 root = Path(__file__).resolve().parents[1]
+required_host_modules = {
+    "script_host.py", "script_runtime.py", "shared_policy.py",
+    "qa_lifecycle.py", "qa_vpn_probe.py", "qa_input_ready.py",
+}
+missing = sorted(name for name in required_host_modules if not (root / "qa" / name).is_file())
+if missing:
+    raise SystemExit("Missing required QA host modules: " + ", ".join(missing))
 files = sorted([*(root / "qa").glob("*.py"), root / "qa/qa-resources.json",
                 *(root / "deploy").glob("*"),
                 *(root / "native/xenoid-hwcomposer").glob("*.c"),
