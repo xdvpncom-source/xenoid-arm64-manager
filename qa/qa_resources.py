@@ -253,11 +253,10 @@ def main(argv=None):
         # native operation locks and container identity checks remain in Broker.
         with open(STATE / (name + ".lock"), "a") as lock:
             try:
-                # Off + explicit Apply is a barrier for an older timer that
-                # already began changing graphics. Wait for its device lock
-                # before reporting disabled, so panel rollback can follow.
-                barrier = args.force and not config["enabled"]
-                fcntl.flock(lock, fcntl.LOCK_EX | (0 if barrier else fcntl.LOCK_NB))
+                # Explicit lifecycle/Apply operations wait for an older timer
+                # before converging, or reporting disabled for panel rollback.
+                # Timer attempts stay nonblocking and never pile up.
+                fcntl.flock(lock, fcntl.LOCK_EX | (0 if args.force else fcntl.LOCK_NB))
             except BlockingIOError:
                 # A timer may skip an overlapping attempt; an explicit panel
                 # apply must not claim completion while another apply is busy.

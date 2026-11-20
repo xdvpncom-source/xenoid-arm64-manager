@@ -265,13 +265,19 @@ class ResourceBootIdentityTest(unittest.TestCase):
         lock.assert_not_called()
 
     def test_disabled_force_waits_for_started_timer_then_reports_without_apply(self):
+        self.assert_force_waits_for_started_timer(enabled=False)
+
+    def test_enabled_force_waits_for_started_timer_then_converges(self):
+        self.assert_force_waits_for_started_timer(enabled=True)
+
+    def assert_force_waits_for_started_timer(self, *, enabled):
         # The older timer started while enabled and owns the per-device lock.
         # Off+Apply must wait for that operation to finish before panel rollback.
-        disabled = {**self.config, "enabled": False}
+        profile = {**self.config, "enabled": enabled}
         waiting = threading.Event()
         completed = threading.Event()
         real_flock = fcntl.flock
-        apply = Mock()
+        apply = Mock(return_value={"ok": True})
         results = []
         errors = []
         with open(self.root / "phone-1.lock", "a") as old_timer:
@@ -287,7 +293,7 @@ class ResourceBootIdentityTest(unittest.TestCase):
                     errors.append(error)
                 finally:
                     completed.set()
-            with patch.dict(GLOBALS, {"load_config": Mock(return_value=disabled), "reconcile": apply}), \
+            with patch.dict(GLOBALS, {"load_config": Mock(return_value=profile), "reconcile": apply}), \
                     patch("os.geteuid", return_value=0), patch("builtins.print"), \
                     patch("fcntl.flock", side_effect=observed_flock):
                 worker = threading.Thread(target=off_and_apply, daemon=True)
@@ -301,7 +307,10 @@ class ResourceBootIdentityTest(unittest.TestCase):
                 self.assertFalse(worker.is_alive())
         self.assertEqual(errors, [])
         self.assertEqual(results, [0])
-        apply.assert_not_called()
+        if enabled:
+            apply.assert_called_once_with("phone-1", profile, force=True)
+        else:
+            apply.assert_not_called()
 
     def test_same_container_new_boot_reapplies(self):
         self.write_marker()
