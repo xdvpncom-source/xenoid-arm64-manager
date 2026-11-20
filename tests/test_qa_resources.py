@@ -213,6 +213,38 @@ class ResourceApplyTest(unittest.TestCase):
         broker.owned_call.assert_not_called()
         self.assertFalse(self.backup.exists())
 
+    def test_migrated_legacy_original_keeps_metrics_and_binds_identity(self):
+        original = {"size": [1440, 3120], "density": 560, "legacy_field": "preserve"}
+        self.backup.write_text(json.dumps(original))
+        identity = {"instance_id": "old-native-instance", "resource_tag": "old-native-tag"}
+        apply_metrics(AndroidDisplay(), self.config, self.backup, identity=identity)
+        saved = json.loads(self.backup.read_text())
+        self.assertEqual(saved, {**original, "identity": identity, "identity_binding": "legacy"})
+
+    def test_reused_number_archives_old_identity_then_captures_new_original(self):
+        old = {"instance_id": "old-instance", "resource_tag": "old-tag"}
+        current = {"instance_id": "new-instance", "resource_tag": "new-tag"}
+        marker = self.backup.parent / "phone-1.json"
+        self.backup.write_text(json.dumps({"size": [1440, 3120], "density": 560,
+                                          "identity": old, "identity_binding": "captured"}))
+        marker.write_text(json.dumps({"key": {"container_id": "old-container"}, "identity": old}))
+        originals = {path.name: path.read_bytes() for path in (marker, self.backup)}
+        unrelated = self.backup.parent / "user-data-do-not-touch"
+        unrelated.write_text("keep")
+        with patch.dict(GLOBALS, {"STATE": self.backup.parent}):
+            previous = GLOBALS["prepare_identity"](marker, self.backup, json.loads(marker.read_text()), current)
+        self.assertEqual(previous, {})
+        archived = list((self.backup.parent / "archive").glob("*/*"))
+        self.assertEqual({path.name: path.read_bytes() for path in archived}, originals)
+        self.assertFalse(marker.exists())
+        self.assertFalse(self.backup.exists())
+        apply_metrics(AndroidDisplay(), self.config, self.backup, identity=current)
+        fresh = json.loads(self.backup.read_text())
+        self.assertEqual(fresh["identity"], current)
+        self.assertEqual(fresh["identity_binding"], "captured")
+        self.assertEqual(fresh["size"], [1080, 1920])
+        self.assertEqual(unrelated.read_text(), "keep")
+
 
 class ResourceBootIdentityTest(unittest.TestCase):
     def setUp(self):
@@ -222,6 +254,9 @@ class ResourceBootIdentityTest(unittest.TestCase):
         self.config = validate_config({})
         self.owned = {"Id": "a" * 64, "State": {"Running": True, "StartedAt": "boot-1"}}
         self.manager = Mock()
+        self.identity = {"instance_id": "12345678-1234-1234-1234-123456789abc", "resource_tag": "0123456789ab"}
+        self.manager.context = types.SimpleNamespace(**self.identity)
+        self.manager.instance_operation_lock.return_value = contextlib.nullcontext()
         self.manager._owned_container_record.return_value = (self.owned, None)
         self.broker = Mock()
         self.broker.set_frame_rate.return_value = {"changed": False, "proxy": {"ready": True}}
@@ -238,14 +273,15 @@ class ResourceBootIdentityTest(unittest.TestCase):
     def write_marker(self, **changes):
         key = {"container_id": self.owned["Id"], "started_at": "boot-1",
                "config_sha256": hashlib.sha256(json.dumps(self.config, sort_keys=True).encode()).hexdigest(),
-               **changes}
-        (self.root / "phone-1.json").write_text(json.dumps({"key": key}))
+               **self.identity, **changes}
+        (self.root / "phone-1.json").write_text(json.dumps({"key": key, "identity": self.identity}))
 
     def test_same_boot_and_config_leave_later_script_settings_alone(self):
         self.write_marker()
         result = reconcile("phone-1", self.config)
         self.assertEqual(result["skipped"], "already_applied")
         self.broker_factory.assert_not_called()
+        self.manager.instance_operation_lock.assert_not_called()
 
     def test_timer_rereads_disable_under_device_lock_before_applying(self):
         apply = Mock()
@@ -380,6 +416,55 @@ class ResourceBootIdentityTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "rejected"):
                 reconcile("phone-1", self.config)
         self.assertFalse((self.root / "phone-1.json").exists())
+
+    def test_native_lock_uses_configured_wait_and_zero_means_blocking(self):
+        reconcile("phone-1", self.config)
+        self.manager.instance_operation_lock.assert_called_with(timeout_seconds=180)
+        reconcile("phone-1", {**self.config, "timeout": 0}, force=True)
+        self.manager.instance_operation_lock.assert_called_with(timeout_seconds=None)
+
+    def test_native_lock_covers_fps_and_metrics_transaction(self):
+        active = []
+        @contextlib.contextmanager
+        def operation(**_kwargs):
+            active.append(True)
+            try:
+                yield
+            finally:
+                active.pop()
+        def assert_locked(*_args, **_kwargs):
+            self.assertEqual(active, [True])
+            return {"changed": False, "proxy": {"ready": True}}
+        self.manager.instance_operation_lock.side_effect = operation
+        self.broker.set_frame_rate.side_effect = assert_locked
+        with patch.dict(GLOBALS, {"apply_metrics": Mock(side_effect=assert_locked)}):
+            self.assertTrue(reconcile("phone-1", self.config)["ok"])
+        self.assertEqual(active, [])
+
+    def test_owned_container_is_refreshed_after_waiting(self):
+        replacement = {"Id": "b" * 64, "State": {"Running": True, "StartedAt": "boot-2"}}
+        self.manager._owned_container_record.side_effect = [(self.owned, None), (replacement, None)]
+        result = reconcile("phone-1", self.config)
+        self.assertEqual(result["key"]["container_id"], replacement["Id"])
+        self.assertEqual(self.broker_factory.call_args.kwargs["config"]["expected_container_id"], replacement["Id"])
+
+    def test_safe_failure_reason_never_returns_exception_credential_text(self):
+        error = RuntimeError("https://admin:private-password@example.invalid/token")
+        error.code = "https://admin:private-password@example.invalid/token"
+        self.assertEqual(GLOBALS["safe_failure_reason"](error), "RuntimeError")
+        error.code = "instance_busy"
+        self.assertEqual(GLOBALS["safe_failure_reason"](error), "instance_busy")
+
+    def test_failure_output_keeps_stable_code_without_raw_exception(self):
+        error = RuntimeError("https://admin:private-password@example.invalid/token")
+        with patch.dict(GLOBALS, {"load_config": Mock(return_value=self.config), "reconcile": Mock(side_effect=error)}), \
+                patch("os.geteuid", return_value=0), patch("builtins.print") as output:
+            self.assertEqual(GLOBALS["main"](["--device", "phone-1"]), 1)
+        text = output.call_args.args[0]
+        self.assertNotIn("private-password", text)
+        document = json.loads(text)
+        self.assertEqual(document["code"], "qa_resource_reconcile_failed")
+        self.assertEqual(document["reason"], "RuntimeError")
 
 
 if __name__ == "__main__":

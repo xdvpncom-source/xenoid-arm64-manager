@@ -98,7 +98,32 @@ def effective_metrics(size, density):
     return {'width': width, 'height': height, 'density': dpi}
 
 
-def find_original(number, execute, backup_root=None):
+def find_original(number, execute, backup_root=None, *, identity=None, container_id=None):
+    def same_identity(document):
+        known = document.get('identity')
+        known = known if isinstance(known, dict) else {}
+        for key, alternate in (('instance_id', 'instanceId'), ('resource_tag', 'resourceTag')):
+            value = known.get(key, document.get(key, document.get(alternate)))
+            if identity and value is not None and value != identity[key]:
+                return False
+        # Container replacement can keep the immutable instance and data. A
+        # changed CID alone is not proof that a legacy original is unrelated.
+        return True
+
+    def addon_metrics(document):
+        width, height = document['size']
+        dpi = document['density']
+        if any(type(value) is not int or value <= 0 for value in (width, height, dpi)):
+            raise RuntimeError('The original addon display backup is invalid')
+        return {'width':width, 'height':height, 'density':dpi}
+
+    addon_original = RESOURCE_STATE / ('phone-' + str(number) + '-original-display.json')
+    addon = json.loads(addon_original.read_text()) if addon_original.is_file() else None
+    # Fresh v12 backups are bound to an immutable identity. Prefer that known
+    # original over dated legacy files for an older device reusing the same ID.
+    if (addon and identity and addon.get('identity') == identity
+            and addon.get('identity_binding') == 'captured'):
+        return addon_metrics(addon), None, [str(addon_original)]
     search = [Path(backup_root)] if backup_root else [
         Path('/var/backups/xenoid-reliability-fix-20261120'),
         Path('/var/backups/xenoid-low-display-fleet-20261120'),
@@ -112,13 +137,15 @@ def find_original(number, execute, backup_root=None):
         if saved_metrics is None and early.is_file():
             document = json.loads(early.read_text())
             for row in document:
-                if row.get('device_id') == number:
+                if row.get('device_id') == number and same_identity(row):
                     saved_metrics = effective_metrics(row['size_before'], row['density_before'])
                     evidence.append(str(early))
                     break
         fleet = root / ('phone-' + str(number) + '.json')
         if fleet.is_file():
             before = json.loads(fleet.read_text())
+            if not same_identity(before):
+                continue
             if saved_metrics is None:
                 saved_metrics = effective_metrics(before['size'], before['density'])
                 evidence.append(str(fleet))
@@ -129,6 +156,8 @@ def find_original(number, execute, backup_root=None):
         manual = root / ('phone-' + str(number)) / 'metadata.json'
         if manual.is_file() and not rate_known:
             before = json.loads(manual.read_text())
+            if not same_identity(before):
+                continue
             value = manual.parent / 'refresh.before'
             if before.get('config_existed'):
                 if not value.is_file():
@@ -136,14 +165,8 @@ def find_original(number, execute, backup_root=None):
                 saved_rate = value.read_bytes()
             rate_known = True
             evidence.append(str(manual))
-    addon_original = RESOURCE_STATE / ('phone-' + str(number) + '-original-display.json')
-    if saved_metrics is None and addon_original.is_file():
-        original = json.loads(addon_original.read_text())
-        width, height = original['size']
-        dpi = original['density']
-        if any(type(value) is not int or value <= 0 for value in (width, height, dpi)):
-            raise RuntimeError('The original addon display backup is invalid')
-        saved_metrics = {'width':width, 'height':height, 'density':dpi}
+    if saved_metrics is None and addon is not None and same_identity(addon):
+        saved_metrics = addon_metrics(addon)
         evidence.append(str(addon_original))
     if saved_metrics is None:
         result = execute(['cat', '/data/local/tmp/xenoid-profile/effective.json'])
@@ -181,7 +204,9 @@ def restore(number, options):
         size = execute(['wm','size']).stdout.decode()
         density = execute(['wm','density']).stdout.decode()
         current_metrics = effective_metrics(size, density)
-        metrics, rate, evidence = find_original(number, execute, options.backup_root)
+        native_identity = {'instance_id':context.instance_id, 'resource_tag':context.resource_tag}
+        metrics, rate, evidence = find_original(number, execute, options.backup_root,
+                                                 identity=native_identity, container_id=owned['Id'])
         read = execute(['sh','-c', f'if [ -f {host.DISPLAY_RATE_FILE} ]; then cat {host.DISPLAY_RATE_FILE}; else exit 42; fi'], check=False)
         if read.returncode not in (0,42):
             raise RuntimeError('Unable to read the current QA refresh file')
@@ -191,6 +216,7 @@ def restore(number, options):
         active_script = active.get('state') not in host.TERMINAL | {'missing'}
         plan = {'device_id':number, 'status':'plan', 'apply':options.apply,
                 'container_id':owned['Id'], 'backup_sources':evidence,
+                'native_identity':native_identity,
                 'current_metrics':current_metrics, 'restore_metrics':metrics,
                 'unmount_our_library':our_mount,
                 'current_library_sha256':current.get('sha'),

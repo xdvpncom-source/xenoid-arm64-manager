@@ -1,6 +1,6 @@
 # Xenoid Fleet command reference
 
-This reference covers Fleet `v0.1.11` and the Xenoid CLI at commit `c07e56b4aef8cd7e4d56eed11c84781369d29997`. Use `-h` or `--help` at each command level to see the installed parser's help. Brackets mark optional arguments. Uppercase words in syntax are values to supply. [Fleet launcher](../xenoid-fleet) · [Pinned Xenoid parser](https://github.com/Umiade/xenoid/blob/c07e56b4aef8cd7e4d56eed11c84781369d29997/src/xenoid/cli.py#L4058)
+This reference covers Fleet `v0.1.12` and the Xenoid CLI at commit `c07e56b4aef8cd7e4d56eed11c84781369d29997`. Use `-h` or `--help` at each command level to see the installed parser's help. Brackets mark optional arguments. Uppercase words in syntax are values to supply. [Fleet launcher](../xenoid-fleet) · [Pinned Xenoid parser](https://github.com/Umiade/xenoid/blob/c07e56b4aef8cd7e4d56eed11c84781369d29997/src/xenoid/cli.py#L4058)
 
 برای دستگاه اول `run 1 --`، برای چند دستگاه `run 1,3 --` و برای همهٔ دستگاه‌های عددی این میزبان `run all --` را قبل از فرمان Xenoid بگذارید. مثال‌های ساخت، حذف، خواندن مشخصات و گرفتن عکس در همین صفحه آمده‌اند.
 
@@ -9,8 +9,8 @@ This reference covers Fleet `v0.1.11` and the Xenoid CLI at commit `c07e56b4aef8
 The installer requires native ARM64 Ubuntu 24.04 and starts device `1` after installation. `--accept-android-licenses` accepts the Android SDK licenses during the installation. `--install-only` prepares the host so device creation can be scheduled separately.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.11/install.sh | sudo -H bash -s -- --accept-android-licenses
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.11/install.sh | sudo -H bash -s -- --accept-android-licenses --install-only
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.12/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.12/install.sh | sudo -H bash -s -- --accept-android-licenses --install-only
 bash install.sh --help
 ```
 

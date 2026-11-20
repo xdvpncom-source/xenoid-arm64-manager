@@ -112,14 +112,20 @@ def display_state(broker, timeout):
             "size": override_size or physical_size, "density": override_density or physical_density}
 
 
-def apply_metrics(broker, config, backup_path):
+def apply_metrics(broker, config, backup_path, *, identity=None):
     if config["scale"] is None:
         return {"changed": False, "preserved": True}
     timeout = config["timeout"] or None
     before = display_state(broker, timeout)
     desired_size, desired_density, native = desired_metrics(before, config)
     if not backup_path.exists():
-        atomic_json(backup_path, before)
+        atomic_json(backup_path, {**before, **({"identity": identity, "identity_binding": "captured"} if identity else {})})
+    elif identity:
+        original = json.loads(backup_path.read_text())
+        if not original.get("identity"):
+            # Preserve the pre-v12 original values while binding their migration
+            # to the current immutable instance, rather than replacing the data.
+            atomic_json(backup_path, {**original, "identity": identity, "identity_binding": "legacy"})
     commands = []
     for kind, desired in (("size", desired_size), ("density", desired_density)):
         override = before["override_" + kind]
@@ -161,6 +167,40 @@ def native_manager(name):
     return RuntimeManager(context, settings, lease)
 
 
+def resource_identity(manager):
+    return {"instance_id": manager.context.instance_id, "resource_tag": manager.context.resource_tag}
+
+
+def read_marker(path):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def resource_key(owned, config, identity):
+    return {"container_id": owned["Id"], "started_at": owned["State"].get("StartedAt"),
+            "config_sha256": hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest(),
+            **identity}
+
+
+def prepare_identity(marker, backup, previous, identity):
+    original = read_marker(backup)
+    known = [document.get("identity") for document in (previous, original) if document.get("identity")]
+    if any(value != identity for value in known):
+        # Reusing a numeric ID after native deletion creates a different immutable
+        # instance. Keep old QA evidence separate from the new instance's original
+        # display. Android data and native registry files are never touched here.
+        import time
+        archive = STATE / "archive" / (marker.stem + "-" + str(time.time_ns()))
+        archive.mkdir(mode=0o700, parents=True)
+        for path in (marker, backup):
+            if path.exists():
+                os.replace(path, archive / path.name)
+        return {}
+    return previous
+
+
 def reconcile(name, config, *, force=False):
     # Timer only handles already-running registered runtimes. It never starts a
     # stopped device and never imports/changes an APK or the desired proxy source.
@@ -170,13 +210,34 @@ def reconcile(name, config, *, force=False):
         return {"instance": name, "skipped": "no_owned_runtime"}
     if (owned.get("State") or {}).get("Running") is not True:
         return {"instance": name, "skipped": "stopped"}
-    key = {"container_id": owned["Id"], "started_at": owned["State"].get("StartedAt"),
-           "config_sha256": hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()}
+    identity = resource_identity(manager)
+    key = resource_key(owned, config, identity)
     marker = STATE / (name + ".json")
-    try:
-        previous = json.loads(marker.read_text())
-    except (OSError, ValueError):
-        previous = {}
+    previous = read_marker(marker)
+    same_boot = previous.get("key") == key
+    if not force and same_boot and not previous.get("proxy_pending"):
+        return {"instance": name, "skipped": "already_applied"}
+    # This is a root QA resource transaction, with an administrator-selected
+    # wait budget. Hold the native lock across FPS, profile replay, proxy recovery
+    # and WM writes. Its ContextVar makes Broker's inner lock reentrant. The
+    # ordinary script SDK keeps its original lock behavior and is not modified.
+    with manager.instance_operation_lock(timeout_seconds=config["timeout"] or None):
+        return reconcile_owned(name, config, manager, force=force)
+
+
+def reconcile_owned(name, config, manager, *, force=False):
+    # A lifecycle operation may have run while waiting for the native lock.
+    # Refresh all binding/marker information before any resource mutation.
+    owned, reason = manager._owned_container_record(timeout=8)
+    if owned is None:
+        return {"instance": name, "skipped": "no_owned_runtime"}
+    if (owned.get("State") or {}).get("Running") is not True:
+        return {"instance": name, "skipped": "stopped"}
+    identity = resource_identity(manager)
+    key = resource_key(owned, config, identity)
+    marker = STATE / (name + ".json")
+    backup = STATE / (name + "-original-display.json")
+    previous = prepare_identity(marker, backup, read_marker(marker), identity)
     same_boot = previous.get("key") == key
     if not force and same_boot and not previous.get("proxy_pending"):
         return {"instance": name, "skipped": "already_applied"}
@@ -196,15 +257,15 @@ def reconcile(name, config, *, force=False):
         atomic_json(marker, previous)
         return {**previous, "proxy_retry_only": True}
     result = broker.set_frame_rate(config["fps"], timeout=config["timeout"])
-    metrics = apply_metrics(broker, config, STATE / (name + "-original-display.json"))
+    metrics = apply_metrics(broker, config, backup, identity=identity)
     if result.get("proxy", {}).get("ready") is False:
         # Leave the marker incomplete so the timer can retry native recovery.
         # No direct-network bypass or changes to the saved proxy policy.
-        document = {"instance": name, "ok": False, "key": key, "proxy_pending": True,
+        document = {"instance": name, "ok": False, "key": key, "identity": identity, "proxy_pending": True,
                     "code": "proxy_recovery_pending", "display": result, "metrics": metrics}
         atomic_json(marker, document)
         return document
-    document = {"instance": name, "ok": True, "key": key, "display": result, "metrics": metrics}
+    document = {"instance": name, "ok": True, "key": key, "identity": identity, "display": result, "metrics": metrics}
     atomic_json(marker, document)
     return document
 
@@ -223,6 +284,13 @@ def registry_names():
         raise RuntimeError("Could not read the native registry")
     return [row["instanceName"] for row in document["instances"]
             if re.fullmatch(r"phone-[1-9][0-9]*", str(row.get("instanceName", "")))]
+
+
+def safe_failure_reason(error):
+    code = getattr(error, "code", None)
+    if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", code):
+        return code
+    return type(error).__name__
 
 
 def main(argv=None):
@@ -272,9 +340,10 @@ def main(argv=None):
                     print(json.dumps({"instance": name, "skipped": "disabled"}))
                     continue
                 result = reconcile(name, config, force=args.force)
-            except Exception:
+            except Exception as error:
                 # Native exception strings can contain credentials.
-                result = {"instance": name, "ok": False, "code": "qa_resource_reconcile_failed"}
+                result = {"instance": name, "ok": False, "code": "qa_resource_reconcile_failed",
+                          "reason": safe_failure_reason(error)}
             failed |= result.get("ok") is False
             print(json.dumps(result))
     return int(failed)

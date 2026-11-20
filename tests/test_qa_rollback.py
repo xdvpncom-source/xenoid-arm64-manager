@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 
@@ -77,3 +78,43 @@ class HostRollbackTest(unittest.TestCase):
             with open(self.state / "phone-2.lock", "a") as second:
                 with self.assertRaises(BlockingIOError):
                     fcntl.flock(second, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_reused_numeric_id_prefers_identified_new_original_over_unknown_legacy(self):
+        identity = {"instance_id": "new-instance", "resource_tag": "new-tag"}
+        self.state.mkdir()
+        (self.state / "phone-2-original-display.json").write_text(json.dumps(
+            {"size": [1080, 1920], "density": 420, "identity": identity, "identity_binding": "captured"}))
+        (self.backup / "display-before.json").write_text(json.dumps([
+            {"device_id": 2, "size_before": "Physical size: 1440x3120",
+             "density_before": "Physical density: 560"}]))
+        metrics, _rate, _sources = self.namespace["find_original"](
+            2, lambda *_args: self.fail("Identified backup should be sufficient"), self.backup, identity=identity)
+        self.assertEqual(metrics, {"width": 1080, "height": 1920, "density": 420})
+
+    def test_foreign_immutable_legacy_and_addon_records_do_not_override_current_profile(self):
+        identity = {"instance_id": "current-instance", "resource_tag": "current-tag"}
+        foreign = {"instance_id": "foreign-instance", "resource_tag": "foreign-tag"}
+        self.state.mkdir()
+        (self.state / "phone-2-original-display.json").write_text(json.dumps(
+            {"size": [1440, 3120], "density": 560, "identity": foreign, "identity_binding": "captured"}))
+        (self.backup / "display-before.json").write_text(json.dumps([
+            {"device_id": 2, "identity": foreign, "size_before": "Physical size: 1440x3120",
+             "density_before": "Physical density: 560"}]))
+        execute = lambda *_args: SimpleNamespace(stdout=json.dumps(
+            {"display": {"width": 1080, "height": 1920, "densityDpi": 420}}).encode())
+        metrics, _rate, _sources = self.namespace["find_original"](2, execute, self.backup, identity=identity)
+        self.assertEqual(metrics, {"width": 1080, "height": 1920, "density": 420})
+
+    def test_migrated_legacy_addon_keeps_earliest_known_original_for_current_fleet(self):
+        identity = {"instance_id": "current-instance", "resource_tag": "current-tag"}
+        self.state.mkdir()
+        (self.state / "phone-2-original-display.json").write_text(json.dumps(
+            {"size": [200, 356], "density": 72, "identity": identity, "identity_binding": "legacy"}))
+        (self.backup / "display-before.json").write_text(json.dumps([
+            {"device_id": 2, "identity": identity, "size_before": "Physical size: 1440x3120",
+             "density_before": "Physical density: 560"}]))
+        # effective_metrics is normally loaded alongside find_original on host.
+        self.namespace["effective_metrics"] = lambda _size, _density: {"width": 1440, "height": 3120, "density": 560}
+        metrics, _rate, _sources = self.namespace["find_original"](
+            2, lambda *_args: self.fail("Saved legacy backup should be sufficient"), self.backup, identity=identity)
+        self.assertEqual(metrics, {"width": 1440, "height": 3120, "density": 560})

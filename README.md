@@ -7,7 +7,7 @@ Install Xenoid on an ARM64 Ubuntu server and manage headless Android 13 instance
 Use an **ARM64 (aarch64) server running Ubuntu 24.04**, such as a Hetzner CAX server. The installer requires root access, outbound HTTPS, and free disk space for the build toolchain, container images, and Android data. Install and management commands use the same operator account and Xenoid registry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.11/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.12/install.sh | sudo -H bash -s -- --accept-android-licenses
 ```
 
 The `--accept-android-licenses` flag accepts the Android SDK licenses for the pinned build tools from Google. The installer prepares the host and starts device `1`. Allow tens of minutes for the first build on a small server. The CLI is installed as `/usr/local/bin/xenoid-fleet` and the managed checkout lives under `/opt/xenoid-fleet/upstream`. Rerunning the installer reuses the toolchain and converges device `1` with its existing data.
@@ -25,7 +25,7 @@ sudo -H xenoid-fleet run 1 -- adb shell getprop sys.boot_completed
 Use `--install-only` to prepare the host before creating the first device or upgrade an existing installation without issuing a device start.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.11/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.12/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
 ```
 
 ## Devices
@@ -64,12 +64,16 @@ The pinned Xenoid patch reads live host quarantine status during boot acceptance
 
 ### Panel-controlled QA defaults
 
-Version v0.1.11 installs the QA SDK/backend, the native logical-to-raw input
+Version v0.1.12 installs the QA SDK/backend, the native logical-to-raw input
 coordinate correction, and configurable resource defaults for all instances,
 including devices with no APK or shared script assignment. The stock pinned
 Redroid image, each native instance identity, persistent data, and saved proxy
 source/node/policy remain in place. The addon mounts its verified ARM64 composer
 over the running container's vendor path; it does not replace the stock image.
+Resource transactions wait for the native instance lock using the configured
+timeout (`0` waits without a deadline), then hold it through FPS and display
+writes. Normal script input/ADB lock behavior stays unchanged. Failure reports
+include a safe native reason code or exception class, never raw exception text.
 
 The default profile is `/etc/xenoid-fleet/qa-resources.json`:
 
@@ -108,6 +112,12 @@ can restart Android apps, so resource changes belong
 before launching a test. Native proxy reconciliation recovers the saved desired
 policy after this restart, with no direct-network fallback. Pending network
 recovery retries only the proxy, preserving later script display choices.
+
+Original display backups are bound to the immutable native instance ID and
+resource tag. Reusing a numeric device ID after deletion archives the prior QA
+marker/backup before capturing the new original; Android data is untouched.
+Upgrades retain and bind legacy backups. Host rollback prefers an identified
+new-instance backup over unrelated dated records for the same numeric ID.
 
 The installer also enables compressed swap via `xenoid-qa-zram.service` when no
 administrator swap already exists. `/etc/default/xenoid-qa-zram` controls its
