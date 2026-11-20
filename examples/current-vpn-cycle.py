@@ -46,6 +46,12 @@ REGENERATE_RANDOM_RANGE = (1, 10)
 REGENERATE_TRIGGER = 5
 REGENERATE_TIMEOUT = 0                 # 0 waits without a setup deadline.
 REGENERATE_RETRY_SECONDS = 15
+# Clear only these packages' CACHE after a committed native regeneration.
+# An empty tuple disables this phase. Add "com.android.vending" only if needed.
+GOOGLE_CACHE_PACKAGES = ("com.google.android.gms", "com.google.android.gsf")
+GOOGLE_CACHE_USER = "current"
+GOOGLE_CACHE_TIMEOUT = 0               # 0 waits without a cache-clear deadline.
+GOOGLE_CACHE_RETRY_SECONDS = 15
 
 # Explicit resource IDs or labels can be added here for a particular APK.
 # Example: ({"resource_id": "com.example.vpn:id/ad_close"},)
@@ -709,21 +715,39 @@ class Cycle:
         # receipt so a lost response cannot request a second identity rotation.
         operation_key = uuid.uuid4().hex
         self.log("Official Xenoid regenerate selected; waiting for Android reload")
+        cache_packages = list(dict.fromkeys(GOOGLE_CACHE_PACKAGES))
+        post_cache = ({"packages": cache_packages, "user": GOOGLE_CACHE_USER,
+                       "timeout": GOOGLE_CACHE_TIMEOUT} if cache_packages else None)
         while True:
             try:
-                result = self.device.regenerate(timeout=REGENERATE_TIMEOUT, operation_key=operation_key)
+                result = self.device.regenerate(timeout=REGENERATE_TIMEOUT, operation_key=operation_key,
+                                                post_cache=post_cache)
                 required = ("ok", "native_ready", "profile_ready", "container_id_preserved",
-                            "instance_id_preserved", "resource_tag_preserved", "identities_changed")
+                            "instance_id_preserved", "resource_tag_preserved", "identities_changed",
+                            "input_ready", "foreground_ready")
                 if (not isinstance(result, dict) or result.get("phase") != "committed"
                         or result.get("runtimeOnly") is not True or result.get("containerRecreated") is not False
                         or any(result.get(key) is not True for key in required)):
                     raise RuntimeError("Official regeneration readiness was not confirmed")
+                if post_cache is not None:
+                    cleanup = result.get("cache_cleanup")
+                    if (not isinstance(cleanup, dict) or cleanup.get("ok") is not True
+                            or cleanup.get("cache_only") is not True
+                            or cleanup.get("data_cleared") is not False
+                            or cleanup.get("packages") != cache_packages
+                            or cleanup.get("user") != GOOGLE_CACHE_USER):
+                        raise RuntimeError("regeneration_post_cache_pending: cache-only proof was not confirmed")
+                    for package in cache_packages:
+                        self.log("Google cache cleared (cache only): " + package)
                 break
             except (RuntimeError, OSError) as error:
                 self.log("Regeneration waiting: " + str(error))
                 # No UI/ADB crash probing while an identity transaction may be
                 # pending. Resume the same recorded operation after this pause.
-                time.sleep(REGENERATE_RETRY_SECONDS)
+                retry_seconds = (GOOGLE_CACHE_RETRY_SECONDS
+                                 if "regeneration_post_cache_pending" in str(error)
+                                 else REGENERATE_RETRY_SECONDS)
+                time.sleep(retry_seconds)
         # The official restart replays the regenerated native display profile.
         # Restore the administrator's script settings after that replay finishes.
         # A display retry must not invoke regenerate again or draw a new number.
@@ -756,6 +780,18 @@ def validate_regeneration_settings():
     if (type(REGENERATE_RETRY_SECONDS) not in (int, float)
             or not math.isfinite(REGENERATE_RETRY_SECONDS) or REGENERATE_RETRY_SECONDS < 0):
         raise ValueError("REGENERATE_RETRY_SECONDS must be a nonnegative finite number")
+    if (not isinstance(GOOGLE_CACHE_PACKAGES, (tuple, list))
+            or any(not isinstance(package, str) or re.fullmatch(
+                r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", package) is None
+                   for package in GOOGLE_CACHE_PACKAGES)):
+        raise ValueError("GOOGLE_CACHE_PACKAGES must contain valid Android package names")
+    if not (GOOGLE_CACHE_USER == "current" or type(GOOGLE_CACHE_USER) is int and GOOGLE_CACHE_USER >= 0):
+        raise ValueError("GOOGLE_CACHE_USER must be current or a nonnegative Android user")
+    if type(GOOGLE_CACHE_TIMEOUT) is not int or GOOGLE_CACHE_TIMEOUT < 0:
+        raise ValueError("GOOGLE_CACHE_TIMEOUT must be a nonnegative integer; 0 is unlimited")
+    if (type(GOOGLE_CACHE_RETRY_SECONDS) not in (int, float)
+            or not math.isfinite(GOOGLE_CACHE_RETRY_SECONDS) or GOOGLE_CACHE_RETRY_SECONDS < 0):
+        raise ValueError("GOOGLE_CACHE_RETRY_SECONDS must be a nonnegative finite number")
 
 
 def display_state(device):

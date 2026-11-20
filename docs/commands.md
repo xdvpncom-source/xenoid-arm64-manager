@@ -169,13 +169,21 @@ sudo -H xenoid-fleet run 1 -- view
 | `device generate-service-frida [--out PATH] [--keep-unique] PROFILE` | `./xenoid --instance phone-2 device generate-service-frida --help` |
 
 Managed panel scripts also expose `Device.regenerate(timeout=0,
-operation_key=key)` through the device SDK. Bash aliases are
+operation_key=key, post_cache=None)` through the device SDK. Bash aliases are
 `device regenerate [TIMEOUT [OPERATION_KEY]]` and
 `xenoid device regenerate [TIMEOUT [OPERATION_KEY]]`; use `0` before an explicit
 key, for example `device regenerate 0 after-cleanup`. These SDK aliases use
 durable receipts scoped to the current managed run and iteration. Retain the
 same key across uncertain responses to resume or confirm the original operation;
 omitting the key creates a fresh UUID for each call.
+
+Python scripts can pass a durable `post_cache` plan containing `packages`,
+`user` (`"current"` or a nonnegative integer), and `timeout` (`null`, `0`, or a
+positive integer). The receipt records the plan before regeneration and each
+cache-only success afterward. A retry resumes the same transaction and remaining
+packages; changing the saved plan is rejected. See the [SDK example](../README.md#official-regeneration-from-a-managed-script).
+`Device.clear_cache(package, user="current", timeout=None)` performs the same
+official PackageManager cache-only operation independently, preserving app data.
 
 The SDK waits under the native instance lock, preserves the same container,
 instance ID, resource tag and storage, and verifies native reload, profile and

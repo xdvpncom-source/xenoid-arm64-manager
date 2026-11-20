@@ -147,9 +147,9 @@ devices, so changing ad selectors or timing does not require a Fleet upgrade.
 `qa/vpn-cycle.py` is the release-time reference protected by the installer
 manifest. The current panel workflow is also mirrored in
 [`examples/current-vpn-cycle.py`](examples/current-vpn-cycle.py) and exported as
-the [`vpn-cycle-v12.py` release asset](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.13/vpn-cycle-v12.py)
-with a [SHA-256 sidecar](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.13/vpn-cycle-v12.py.sha256).
-The historical v0.1.12 `vpn-cycle-v11.py` asset remains unchanged. Updating the
+the [`vpn-cycle-v13.py` release asset](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.14/vpn-cycle-v13.py)
+with a [SHA-256 sidecar](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.14/vpn-cycle-v13.py.sha256).
+The historical v0.1.13 `vpn-cycle-v12.py` and v0.1.12 `vpn-cycle-v11.py` assets remain unchanged. Updating the
 editable workflow never rewrites an existing release tag or its installer pins.
 
 ```bash
@@ -199,7 +199,8 @@ It requires a previously installed pinned Fleet/upstream runtime.
 
 ### Official regeneration from a managed script
 
-The Python SDK provides `Device.regenerate(timeout=0, operation_key=key)`. It
+The Python SDK provides `Device.regenerate(timeout=0, operation_key=key,
+post_cache=None)`. It
 executes the pinned Xenoid `device regenerate` command under the same native
 instance lock and waits for the official Android reload, profile and identity
 verification. Container ID, immutable native instance ID, resource tag, Android
@@ -227,6 +228,34 @@ pending; the script must retain its key and wait rather than request another
 rotation. Display settings are a separate script choice and should be reapplied
 after the official profile replay.
 
+To clear only selected packages' caches after the verified Android reload, pass
+the plan on the first call and retain it with the operation key on every retry:
+
+```python
+post_cache = {"packages": ["com.google.android.gms", "com.google.android.gsf"],
+              "user": "current", "timeout": 0}
+result = device.regenerate(timeout=0, operation_key=operation_key,
+                           post_cache=post_cache)
+```
+
+The SDK saves this plan before native work, fixes the Android user before the
+first cache operation and checkpoints each confirmed package. The receipt is
+committed only after all requested cache operations finish. A supervisor or
+same-key retry resumes the saved native transaction and unfinished packages;
+it does not request another identity rotation. A changed plan for the same key
+is rejected. A cache failure remains `regeneration_post_cache_pending`, and a
+completed replay clears nothing again. The plan accepts any installed Android
+package, an explicit nonnegative user ID or `"current"`, and a cache timeout of
+`null` (the saved panel command timeout), `0` (no package deadline) or a positive
+integer. The overall regeneration deadline still applies.
+
+`Device.clear_cache(package, user="current", timeout=None)` provides the same
+standalone operation through Android's verified `cmd package clear --cache-only`
+support. It requires a successful cache-only result and stable package UID;
+there is no full-data deletion or alternate filesystem-delete fallback. Cache
+cleanup preserves app data, accounts, preferences, Google IDs and native binding.
+It is separate from `clear_data()`.
+
 When an older native startup journal remains unfinished, the SDK may first
 resume official `up` only after verifying that the remaining plan preserves the
 same image, container and storage. It blocks image builds, container replacement,
@@ -248,11 +277,19 @@ the fix does not clear history or relax the native Google checks.
 
 The bundled workflow draws one integer from `1..10` after a successful app
 cycle and cleanup. Only `5` requests regeneration; it waits for completion,
-restores the script's display settings and begins the next cycle. Its editor
+clears the Google caches in its durable script-provided plan, restores the
+script's display settings and begins the next cycle. Its editor
 settings `REGENERATE_ENABLED`, `REGENERATE_RANDOM_RANGE`, `REGENERATE_TRIGGER`,
 `REGENERATE_TIMEOUT` and `REGENERATE_RETRY_SECONDS` control this behavior. Failed
 cycles do not draw. Existing saved scripts keep their own behavior until the
 administrator selects a newer version.
+Workflow version 13 defaults `GOOGLE_CACHE_PACKAGES` to
+`("com.google.android.gms", "com.google.android.gsf")`. The package list, Android
+user, cache timeout and retry delay are editable through `GOOGLE_CACHE_PACKAGES`,
+`GOOGLE_CACHE_USER`, `GOOGLE_CACHE_TIMEOUT` and `GOOGLE_CACHE_RETRY_SECONDS`.
+An empty package list disables this optional stage; other packages such as Play
+Store are added only by the administrator. Nonmatching draws and failed QA cycles
+do not clear Google caches.
 
 Managed Bash scripts can use `device regenerate [TIMEOUT [OPERATION_KEY]]` or
 `xenoid device regenerate [TIMEOUT [OPERATION_KEY]]` through the same SDK bridge.

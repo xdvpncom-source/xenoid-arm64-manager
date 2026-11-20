@@ -51,15 +51,25 @@ class Device:
         """
         return request("input-status", [] if timeout is None else [timeout])
 
-    def regenerate(self, timeout=0, operation_key=None):
+    def clear_cache(self, package, *, user="current", timeout=None):
+        """Clear only this package's cache through Android PackageManager.
+
+        Application data, preferences and identity stores are preserved. This
+        is script-controlled and is never an implicit regeneration hook.
+        """
+        return request("clear-cache", [package, user, timeout])
+
+    def regenerate(self, timeout=0, operation_key=None, *, post_cache=None):
         """Regenerate/reload through official Xenoid, preserving the container.
 
         Zero waits without a deadline. Retain an explicit operation_key when
         retrying an uncertain request; a new call otherwise gets a fresh key.
         Display tuning remains a separate script-controlled step.
+        Optional post_cache={packages:[...],user:'current',timeout:0} is saved
+        before native work and completed durably before this operation returns.
         """
         key = uuid.uuid4().hex if operation_key is None else operation_key
-        return request("regenerate", [timeout, key])
+        return request("regenerate", [timeout, key] if post_cache is None else [timeout, key, post_cache])
 
     def set_frame_rate(self, fps, timeout=None):
         """Set integral display FPS; None preserves it, 0 restores native modes.
@@ -247,8 +257,9 @@ def cli(program, args):
     if not args:
         raise ValueError("Usage: device open-url|page-json|close-chrome|ui-dump|tap|adb ...")
     action, *args = args
-    if action == "regenerate" and len(args) <= 2:
-        return Device().regenerate(int(args[0]) if args else 0, args[1] if len(args) == 2 else None)
+    if action == "regenerate" and len(args) <= 3:
+        return Device().regenerate(int(args[0]) if args else 0, args[1] if len(args) >= 2 else None,
+                                   post_cache=json.loads(args[2]) if len(args) == 3 else None)
     if action == "input-status" and len(args) <= 1:
         return Device().input_status(int(args[0]) if args else None)
     if action == "page-json":

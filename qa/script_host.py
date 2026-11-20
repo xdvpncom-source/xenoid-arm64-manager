@@ -954,19 +954,91 @@ class Broker:
         receipt["before_digest"] = cli.stable_identity_digest(identity["stable"])
         store.save(operation_key, receipt)
 
-    def regenerate(self, timeout=0, operation_key=None):
+    @staticmethod
+    def regeneration_post_cache(plan):
+        if plan is None:
+            return None
+        if not isinstance(plan, dict) or set(plan) - {"packages", "user", "timeout"}:
+            raise ValueError("Post-cache plan must contain packages, user and optional timeout")
+        packages = plan.get("packages")
+        if not isinstance(packages, list) or any(not isinstance(value, str) or not ANDROID_PACKAGE.fullmatch(value) for value in packages):
+            raise ValueError("Post-cache packages must be Android package names")
+        user, timeout = plan.get("user", "current"), plan.get("timeout", None)
+        if user != "current" and (type(user) is not int or user < 0):
+            raise ValueError("Post-cache user must be current or a nonnegative user id")
+        if timeout is not None and (type(timeout) is not int or timeout < 0):
+            raise ValueError("Post-cache timeout must be nonnegative; zero is unlimited")
+        packages = list(dict.fromkeys(packages))
+        return {"packages": packages, "user": user, "timeout": timeout} if packages else None
+
+    def complete_regeneration_post_cache(self, manager, receipt, store, key, deadline):
+        plan = receipt.get("post_cache")
+        if plan is None:
+            return None
+        try:
+            def budget():
+                if self.stopping.is_set():
+                    raise TransportUnavailable("Device script is stopping")
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TransportUnavailable("Regeneration post-cache exceeded its configured timeout")
+            budget()
+            user = receipt.get("post_cache_resolved_user")
+            if user is None:
+                user = plan["user"]
+                if user == "current":
+                    result = self.native_display_exec(manager, ["am", "get-current-user"], deadline=deadline, check=False)
+                    text = result.stdout.decode(errors="replace").strip()
+                    if result.returncode or not re.fullmatch(r"[0-9]+", text):
+                        raise TransportUnavailable("Post-cache current user could not be verified")
+                    user = int(text)
+                receipt["post_cache_resolved_user"] = user
+                store.save(key, receipt)  # Fix the user before the first cache mutation.
+            if type(user) is not int or user < 0:
+                raise TransportUnavailable("Recorded post-cache user is invalid")
+            completed = receipt.setdefault("post_cache_completed", {})
+            if not isinstance(completed, dict):
+                raise TransportUnavailable("Recorded post-cache progress is invalid")
+            for package in plan["packages"]:
+                budget()
+                if package not in completed:
+                    cache_timeout = plan["timeout"]
+                    if cache_timeout is None:
+                        cache_timeout = receipt.get("post_cache_command_timeout", self.config.get("command_timeout", 0))
+                    result = self.clear_cache(package, user=user, timeout=cache_timeout, _deadline=deadline)
+                else:
+                    result = completed[package]
+                if (not isinstance(result, dict) or result.get("ok") is not True or result.get("cache_only") is not True
+                        or result.get("data_cleared") is not False or result.get("uid_verified") is not True
+                        or result.get("package") != package or result.get("user") != user):
+                    raise TransportUnavailable("Post-cache operation did not verify its package/user")
+                if package not in completed:
+                    completed[package] = result
+                    store.save(key, receipt)  # Confirm each package before advancing.
+            budget()
+            return {"ok": True, "cache_only": True, "data_cleared": False,
+                    "packages": list(plan["packages"]), "user": plan["user"],
+                    "requested_user": plan["user"], "resolved_user": user}
+        except RuntimeIdentityError:
+            raise
+        except Exception as error:
+            receipt["last_cache_error"] = type(error).__name__
+            store.save(key, receipt)
+            raise RegenerationPending("regeneration_post_cache_pending") from None
+
+    def regenerate(self, timeout=0, operation_key=None, post_cache=None):
         if type(timeout) is not int or timeout < 0:
             raise ValueError("Regeneration timeout must be a nonnegative integer; zero is unlimited")
         if not isinstance(operation_key, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", operation_key):
             raise ValueError("Supply a nonempty regeneration operation key")
+        post_cache = self.regeneration_post_cache(post_cache)
         try:
-            return self._regenerate(timeout, operation_key)
+            return self._regenerate(timeout, operation_key, post_cache)
         except (RuntimeIdentityError, RegenerationPending):
             raise
         except Exception as error:
             raise RegenerationPending(getattr(error, "code", None)) from None
 
-    def _regenerate(self, timeout, operation_key):
+    def _regenerate(self, timeout, operation_key, post_cache=None):
         store = self.regeneration_receipts
         if store is None:
             raise RuntimeError("Regeneration receipts are unavailable outside a managed script iteration")
@@ -981,6 +1053,8 @@ class Broker:
             receipt = store.load(operation_key)
             if receipt is not None and receipt.get("binding") != binding:
                 raise RuntimeIdentityError("The regeneration receipt belongs to a different runtime")
+            if receipt is not None and receipt.get("post_cache") != post_cache:
+                raise RegenerationPending("regeneration_post_cache_plan_changed")
             if receipt is not None and receipt.get("status") == "committed":
                 self.regeneration_binding(manager)
                 self.invalidate_regeneration_caches()
@@ -1003,7 +1077,8 @@ class Broker:
             if receipt is None:
                 self.regeneration_binding(manager)
                 receipt = {"status": "pending", "binding": binding, "timeout": timeout,
-                           "before_digest": digest, "created_at": now()}
+                           "before_digest": digest, "created_at": now(), "post_cache": post_cache,
+                           "post_cache_command_timeout": self.config.get("command_timeout", 0)}
                 store.save(operation_key, receipt)
             saved_state = receipt.get("native_journal")
             if saved_state is not None:
@@ -1100,6 +1175,8 @@ class Broker:
                               "runtime_epoch_changed": True, "operation_key": operation_key, "replayed": False}
                     if not result["identities_changed"] or not result["boot_id_changed"]:
                         raise RegenerationPending("native_regeneration_identity_unchanged")
+                    result["cache_cleanup"] = self.complete_regeneration_post_cache(
+                        refreshed, receipt, store, operation_key, deadline)
                     receipt.update(status="committed", result=result, completed_at=now())
                     store.save(operation_key, receipt)
                     if self.log:
@@ -1266,6 +1343,66 @@ class Broker:
                 state = self.native_interaction_snapshot(manager, deadline, foreground=True)
         return {"ready": state["ready"], "backend": "xenoid_native", "mapping": state["mapping"],
                 "foreground": state["foreground"], "events_injected": False}
+
+    def clear_cache(self, package, user="current", timeout=None, *, _deadline=None):
+        """Use PackageManager's cache-only API; never fall through to app-data clear."""
+        if not isinstance(package, str) or not ANDROID_PACKAGE.fullmatch(package):
+            raise ValueError("Supply an Android package name")
+        requested_user = self.config.get("android_user") if user is None else user
+        if requested_user is None:
+            requested_user = "current"
+        if requested_user != "current" and (type(requested_user) is not int or requested_user < 0):
+            raise ValueError("Use current or a nonnegative Android user id")
+        seconds = self.config.get("command_timeout", 0) if timeout is None else timeout
+        if type(seconds) is not int or seconds < 0:
+            raise ValueError("Cache timeout must be nonnegative; zero is unlimited")
+        deadline = time.monotonic() + seconds if seconds else None
+        if _deadline is not None:
+            deadline = _deadline if deadline is None else min(deadline, _deadline)
+        if deadline is not None and deadline <= time.monotonic():
+            raise TransportUnavailable("Package cache-only operation exceeded its configured timeout")
+        manager = self.verify() if self.verify else self.manager
+        with manager.instance_operation_lock(timeout_seconds=None if deadline is None else max(0.0, deadline - time.monotonic())):
+            with self.owned_manager() as manager:
+                def execute(args):
+                    return self.native_display_exec(manager, args, deadline=deadline, check=False)
+
+                if requested_user == "current":
+                    current = execute(["am", "get-current-user"])
+                    text = current.stdout.decode(errors="replace").strip()
+                    if current.returncode or not re.fullmatch(r"[0-9]+", text):
+                        raise TransportUnavailable("Android current user could not be verified")
+                    selected_user = int(text)
+                else:
+                    selected_user = requested_user
+
+                def package_uid():
+                    listed = execute(["cmd", "package", "list", "packages", "-U", "--user", str(selected_user), package])
+                    values = re.findall(r"(?m)^package:" + re.escape(package) + r" uid:([0-9]+)\s*$",
+                                        listed.stdout.decode(errors="replace"))
+                    if listed.returncode or len(values) != 1:
+                        raise TransportUnavailable("The selected package/user UID could not be verified")
+                    return int(values[0])
+
+                before_uid = package_uid()
+                # Android 13 returns 255 for valid help. Inspect its declared
+                # syntax, but require exit 0 + Success for the actual operation.
+                help_result = execute(["cmd", "package", "help"])
+                help_text = help_result.stdout.decode(errors="replace")
+                if not re.search(r"(?m)^\s*clear\s+[^\n]*\[--cache-only\][^\n]*PACKAGE", help_text):
+                    raise TransportUnavailable("Android PackageManager cache-only clear is unsupported")
+                cleared = execute(["cmd", "package", "clear", "--cache-only", "--user", str(selected_user), package])
+                if cleared.returncode or cleared.stdout.decode(errors="replace").strip() != "Success":
+                    raise TransportUnavailable("Android did not confirm the PackageManager cache-only clear")
+                if package_uid() != before_uid:
+                    raise RuntimeIdentityError("The package/user UID changed during cache-only clear")
+                owned, _reason = manager._owned_container_record(timeout=8)
+                if owned is None or owned.get("Id") != self.container_id:
+                    raise RuntimeIdentityError("The assigned runtime changed during cache-only clear")
+        if self.log:
+            self.log("action", f"Cleared only {package} cache for Android user {selected_user}; application data preserved")
+        return {"ok": True, "package": package, "user": selected_user, "uid_verified": True,
+                "cache_only": True, "data_cleared": False}
 
     def native_display_exec(self, manager, args, *, data=None, deadline=None, check=True, stopping=True):
         """Use the pinned native Docker context; ADB runs as shell, not Android root."""
@@ -2043,10 +2180,12 @@ done
     def dispatch(self, action, args):
         if not isinstance(args, list):
             raise ValueError("Expected an argument list")
-        if action == "regenerate" and len(args) == 2:
+        if action == "regenerate" and 2 <= len(args) <= 3:
             return self.regenerate(*args)
         if action == "input-status" and len(args) <= 1:
             return self.input_status(*args)
+        if action == "clear-cache" and 1 <= len(args) <= 3:
+            return self.clear_cache(*args)
         if action == "set-frame-rate" and 1 <= len(args) <= 2:
             return self.set_frame_rate(*args)
         if action == "settings" and not args:
@@ -2361,7 +2500,7 @@ def resume_regeneration_receipts(folder, number, config, iteration, app_cache):
         log("warning", "Resuming a recorded official regeneration before the next app iteration")
         broker = Broker(manager, log, verify=lambda: trusted_device(number, pinned), config=pinned, app_cache=app_cache)
         broker.regeneration_receipts = RegenerationReceipts(folder, run, index)
-        broker.regenerate(receipt.get("timeout", 0), key)
+        broker.regenerate(receipt.get("timeout", 0), key, receipt.get("post_cache"))
         recovered_current |= run == config["run_id"]
     return recovered_current
 

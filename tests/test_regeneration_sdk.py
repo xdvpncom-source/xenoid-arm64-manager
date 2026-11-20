@@ -219,6 +219,126 @@ class RegenerationRuntimeTests(unittest.TestCase):
         self.readiness.side_effect=None
         self.assertTrue(self.broker.regenerate(0,'replay-input')['replayed']);self.assertEqual(self.manager.rotations,1)
 
+    @staticmethod
+    def cache_result(package,user=0):
+        return {'ok':True,'package':package,'user':user,'uid_verified':True,'cache_only':True,'data_cleared':False}
+
+    def test_post_cache_plan_is_durable_before_first_native_command(self):
+        from unittest.mock import MagicMock
+        plan={'packages':['org.example.one'],'user':0,'timeout':0}
+        cli=native_cli(self.manager);original=cli.cmd_device_regenerate
+        def command(args):
+            self.assertEqual(self.broker.regeneration_receipts.load('plan-first')['post_cache'],plan)
+            return original(args)
+        cli.cmd_device_regenerate=command;self.broker.regeneration_cli=lambda:cli
+        self.broker.clear_cache=MagicMock(return_value=self.cache_result('org.example.one'))
+        result=self.broker.regenerate(0,'plan-first',plan)
+        self.assertEqual(result['cache_cleanup']['packages'],plan['packages']);self.assertTrue(result['cache_cleanup']['cache_only'])
+
+    def test_partial_cache_failure_resumes_only_unfinished_package_without_new_rotation(self):
+        from unittest.mock import MagicMock
+        plan={'packages':['org.example.one','org.example.two'],'user':0,'timeout':0}
+        self.broker.clear_cache=MagicMock(side_effect=[self.cache_result('org.example.one'),RuntimeError('uncertain cache reply')])
+        with self.assertRaises(h.RegenerationPending) as raised:self.broker.regenerate(0,'partial-cache',plan)
+        self.assertEqual(raised.exception.code,'regeneration_post_cache_pending')
+        saved=self.broker.regeneration_receipts.load('partial-cache')
+        self.assertEqual(saved['status'],'pending');self.assertEqual(saved['native_journal']['phase'],'committed')
+        self.assertEqual(list(saved['post_cache_completed']),['org.example.one'])
+        self.broker.clear_cache.side_effect=None;self.broker.clear_cache.return_value=self.cache_result('org.example.two')
+        result=self.broker.regenerate(0,'partial-cache',plan)
+        self.assertEqual(self.broker.clear_cache.call_count,3);self.assertEqual(self.broker.clear_cache.call_args.args[0],'org.example.two')
+        self.assertEqual(self.manager.rotations,1);self.assertEqual(self.manager.commands,1)
+        self.assertEqual(result['cache_cleanup']['packages'],plan['packages'])
+
+    def test_supervisor_resumes_saved_cache_plan_from_sqlite_before_next_app_iteration(self):
+        from unittest.mock import MagicMock
+        plan={'packages':['org.example.one','org.example.two'],'user':0,'timeout':0}
+        self.broker.clear_cache=MagicMock(side_effect=[self.cache_result('org.example.one'),RuntimeError('process interrupted')])
+        with self.assertRaises(h.RegenerationPending):self.broker.regenerate(0,'restart-cache',plan)
+        with patch.object(h,'trusted_device',return_value=self.manager),patch.object(h.Broker,'regeneration_cli',return_value=native_cli(self.manager)),patch.object(h.Broker,'display_raw_docker',return_value=contextlib.nullcontext()),patch.object(h.Broker,'display_bootstrap'),patch.object(h.Broker,'clear_cache',return_value=self.cache_result('org.example.two')) as clear:
+            self.assertTrue(h.resume_regeneration_receipts(self.root,1,BASE,1,{}))
+            clear.assert_called_once();self.assertEqual(clear.call_args.args[0],'org.example.two')
+        saved=self.broker.regeneration_receipts.load('restart-cache');self.assertEqual(saved['status'],'committed');self.assertEqual(self.manager.rotations,1)
+
+    def test_panel_command_timeout_is_saved_before_native_and_survives_pinned_supervisor_config(self):
+        from unittest.mock import MagicMock
+        plan={'packages':['org.example.one','org.example.two'],'user':0,'timeout':None}
+        self.broker.config['command_timeout']=180
+        self.broker.clear_cache=MagicMock(side_effect=[self.cache_result('org.example.one'),RuntimeError('interrupted')])
+        with self.assertRaises(h.RegenerationPending):self.broker.regenerate(0,'saved-command-timeout',plan)
+        self.assertEqual(self.broker.regeneration_receipts.load('saved-command-timeout')['post_cache_command_timeout'],180)
+        with patch.object(h,'trusted_device',return_value=self.manager),patch.object(h.Broker,'regeneration_cli',return_value=native_cli(self.manager)),patch.object(h.Broker,'display_raw_docker',return_value=contextlib.nullcontext()),patch.object(h.Broker,'display_bootstrap'),patch.object(h.Broker,'clear_cache',return_value=self.cache_result('org.example.two')) as clear:
+            self.assertTrue(h.resume_regeneration_receipts(self.root,1,BASE,1,{}))
+            self.assertEqual(clear.call_args.kwargs['timeout'],180)
+        self.assertEqual(self.manager.rotations,1)
+
+    def test_native_commit_before_any_cache_restarts_same_target_not_second_gen(self):
+        from unittest.mock import MagicMock
+        plan={'packages':['org.example.one'],'user':0,'timeout':0}
+        self.broker.clear_cache=MagicMock(side_effect=RuntimeError('worker stopped after native commit'))
+        with self.assertRaises(h.RegenerationPending):self.broker.regenerate(0,'gap-cache',plan)
+        self.assertIsNone(self.manager.journal);self.assertEqual(self.manager.rotations,1)
+        self.broker.clear_cache.side_effect=None;self.broker.clear_cache.return_value=self.cache_result('org.example.one')
+        self.assertTrue(self.broker.regenerate(0,'gap-cache',plan)['cache_cleanup']['ok'])
+        self.assertEqual(self.manager.commands,1);self.assertEqual(self.manager.rotations,1)
+
+    def test_committed_post_cache_replay_does_not_clear_again(self):
+        from unittest.mock import MagicMock
+        plan={'packages':['org.example.one'],'user':0,'timeout':0}
+        self.broker.clear_cache=MagicMock(return_value=self.cache_result('org.example.one'))
+        first=self.broker.regenerate(0,'done-cache',plan);later=self.broker.regenerate(0,'done-cache',plan)
+        self.assertEqual(first['cache_cleanup'],later['cache_cleanup']);self.assertTrue(later['replayed']);self.broker.clear_cache.assert_called_once()
+
+    def test_same_key_cannot_change_recorded_cache_obligation(self):
+        from unittest.mock import MagicMock
+        plan={'packages':['org.example.one'],'user':0,'timeout':0};self.broker.clear_cache=MagicMock(return_value=self.cache_result('org.example.one'))
+        self.broker.regenerate(0,'fixed-plan',plan)
+        for changed in (None,{'packages':['org.example.two'],'user':0,'timeout':0},{'packages':['org.example.one'],'user':1,'timeout':0}):
+            with self.assertRaises(h.RegenerationPending) as raised:self.broker.regenerate(0,'fixed-plan',changed)
+            self.assertEqual(raised.exception.code,'regeneration_post_cache_plan_changed')
+        self.assertEqual(self.manager.rotations,1)
+
+    def test_current_user_resolved_and_saved_before_first_clear_survives_restart(self):
+        from unittest.mock import MagicMock
+        import subprocess
+        plan={'packages':['org.example.one','org.example.two'],'user':'current','timeout':0}
+        self.broker.native_display_exec=MagicMock(return_value=subprocess.CompletedProcess([],0,b'0\n',b''))
+        def first(package,**kwargs):
+            self.assertEqual(self.broker.regeneration_receipts.load('pinned-user')['post_cache_resolved_user'],0)
+            if package.endswith('two'):raise RuntimeError('interrupted')
+            return self.cache_result(package)
+        self.broker.clear_cache=MagicMock(side_effect=first)
+        with self.assertRaises(h.RegenerationPending):self.broker.regenerate(0,'pinned-user',plan)
+        self.broker.native_display_exec.side_effect=AssertionError('must not resolve a new current user')
+        self.broker.clear_cache.side_effect=lambda package,**kwargs:self.cache_result(package)
+        result=self.broker.regenerate(0,'pinned-user',plan)
+        self.assertEqual(result['cache_cleanup']['user'],'current');self.assertEqual(result['cache_cleanup']['resolved_user'],0)
+        self.assertEqual(self.broker.clear_cache.call_args.kwargs['user'],0)
+
+    def test_finite_overall_deadline_clips_unlimited_cache_budget(self):
+        from unittest.mock import MagicMock
+        import time
+        plan={'packages':['org.example.one'],'user':0,'timeout':0};start=time.monotonic()
+        self.broker.clear_cache=MagicMock(return_value=self.cache_result('org.example.one'))
+        self.broker.regenerate(180,'clipped-cache',plan)
+        deadline=self.broker.clear_cache.call_args.kwargs['_deadline']
+        self.assertGreater(deadline,start+179);self.assertLessEqual(deadline,start+181)
+        self.assertEqual(self.broker.clear_cache.call_args.kwargs['timeout'],0)
+
+    def test_legacy_receipt_without_plan_is_compatible_and_never_clears_google_implicitly(self):
+        from unittest.mock import MagicMock
+        self.broker.clear_cache=MagicMock(side_effect=AssertionError('no implicit cache plan'))
+        self.broker.regenerate(0,'legacy-cache')
+        saved=self.broker.regeneration_receipts.load('legacy-cache');saved.pop('post_cache');self.broker.regeneration_receipts.save('legacy-cache',saved)
+        self.assertTrue(self.broker.regenerate(0,'legacy-cache')['replayed']);self.broker.clear_cache.assert_not_called()
+
+    def test_sdk_and_bash_send_explicit_plan_while_legacy_calls_keep_two_arguments(self):
+        plan={'packages':['org.example.one'],'user':'current','timeout':0}
+        with patch.object(sdk,'request',side_effect=lambda action,args:(action,args)):
+            self.assertEqual(sdk.Device().regenerate(0,'key',post_cache=plan),('regenerate',[0,'key',plan]))
+            self.assertEqual(sdk.cli('device',['regenerate','0','key',json.dumps(plan)]),('regenerate',[0,'key',plan]))
+            self.assertEqual(sdk.Device().regenerate(0,'key'),('regenerate',[0,'key']))
+
     def test_two_explicit_calls_with_new_keys_in_same_iteration_are_allowed(self):
         self.broker.regenerate(0,'one');self.broker.regenerate(0,'two')
         self.assertEqual(self.manager.rotations,2)
