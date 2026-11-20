@@ -1,0 +1,10 @@
+[Unit]
+Description=Converge new or restarted Xenoid QA containers
+
+[Timer]
+OnBootSec=45s
+OnUnitInactiveSec=60s
+Unit=xenoid-qa-resources.service
+
+[Install]
+WantedBy=timers.target

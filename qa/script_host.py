@@ -1,0 +1,1891 @@
+#!/usr/bin/python3
+"""Root-owned remote service. User scripts only run in separate, unprivileged units."""
+
+import argparse
+import base64
+from contextlib import closing, contextmanager, nullcontext
+from datetime import datetime, timezone
+import fcntl
+import gzip
+import hashlib
+import http.client
+import json
+import math
+import os
+import queue
+from pathlib import Path
+import re
+import selectors
+import secrets
+import shlex
+import shutil
+import signal
+import socket
+import socketserver
+import sqlite3
+import struct
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from urllib.parse import urlsplit
+from xml.etree import ElementTree
+
+from qa_lifecycle import QA_ACTIONS, vpn_record
+from shared_policy import ANDROID_PACKAGE, APP_ACTIONS, shared_policy
+
+
+HERE = Path(__file__).resolve().parent
+UPSTREAM = Path("/opt/xenoid-fleet/upstream")
+STATE = Path("/var/lib/xenoid-panel-scripts")
+SERVICE = "xenoid-panel-script"
+UNIT = Path("/etc/systemd/system") / (SERVICE + "@.service")
+TERMINAL = {"stopped", "completed", "failed"}
+CHROME = "com.android.chrome"
+MAX_MESSAGE = 2048
+MAX_EVENTS = 1536
+RUN_ID = re.compile(r"[0-9a-zA-Z_-]{1,80}")
+TAG = re.compile(r"[0-9a-f]{12}")
+# Reproducible source/build instructions: native/xenoid-hwcomposer/README.txt.
+# This ARM64 HWC reads the rate from the script-controlled configuration file.
+DISPLAY_LIBRARY_SHA256 = 'f415e0aebe91a1de9a11ecddb29ef5ff7b139b2efa60622510a94e77f4cf754c'
+DISPLAY_LIBRARY_GZIP = (
+    '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'
+    '//8bTk5ryqgrAAA='
+)
+DISPLAY_LIBRARY = "/vendor/lib64/hw/hwcomposer.raven.so"
+DISPLAY_BASE_LIBRARY = "/vendor/lib64/hw/hwcomposer.redroid.so"
+DISPLAY_RATE_FILE = "/data/local/tmp/xenoid-qa-refresh-rate"
+DISPLAY_STAGE_DIR = "/data/local/tmp/xenoid-qa-display"
+
+ANDROID_FOCUS = re.compile(r"^Window\{([0-9a-fA-F]+) u([0-9]{1,6}) ([^/\s]+)/([.\w$]+)\}$", re.ASCII)
+UNIT_CONTENT = """[Unit]
+Description=Xenoid device script supervisor for phone-%i
+After=docker.service network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+WorkingDirectory=/opt/xenoid-fleet/upstream
+Environment=XENOID_PROJECT=/opt/xenoid-fleet/upstream
+ExecStart=/usr/bin/python3 /opt/xenoid-fleet/panel-scripts/script_host.py worker %i
+Environment=HOME=/root
+Environment=PYTHONDONTWRITEBYTECODE=1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=18
+KillMode=control-group
+UMask=0077
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def integer(value, low, high):
+    if type(value) is not int or not low <= value <= high:
+        raise ValueError(f"Expected integer between {low} and {high}")
+    return value
+
+
+def device_number(value):
+    if not re.fullmatch(r"[1-9][0-9]{0,15}", str(value)):
+        raise ValueError("Invalid device ID")
+    return integer(int(value), 1, (1 << 53) - 1)
+
+
+def read_json(limit):
+    data = sys.stdin.buffer.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("Request too large")
+    return json.loads(data)
+
+
+def validate(config):
+    try:
+        shared_policy("source", source=config.get("source"))
+    except OverflowError as error:
+        raise ValueError("Invalid script source") from error
+    for key in ("script_id", "version"):
+        integer(config.get(key), 1, (1 << 53) - 1)
+    if not RUN_ID.fullmatch(str(config.get("run_id", ""))) or not TAG.fullmatch(str(config.get("resource_tag", ""))):
+        raise ValueError("Invalid run identifier or device identity")
+    if config.get("instance_id") is not None and not re.fullmatch(
+            r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", str(config["instance_id"])):
+        raise ValueError("Invalid instance UUID")
+    for key in ("repeat_count", "initial_delay", "interval", "timeout", "command_timeout"):
+        value = config.get(key, 0)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"{key} must be a non-negative integer (0 means unlimited for counts/timeouts)")
+    if config.get("language") not in {"python", "bash"}:
+        raise ValueError("Unsupported script language")
+    checked = {k: config.get(k) for k in ("script_id", "version", "language", "source", "run_id", "resource_tag",
+                                       "instance_id", "repeat_count", "initial_delay", "interval", "timeout")}
+    checked["command_timeout"] = config.get("command_timeout", 0)
+    checked["verify_apk"] = config.get("verify_apk", False)
+    if type(checked["verify_apk"]) is not bool:
+        raise ValueError("verify_apk must be a boolean")
+    for key in ("package", "android_user"):
+        value = config.get(key)
+        if value is not None:
+            if key == "package" and (not isinstance(value, str) or not ANDROID_PACKAGE.fullmatch(value)):
+                raise ValueError("Invalid Android package")
+            if key == "android_user" and not (str(value).isdigit() or value == "current"):
+                raise ValueError("Invalid Android user")
+            checked[key] = value
+    assigned = config.get("assigned_apk")
+    if assigned is not None:
+        if not isinstance(assigned, dict) or set(assigned) != {"id", "sha256"}:
+            raise ValueError("Invalid APK assignment")
+        integer(assigned["id"], 1, (1 << 53) - 1)
+        if not isinstance(assigned["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", assigned["sha256"]):
+            raise ValueError("Invalid assigned APK digest")
+        checked["assigned_apk"] = assigned.copy()
+    for key in ("qa_canary", "window_actions", "read_only_window", "shared_app"):
+        if key in config:
+            if type(config[key]) is not bool:
+                raise ValueError(f"{key} must be a boolean")
+            checked[key] = config[key]
+    if "app_test" in config:
+        if not isinstance(config["app_test"], dict):
+            raise ValueError("Invalid app test settings")
+        checked["app_test"] = config["app_test"].copy()
+    if "expected_container_id" in config:
+        container = config["expected_container_id"]
+        if not isinstance(container, str) or not re.fullmatch(r"[0-9a-f]{64}", container):
+            raise ValueError("Invalid expected container identity")
+        checked["expected_container_id"] = container
+    if "assigned_apk_size" in config:
+        checked["assigned_apk_size"] = config["assigned_apk_size"]
+    if checked.get("shared_app"):
+        checked.update(shared_policy("launch", config=config))
+    return checked
+
+
+@contextmanager
+def db(folder):
+    with closing(sqlite3.connect(folder / "runs.db", timeout=15)) as conn:
+        conn.row_factory = sqlite3.Row
+        with conn:
+            yield conn
+
+
+def prepare(folder):
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with db(folder) as conn:
+        conn.executescript("""
+        PRAGMA journal_mode=WAL;
+        BEGIN IMMEDIATE;
+        CREATE TABLE IF NOT EXISTS runs (
+          id TEXT PRIMARY KEY, created TEXT NOT NULL, config TEXT NOT NULL, state TEXT NOT NULL,
+          iteration INTEGER NOT NULL DEFAULT 0, current INTEGER NOT NULL DEFAULT 0,
+          updated TEXT NOT NULL, resume_at REAL NOT NULL DEFAULT 0
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS current_run ON runs(current) WHERE current=1;
+        CREATE TABLE IF NOT EXISTS retired (id TEXT PRIMARY KEY, state TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS events (
+          seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, time TEXT NOT NULL,
+          level TEXT NOT NULL, message TEXT NOT NULL, iteration INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS run_events ON events(run_id,seq);
+        """)
+        if "pruned_through" not in {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}:
+            conn.execute("ALTER TABLE runs ADD COLUMN pruned_through INTEGER NOT NULL DEFAULT 0")
+
+
+def record(conn, run, iteration, level, message):
+    message = str(message).replace("\x00", "")
+    if len(message) > MAX_MESSAGE:
+        message = message[:MAX_MESSAGE-13] + "… [truncated]"
+    conn.execute("INSERT INTO events(run_id,time,level,message,iteration) VALUES (?,?,?,?,?)",
+                 (run, now(), level, message, iteration))
+    cutoff = conn.execute("SELECT seq FROM events WHERE run_id=? ORDER BY seq DESC LIMIT 1 OFFSET ?",
+                          (run, MAX_EVENTS)).fetchone()
+    if cutoff is not None:
+        conn.execute("UPDATE runs SET pruned_through=? WHERE id=?", (cutoff[0], run))
+        conn.execute("DELETE FROM events WHERE run_id=? AND seq<=?", (run, cutoff[0]))
+
+
+def update(folder, run, state, iteration, message, level="info", resume_at=0):
+    with db(folder) as conn:
+        row = conn.execute("SELECT state FROM runs WHERE current=1 AND id=?", (run,)).fetchone()
+        if row is None or row["state"] in TERMINAL:
+            return
+        conn.execute("UPDATE runs SET state=?,iteration=?,updated=?,resume_at=? WHERE id=?",
+                     (state, iteration, now(), resume_at, run))
+        record(conn, run, iteration, level, message)
+
+
+def snapshot(folder, number, run=None, after=None, limit=32):
+    missing = dict(state="missing", run_id=run, device_id=number, events=[], cursor=after or 0, has_more=False)
+    if not (folder / "runs.db").exists():
+        return missing
+    with db(folder) as conn:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runs'").fetchone():
+            return missing
+        row = conn.execute("SELECT * FROM runs WHERE id=?" if run else "SELECT * FROM runs WHERE current=1",
+                           (run,) if run else ()).fetchone()
+        if row is None:
+            if run and conn.execute("SELECT 1 FROM sqlite_master WHERE name='retired' AND type='table'").fetchone():
+                retired = conn.execute("SELECT state FROM retired WHERE id=?", (run,)).fetchone()
+                if retired:
+                    missing["state"] = retired["state"]
+            return missing
+        config = json.loads(row["config"])
+        result = {k: config[k] for k in ("script_id", "version", "run_id", "resource_tag", "instance_id")}
+        result.update(state=row["state"], device_id=number, iteration=row["iteration"], updated=row["updated"])
+        if after is not None:
+            result["pruned_through"] = row["pruned_through"] if "pruned_through" in row.keys() else 0
+            rows = conn.execute("SELECT * FROM events WHERE run_id=? AND seq>? ORDER BY seq LIMIT ?",
+                                (row["id"], after, limit + 1)).fetchall()
+            result.update(events=[dict(item) for item in rows[:limit]], has_more=len(rows) > limit,
+                          cursor=rows[min(len(rows), limit)-1]["seq"] if rows else after)
+        return result
+
+
+def ctl(*args, timeout=24):
+    process = subprocess.run(["systemctl", *args], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                             timeout=timeout, check=False)
+    if process.returncode:
+        raise RuntimeError(process.stderr.decode(errors="replace").strip()[:400] or "systemctl failed")
+
+
+def install_unit():
+    with (STATE / "unit.lock").open("a") as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        if UNIT.is_file() and UNIT.read_text() == UNIT_CONTENT:
+            return
+        with tempfile.NamedTemporaryFile("w", dir=UNIT.parent, delete=False) as temp:
+            path = Path(temp.name)
+            temp.write(UNIT_CONTENT)
+            os.fchmod(temp.fileno(), 0o644)
+        try:
+            os.replace(path, UNIT)
+            ctl("daemon-reload")
+        finally:
+            path.unlink(missing_ok=True)
+
+
+def unit(number):
+    return f"{SERVICE}@{number}.service"
+
+
+def trusted_device(number, config):
+    path = str(UPSTREAM / "src")
+    if path not in sys.path:
+        sys.path.insert(0, path)
+    from xenoid.backend import RuntimeManager
+    from xenoid.config import resolve_instance
+
+    context, settings, lease = resolve_instance(f"phone-{number}", project_root=UPSTREAM, migrate_legacy=False)
+    if (context.resource_tag != config["resource_tag"] or
+            config.get("instance_id") is not None and context.instance_id != config["instance_id"]):
+        raise ValueError("The registered device identity changed; assign this script to the new device explicitly")
+    return RuntimeManager(context, settings, lease)
+
+
+def manage(action, folder, number, run):
+    if action == "start":
+        config = validate(json.load(sys.stdin))
+        run = config["run_id"]
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with (folder / "operation.lock").open("a") as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        prepare(folder)
+        if action == "start":
+            with db(folder) as conn:
+                retired = conn.execute("SELECT 1 FROM retired WHERE id=?", (run,)).fetchone()
+            if retired:
+                return snapshot(folder, number, run)
+            install_unit()
+            current = snapshot(folder, number)
+            with db(folder) as conn:
+                old = conn.execute("SELECT config,current,state FROM runs WHERE id=?", (run,)).fetchone()
+            if old is not None:
+                if json.loads(old["config"]) != config:
+                    raise ValueError("Run id already exists for different settings")
+                if old["current"] and old["state"] not in TERMINAL:
+                    ctl("enable", "--now", unit(number))
+                return snapshot(folder, number, run)
+            trusted_device(number, config)
+            if current["state"] != "missing":
+                ctl("stop", unit(number))
+            with db(folder) as conn:
+                if current["state"] not in TERMINAL | {"missing"}:
+                    conn.execute("UPDATE runs SET state='stopped',updated=? WHERE current=1", (now(),))
+                    record(conn, current["run_id"], current["iteration"], "info", "Stopped for a new assignment")
+                conn.execute("UPDATE runs SET current=0 WHERE current=1")
+                timestamp = now()
+                conn.execute("""INSERT INTO runs(id,created,config,state,current,updated,resume_at)
+                                VALUES(?,?,?,'queued',1,?,?)""",
+                             (run, timestamp, json.dumps(config), timestamp, time.time() + config["initial_delay"]))
+                record(conn, run, 0, "info", f"Queued {config['language']} version {config['version']}")
+                conn.execute("INSERT OR IGNORE INTO retired SELECT id,state FROM runs ORDER BY rowid DESC LIMIT -1 OFFSET 10")
+                conn.execute("DELETE FROM runs WHERE id IN (SELECT id FROM retired)")
+                conn.execute("DELETE FROM events WHERE run_id NOT IN (SELECT id FROM runs)")
+            try:
+                ctl("enable", "--now", unit(number))
+            except Exception as error:
+                update(folder, run, "failed", 0, str(error), "error")
+                raise
+        else:
+            current = snapshot(folder, number)
+            if current["state"] == "missing" or run and current["run_id"] != run:
+                if run and snapshot(folder, number, run)["state"] == "missing":
+                    # A delayed start with this request ID can no longer revive a cancelled device script.
+                    with db(folder) as conn:
+                        conn.execute("INSERT OR IGNORE INTO retired(id,state) VALUES(?,'stopped')", (run,))
+                return snapshot(folder, number, run)
+            if current["state"] not in TERMINAL:
+                # Mark the desired state before stopping. Reboot/retry cannot resurrect an acknowledged stop.
+                update(folder, current["run_id"], "stopped", current["iteration"], "Stop requested")
+            ctl("disable", "--now", unit(number))
+        return snapshot(folder, number, run)
+
+
+def check_url(value):
+    if not isinstance(value, str) or not value or "\0" in value:
+        raise ValueError("Expected a browser URL without NUL characters")
+    return value
+
+
+def ws_page(port, path):
+    if not re.fullmatch(r"/devtools/page/[A-Fa-f0-9]+", path):
+        raise ValueError("Invalid Chrome page target")
+    with socket.create_connection(("127.0.0.1", port), timeout=3) as conn, conn.makefile("rb") as src:
+        key = base64.b64encode(os.urandom(16)).decode()
+        expected = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+        conn.sendall((f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\n"
+                      f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+        if b" 101 " not in src.readline(1024):
+            raise ValueError("Chrome refused the page inspection")
+        headers = {}
+        for _ in range(30):
+            line = src.readline(4096)
+            if line == b"\r\n":
+                break
+            field, value = line.decode("ascii").split(":", 1)
+            headers[field.lower()] = value.strip()
+        if headers.get("sec-websocket-accept") != expected:
+            raise ValueError("Invalid Chrome WebSocket response")
+        expr = "({url:location.href,visible:document.visibilityState,ready:document.readyState,text:(document.querySelector('pre')?.innerText || document.body?.innerText || '').slice(0,32768)})"
+        payload = json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {
+            "expression": expr, "returnByValue": True}}).encode()
+        mask = os.urandom(4)
+        conn.sendall(b"\x81\xfe" + struct.pack("!H", len(payload)) + mask
+                     + bytes(ch ^ mask[i % 4] for i, ch in enumerate(payload)))
+        for _ in range(15):
+            h = src.read(2)
+            if len(h) != 2 or h[0] != 0x81 or h[1] & 128:
+                raise ValueError("Invalid page inspection reply")
+            size = h[1] & 127
+            if size in {126, 127}:
+                size = int.from_bytes(src.read(2 if size == 126 else 8), "big")
+            if size > 131072:
+                raise ValueError("Page inspection exceeded output limit")
+            msg = json.loads(src.read(size))
+            if msg.get("id") == 1:
+                return msg["result"]["result"]["value"]
+        raise ValueError("No Chrome page response")
+
+
+def browser_json(port, url):
+    # No redirect handler, proxy environment, or socket address supplied by web content is used here.
+    with closing(http.client.HTTPConnection("127.0.0.1", port, timeout=3)) as conn:
+        conn.request("GET", "/json/list")
+        response = conn.getresponse()
+        if response.status != 200:
+            raise ValueError("Chrome has no tab list yet")
+        tabs = json.loads(response.read(1024 * 1024))
+    expected = url.rstrip("/")
+    for tab in tabs:
+        if tab.get("type") != "page" or tab.get("url", "").rstrip("/") != expected:
+            continue
+        path = urlsplit(tab.get("webSocketDebuggerUrl", "")).path
+        page = ws_page(port, path)
+        if page["url"].rstrip("/") == expected and page.get("visible") == "visible" and page.get("ready") == "complete":
+            return json.loads(page["text"])
+    raise ValueError("Chrome has not rendered JSON for the requested URL")
+
+
+def safe_adb(args):
+    """Validate transport shape; command choice belongs to the administrator."""
+    if not isinstance(args, list) or not args or not all(isinstance(x, str) and "\0" not in x for x in args):
+        raise ValueError("Expected a non-empty ADB argument list without NUL characters")
+    return args
+
+
+class TransportUnavailable(RuntimeError):
+    """Temporary device/transport failure; callers may wait before retrying."""
+
+
+class RuntimeIdentityError(RuntimeError):
+    """The assigned container identity changed; never retry against a new target."""
+
+
+def foreground_window(dump):
+    focused = re.findall(r"(?m)^[ \t]*mCurrentFocus=(\S.*)$", dump)
+    if len(focused) != 1:
+        return None
+    match = ANDROID_FOCUS.fullmatch(focused[0].strip())
+    if match and ANDROID_PACKAGE.fullmatch(match[3]):
+        return match.groups()
+    # Framework crash/ANR windows have a token and title but no component.
+    generic = re.fullmatch(r"Window\{([0-9a-fA-F]+) u([0-9]+) (.+)\}", focused[0].strip())
+    if generic:
+        token, user, title = generic.groups()
+        return token, user, "", title
+    return None
+
+
+def native_touch_point(dump, profile, x, y):
+    """Invert Android's live dispatcher, reader orientation and calibration.
+
+    Android 13 TouchInputMapper::rotateAndScale uses display size / inclusive
+    raw-axis size. Its debug scale fields are rounded, so recompute that ratio.
+    The dispatcher's display transform includes the current rotation and crop.
+    """
+    def missing(detail):
+        raise TransportUnavailable("Native touch mapping unavailable: " + detail)
+
+    def match(pattern, text, detail):
+        found = re.search(pattern, text, re.M)
+        if found is None:
+            missing(detail)
+        return found
+
+    def invert(a, b, tx, c, d, ty, px, py):
+        determinant = a * d - b * c
+        if not math.isfinite(determinant) or abs(determinant) < 1e-12:
+            missing("singular coordinate transform")
+        px, py = px - tx, py - ty
+        return (d * px - b * py) / determinant, (a * py - c * px) / determinant
+
+    number = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+    reader = match(r"(?s)Input Reader State[^\n]*:\n(.*?)(?:\nUnwantedInteractionBlocker:|\nInput Dispatcher State:)",
+                   dump, "InputReader state is missing")[1]
+    devices = list(re.finditer(r"^  Device (-?\d+): ([^\n]+)\n(.*?)(?=^  Device |^  Configuration:|\Z)",
+                               reader, re.M | re.S))
+    settings = profile.get("input", {}) if isinstance(profile, dict) else {}
+    if not isinstance(settings, dict) or not isinstance(settings.get("name"), str):
+        missing("the native touchscreen profile is missing")
+    candidates = []
+    for device in devices:
+        body = device[3]
+        if device[2].strip() != settings["name"] or "Touch Input Mapper (mode - DIRECT):" not in body:
+            continue
+        axes = re.search(r"Raw Touch Axes:\n(.*?)^      Calibration:", body, re.M | re.S)
+        if not axes:
+            continue
+        raw = []
+        for axis in ("X", "Y"):
+            found = re.search(r"^        " + axis + r": min=(-?\d+), max=(-?\d+),", axes[1], re.M)
+            configured = settings.get(axis.lower(), {})
+            if not found or not isinstance(configured, dict):
+                break
+            values = tuple(map(int, found.groups()))
+            if values != (configured.get("minimum"), configured.get("maximum")) or values[1] <= values[0]:
+                break
+            raw.append(values)
+        if len(raw) == 2:
+            candidates.append((device[1], body, raw))
+    if len(candidates) != 1:
+        missing("expected one direct touchscreen matching the current native profile")
+    device_id, body, ((xmin, xmax), (ymin, ymax)) = candidates[0]
+    viewport = match(r"^      Viewport [^\n]*\bdisplayId=(-?\d+),", body, "touchscreen viewport is missing")
+    display_id = viewport[1]
+    width = int(match(r"^      DisplayWidth: (\d+)px", body, "reader display width is missing")[1])
+    height = int(match(r"^      DisplayHeight: (\d+)px", body, "reader display height is missing")[1])
+    orientation = int(match(r"^      InputDeviceOrientation: (\d+)", body, "reader orientation is missing")[1])
+    if width <= 0 or height <= 0 or orientation not in (0, 1, 2, 3):
+        missing("invalid reader display geometry")
+    dispatcher = match(r"(?s)Input Dispatcher State:\n(.*)", dump, "InputDispatcher state is missing")[1]
+    # Isolate the display header before per-window transforms, which map into
+    # individual window coordinates rather than the screen used by UI bounds.
+    section = match(r"(?s)^  Display: " + re.escape(display_id) + r"\n(.*?)(?:\n    Windows:|\Z)",
+                    dispatcher, "dispatcher display transform is missing")[1]
+    logical = match(r"^    logicalSize=(\d+)x(\d+)", section, "logical display size is missing")
+    logical_width, logical_height = map(int, logical.groups())
+    if not 0 <= x < logical_width or not 0 <= y < logical_height:
+        raise ValueError("Touch coordinates are outside the current logical display")
+    matrix = match(r"^        transform[^\n]*\n\s*(" + number + r")\s+(" + number + r")\s+(" + number +
+                   r")\n\s*(" + number + r")\s+(" + number + r")\s+(" + number + r")\n\s*(" + number +
+                   r")\s+(" + number + r")\s+(" + number + r")", section, "dispatcher matrix is missing")
+    a, b, tx, c, d, ty, u, v, w = map(float, matrix.groups())
+    if not all(math.isfinite(value) for value in (a, b, tx, c, d, ty, u, v, w)) or (u, v, w) != (0, 0, 1):
+        missing("unsupported dispatcher projection")
+    px, py = invert(a, b, tx, c, d, ty, x, y)
+    sx, sy = width / (xmax - xmin + 1), height / (ymax - ymin + 1)
+    if orientation == 0:
+        ax, ay = xmin + px / sx, ymin + py / sy
+    elif orientation == 1:
+        ax, ay = xmax - py / sx, ymin + px / sy
+    elif orientation == 2:
+        ax, ay = xmax - px / sx, ymax - py / sy
+    else:
+        ax, ay = xmin + py / sx, ymax - px / sy
+    calibration = []
+    for label in ("X scale", "X ymix", "X offset", "Y xmix", "Y scale", "Y offset"):
+        calibration.append(float(match(r"^        " + label + r": (" + number + r")", body,
+                                       "device affine calibration is missing")[1]))
+    rx, ry = invert(*calibration, ax, ay)
+    if not math.isfinite(rx) or not math.isfinite(ry):
+        missing("non-finite raw coordinates")
+    rx, ry = round(rx), round(ry)
+    if not xmin <= rx <= xmax or not ymin <= ry <= ymax:
+        missing("requested screen point cannot be represented by the native touchscreen")
+    physical = {}
+    for label in ("PhysicalLeft", "PhysicalTop", "PhysicalWidth", "PhysicalHeight"):
+        physical[label] = int(match(r"^      " + label + r": (-?\d+)(?:px)?$", body,
+                                    "reader physical frame is missing")[1])
+    # Android tests the raw point against this crop before affine calibration.
+    if not (physical["PhysicalLeft"] <= (rx - xmin) * sx <= physical["PhysicalLeft"] + physical["PhysicalWidth"]
+            and physical["PhysicalTop"] <= (ry - ymin) * sy <= physical["PhysicalTop"] + physical["PhysicalHeight"]):
+        missing("mapped raw point is outside the reader's active physical frame")
+    return rx, ry, {"device_id": int(device_id), "display_id": int(display_id),
+                    "logical_size": [logical_width, logical_height], "orientation": orientation}
+
+
+class Broker:
+    def __init__(self, manager, log, verify=None, *, config=None, app_cache=None):
+        self.manager = manager
+        self.verify = verify
+        options = config if config is not None else {}
+        self.config = options
+        self.configure_callback = None
+        self.window_offer = None
+        self.container_id = options.get("expected_container_id")
+        self.forward_lock = threading.Lock()
+        self.log = log
+        self.url = None
+        self.stopping = threading.Event()
+        self.port = None
+        self.read_only_window = options.get("read_only_window") is True
+        self.shared_app = options.get("shared_app") is True
+        self.assigned_apk_size = options.get("assigned_apk_size")
+        self.resolved_app = None
+        self.app_test = options.get("app_test")
+        self.assigned_apk = options.get("assigned_apk")
+        self.app_cache = app_cache if app_cache is not None else {}
+
+
+    @contextmanager
+    def owned_manager(self):
+        # The registry binding and native ownership validation are checked for each operation.
+        # If a phone is recreated during a round its old ADB endpoint must never be reused.
+        manager = self.verify() if self.verify else self.manager
+        with manager.instance_operation_lock(timeout_seconds=6):
+            owned, reason = manager._owned_container_record(timeout=5)
+            if owned is None:
+                raise RuntimeError(reason or "The native runtime ownership check failed")
+            if (owned.get("State") or {}).get("Running") is not True:
+                raise TransportUnavailable("The registered Android container is stopped")
+            container = owned.get("Id")
+            if not re.fullmatch(r"[0-9a-f]{64}", str(container)) or self.container_id is not None and container != self.container_id:
+                raise RuntimeIdentityError("The assigned Android runtime changed during this iteration")
+            self.container_id = container
+            yield manager
+
+    def owned_call(self, args, timeout):
+        # The upstream convenience wrapper applies command/timeout policy. Run
+        # ADB directly after validating the live container identity instead.
+        with self.owned_manager() as manager:
+            executable = shutil.which("adb")
+            if not executable:
+                raise RuntimeError("ADB executable is unavailable on the device host")
+            if args == ["connect"]:
+                command = [executable, "connect", manager.adb_target]
+            elif args[:1] in (["version"], ["--version"], ["start-server"], ["kill-server"], ["devices"]):
+                command = [executable, *args]
+            else:
+                command = [executable, "-s", manager.adb_target, *args]
+            result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, timeout=timeout, check=False)
+            return {"ok": result.returncode == 0, "code": result.returncode,
+                    "stdout": result.stdout.decode(errors="replace"),
+                    "stderr": result.stderr.decode(errors="replace")}
+
+    def official_tap(self, x, y):
+        if type(x) is not int or type(y) is not int:
+            raise ValueError("Touch coordinates must be integers")
+        if self.stopping.is_set():
+            raise RuntimeError("Device script is stopping")
+        seconds = self.config.get("command_timeout", 0)
+        deadline = time.monotonic() + seconds if seconds else None
+        with self.owned_manager() as manager:
+            state = self.native_display_exec(manager, ["sh", "-c",
+                "cat /data/local/tmp/xenoid-profile/effective.json; "
+                "printf '\\nXENOID_INPUT_MAPPING\\n'; dumpsys input"], deadline=deadline)
+            try:
+                raw_profile, dump = state.stdout.decode().split("\nXENOID_INPUT_MAPPING\n", 1)
+                raw_x, raw_y, _ = native_touch_point(dump, json.loads(raw_profile), x, y)
+            except (ValueError, UnicodeError) as error:
+                raise TransportUnavailable(f"Native touch mapping could not be read: {error}") from error
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                raise TransportUnavailable("Native touch mapping timed out before injection")
+            options = {} if remaining is None else {"timeout": remaining}
+            result = manager.daemon_client(**options).tap(raw_x, raw_y)
+        shared_policy("native_tap", result=result)
+        self.log("action", f"Xenoid native tap logical ({x}, {y}) → raw ({raw_x}, {raw_y}) via /dev/uinput")
+        return result
+
+    def native_display_exec(self, manager, args, *, data=None, deadline=None, check=True, stopping=True):
+        """Use the pinned native Docker context; ADB runs as shell, not Android root."""
+        if stopping and self.stopping.is_set():
+            raise RuntimeError("Device script is stopping")
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            raise TransportUnavailable("Display configuration timed out")
+        command = [*manager.docker_base_cmd(), "exec", *(["-i"] if data is not None else []),
+                   self.container_id, *args]
+        try:
+            result = subprocess.run(command, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    timeout=remaining, env=manager.docker_env(), check=False)
+        except subprocess.TimeoutExpired as error:
+            raise TransportUnavailable("Display configuration transport timed out") from error
+        if check and result.returncode:
+            detail = result.stderr.decode(errors="replace").strip()[:320]
+            raise RuntimeError(detail or "Native display command failed")
+        return result
+
+    @staticmethod
+    def display_arm64(data):
+        return (len(data) >= 20 and data[:4] == b"\x7fELF" and data[4:6] == b"\x02\x01"
+                and struct.unpack_from("<H", data, 18)[0] == 183)
+
+    def display_state(self, execute):
+        script = (
+            f"printf 'sha='; sha256sum {DISPLAY_LIBRARY} | cut -d' ' -f1; "
+            f"printf 'config='; cat {DISPLAY_RATE_FILE} 2>/dev/null; printf '\\n'; "
+            "printf 'mounts='; "
+            f"awk '$5 == \"{DISPLAY_LIBRARY}\" {{ n++ }} END {{ print n+0 }}' /proc/self/mountinfo; "
+            "printf 'period='; dumpsys SurfaceFlinger --latency 2>/dev/null | head -n 1; "
+            "printf 'sf_pid='; pidof surfaceflinger; "
+            "printf 'boot='; getprop sys.boot_completed; "
+            "printf 'composer='; getprop init.svc.vendor.hwcomposer-2-1; "
+            "printf 'activity='; service check activity 2>/dev/null"
+        )
+        output = execute(["sh", "-c", script]).stdout.decode(errors="replace")
+        state = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
+        for key in ("mounts", "period"):
+            value = state.get(key, "").strip()
+            state[key] = int(value) if value.isdigit() else 0
+        state["ready"] = (state.get("boot") == "1" and state.get("composer") == "running"
+                          and re.search(r":\s*found\b", state.get("activity", "")) is not None
+                          and state["period"] > 0)
+        return state
+
+    @staticmethod
+    def display_matches(state, fps, *, period=None):
+        if not state.get("ready"):
+            return False
+        if period is not None:
+            return abs(state["period"] - period) <= 1
+        if fps:
+            return (state.get("sha") == DISPLAY_LIBRARY_SHA256 and state.get("mounts", 0) > 0
+                    and state.get("config") == str(fps)
+                    and abs(state["period"] - 1_000_000_000 // fps) <= 1)
+        # These are the existing Raven hardware modes, not an imposed FPS limit.
+        return not state.get("config") and any(abs(state["period"] - value) <= 1
+                                              for value in (8_333_333, 16_666_667))
+
+    def display_wait(self, execute, fps, deadline, *, period=None, previous_pid=None, stopping=True):
+        last_error = None
+        while deadline is None or time.monotonic() < deadline:
+            try:
+                state = self.display_state(execute)
+                restarted = not previous_pid or bool(state.get("sf_pid") and state["sf_pid"] != previous_pid)
+                if restarted and self.display_matches(state, fps, period=period):
+                    return state
+            except RuntimeIdentityError:
+                raise
+            except (RuntimeError, OSError) as error:
+                last_error = error
+            delay = 0.5 if deadline is None else min(0.5, max(0, deadline - time.monotonic()))
+            if stopping and self.stopping.wait(delay):
+                raise RuntimeError("Device script is stopping")
+            if not stopping:
+                time.sleep(delay)
+        raise TransportUnavailable("Android display did not recover before the configured timeout"
+                                   + (f": {last_error}" if last_error else ""))
+
+    def display_profile_ready(self, execute):
+        # The daemon replays wm size/density asynchronously on every service
+        # start. Wait for that thread to finish before the script sets its own
+        # display metrics. Linux comm truncates this thread name to 15 bytes.
+        command = (
+            "pids=$(pidof dev.xenoid.daemon) || exit 0; [ -n \"$pids\" ] || exit 0; "
+            "for pid in $pids; do for task in /proc/$pid/task/*/comm; do "
+            "[ -r \"$task\" ] || continue; IFS= read -r name <\"$task\"; "
+            "case \"$name\" in xenoid-runtime-*) exit 0;; esac; done; done; printf ready"
+        )
+        return execute(["sh", "-c", command]).stdout.strip() == b"ready"
+
+    @contextmanager
+    def display_raw_docker(self, manager, deadline, *, stopping=True):
+        # Native util.run redacts /data/local/tmp in stdout meant for people.
+        # Bootstrap parses that stdout as paths/process identity, so preserve
+        # exact bytes here while retaining all native ownership checks.
+        absent = object()
+        previous = vars(manager).get("docker_exec", absent)
+
+        def raw(args, timeout=15):
+            local_deadline = None if timeout is None else time.monotonic() + max(0, timeout)
+            if deadline is not None:
+                local_deadline = deadline if local_deadline is None else min(deadline, local_deadline)
+            remaining = None if local_deadline is None else local_deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                return {"ok": False, "error": "docker_exec_timeout"}
+            owned, reason = manager._owned_container_record(timeout=5 if remaining is None else min(5, remaining))
+            if owned is None or owned.get("Id") != self.container_id:
+                raise RuntimeIdentityError(reason or "The assigned Android runtime changed during display setup")
+            try:
+                result = self.native_display_exec(manager, args, deadline=local_deadline,
+                                                  check=False, stopping=stopping)
+            except (TransportUnavailable, OSError) as error:
+                return {"ok": False, "error": str(error)}
+            return {"ok": result.returncode == 0, "returncode": result.returncode,
+                    "stdout": result.stdout.decode(errors="replace"),
+                    "stderr": result.stderr.decode(errors="replace"),
+                    "command": [*manager.docker_base_cmd(), "exec", self.container_id, *args]}
+
+        manager.docker_exec = raw
+        try:
+            yield
+        finally:
+            if previous is absent:
+                del manager.docker_exec
+            else:
+                manager.docker_exec = previous
+
+    def display_bootstrap(self, manager, execute, deadline, *, stopping=True):
+        """Restore native control services and finish profile replay after graphics restart."""
+        with self.display_raw_docker(manager, deadline, stopping=stopping):
+            return self.display_bootstrap_ready(manager, execute, deadline, stopping=stopping)
+
+    def display_bootstrap_ready(self, manager, execute, deadline, *, stopping=True):
+        ready = False
+        last_error = None
+        while deadline is None or time.monotonic() < deadline:
+            if stopping and self.stopping.is_set():
+                raise RuntimeError("Device script is stopping")
+            remaining = None if deadline is None else max(0, deadline - time.monotonic())
+            try:
+                if not ready:
+                    status = {}
+                    try:
+                        options = {} if remaining is None else {"timeout": remaining}
+                        client = manager.daemon_client(**options)
+                        status = client.bootstrap_status(**options)
+                    except RuntimeIdentityError:
+                        raise
+                    except (RuntimeError, OSError, ValueError) as error:
+                        last_error = str(error)
+                    ready = status.get("ok") is True and status.get("state") == "ready"
+                    if not ready:
+                        # The native method has a bounded attempt of its own.
+                        # For an unlimited script, retry attempts until stopped;
+                        # never turn that native attempt bound into a run limit.
+                        remaining = None if deadline is None else max(0, deadline - time.monotonic())
+                        if remaining is not None and remaining <= 0:
+                            break
+                        options = {} if remaining is None else {"timeout": remaining}
+                        result = manager.reconcile_bootstrap(**options)
+                        ready = result.get("ok") is True and result.get("controlReady") is True
+                        if not ready:
+                            last_error = result.get("error") or result.get("code") or "native bootstrap pending"
+                if ready and self.display_profile_ready(execute):
+                    return
+            except RuntimeIdentityError:
+                raise
+            except (RuntimeError, OSError, ValueError) as error:
+                last_error = str(error)
+            delay = 0.5 if deadline is None else min(0.5, max(0, deadline - time.monotonic()))
+            if stopping and self.stopping.wait(delay):
+                raise RuntimeError("Device script is stopping")
+            if not stopping:
+                time.sleep(delay)
+        raise TransportUnavailable("Native services/profile replay did not recover before the configured timeout"
+                                   + (f": {last_error}" if last_error else ""))
+
+    def display_proxy_reconcile(self, manager, deadline, *, force=False, stopping=True):
+        """Reapply native proxy desired state, retaining source/node/enabled state.
+
+        A pre-existing invalid proxy is reported independently of a valid frame
+        rate change. Never turn a proxy failure into a direct-network fallback.
+        """
+        reconciled = False
+        summary = {"ok": False, "ready": False, "reconciled": False}
+
+        def remaining():
+            value = None if deadline is None else deadline - time.monotonic()
+            if value is not None and value <= 0:
+                raise TransportUnavailable("display_proxy_timeout")
+            return value
+
+        def verify():
+            value = remaining()
+            owned, reason = manager._owned_container_record(timeout=5 if value is None else min(5, value))
+            if owned is None or owned.get("Id") != self.container_id:
+                raise RuntimeIdentityError(reason or "The assigned runtime changed during proxy recovery")
+
+        def needs_reconcile(status):
+            if not isinstance(status, dict) or status.get("ok") is not True or status.get("stateReadable") is False:
+                return True
+            if status.get("quarantined") is True:
+                return True
+            report = status.get("report")
+            if isinstance(report, dict) and report.get("phase") in ("quarantine", "quarantined", "failed", "stopped"):
+                return True
+            active = (isinstance(report, dict) and report.get("phase") == "active"
+                      and report.get("structuralApplied") is True and report.get("dataPlaneVerified") is True)
+            # mustBlock is the enabled fail-closed latch and can remain true
+            # while a verified proxy is active; it alone is not quarantine.
+            if status.get("mustBlock") is True and not active:
+                return True
+            agent = status.get("agent")
+            if status.get("enabled") is True and isinstance(agent, dict) and (
+                    agent.get("ready") is False or agent.get("phase") in ("quarantine", "quarantined", "failed", "stopped")):
+                return True
+            epoch = status.get("runtimeEpoch")
+            for key in ("ownerRuntimeEpoch", "agentRuntimeEpoch"):
+                if epoch and status.get(key) and status[key] != epoch:
+                    return True
+            for key in ("report", "owner", "agent"):
+                part = status.get(key)
+                if isinstance(part, dict) and epoch and part.get("runtimeEpoch") and part["runtimeEpoch"] != epoch:
+                    return True
+            return False
+
+        try:
+            if stopping and self.stopping.is_set():
+                raise RuntimeError("device_stopping")
+            verify()
+            value = remaining()
+            options = {} if value is None else {"timeout": value}
+            client = manager.daemon_client(**options)
+            try:
+                status = client.proxy_status(**options)
+            except RuntimeIdentityError:
+                raise
+            except Exception:
+                status = {}
+            required = force or needs_reconcile(status)
+            if required:
+                value = remaining()
+                # The official API has no timeout argument. Its native context
+                # bounds subprocess/socket operations by this setup deadline.
+                if value is None:
+                    budget = nullcontext()
+                else:
+                    from xenoid.util import command_timeout
+                    budget = command_timeout(value)
+                with self.display_raw_docker(manager, deadline, stopping=stopping), budget:
+                    result = manager.reconcile_proxy_desired()
+                reconciled = True
+                verify()
+                value = remaining()
+                options = {} if value is None else {"timeout": value}
+                status = client.proxy_status(**options)
+                success = isinstance(result, dict) and result.get("ok") is True
+                if not success:
+                    summary["code"] = (result.get("code") or result.get("error")) if isinstance(result, dict) else None
+            else:
+                success = True
+            ready = success and isinstance(status, dict) and status.get("ok") is True and not needs_reconcile(status)
+            summary.update(ok=ready, ready=ready, reconciled=reconciled)
+            if isinstance(status, dict):
+                for key in ("enabled", "configured", "quarantined", "mustBlock"):
+                    if type(status.get(key)) is bool:
+                        summary[key] = status[key]
+            if not ready and not summary.get("code"):
+                summary["code"] = "proxy_recovery_pending"
+        except RuntimeIdentityError:
+            raise
+        except Exception:
+            # Native exceptions can contain credentials. Return stable codes,
+            # never arbitrary exception text, source values or endpoint URLs.
+            expired = deadline is not None and time.monotonic() >= deadline
+            summary.update(code="proxy_recovery_timeout" if expired else "proxy_recovery_failed", reconciled=reconciled)
+        if summary.get("code") and not re.fullmatch(r"[a-z][a-z0-9_]{0,79}", str(summary["code"])):
+            summary["code"] = "proxy_recovery_failed"
+        if not summary["ready"] and self.log:
+            self.log("warning", "Display is configured; desired proxy recovery remains pending ("
+                     + str(summary.get("code") or "proxy_recovery_failed") + ")")
+        return summary
+
+    def set_frame_rate(self, fps, timeout=None):
+        """Apply a script-selected rate; None preserves it and 0 restores native modes."""
+        if timeout is not None and (type(timeout) is not int or timeout < 0):
+            raise ValueError("Display timeout must be a non-negative integer or null")
+        if fps is None:
+            return {"fps": None, "changed": False, "restarted": False}
+        if type(fps) is not int or fps < 0 or fps > 1_000_000_000:
+            raise ValueError("Frame rate must be a non-negative integer with a representable nanosecond period")
+        binary = gzip.decompress(base64.b64decode(DISPLAY_LIBRARY_GZIP))
+        if not self.display_arm64(binary) or hashlib.sha256(binary).hexdigest() != DISPLAY_LIBRARY_SHA256:
+            raise RuntimeError("Bundled display library failed its integrity check")
+        seconds = self.config.get("command_timeout", 0) if timeout is None else timeout
+        deadline = time.monotonic() + seconds if seconds else None
+        with self.owned_manager() as manager:
+            def execute(args, **options):
+                return self.native_display_exec(manager, args, deadline=deadline, **options)
+
+            for path in (DISPLAY_LIBRARY, DISPLAY_BASE_LIBRARY):
+                if not self.display_arm64(execute(["cat", path]).stdout):
+                    raise ValueError("This display helper requires the ARM64 Raven/Redroid composer")
+            before = self.display_state(execute)
+            if self.display_matches(before, fps):
+                self.display_bootstrap(manager, execute, deadline)
+                proxy = self.display_proxy_reconcile(manager, deadline)
+                return {"fps": fps, "changed": False, "restarted": False,
+                        "period_ns": before["period"], "container_id": self.container_id, "proxy": proxy}
+            saved = execute(["sh", "-c", f"if [ -f {DISPLAY_RATE_FILE} ]; then cat {DISPLAY_RATE_FILE}; else exit 42; fi"], check=False)
+            if saved.returncode not in (0, 42):
+                raise RuntimeError("Could not preserve the current display configuration")
+            old_config = saved.stdout if saved.returncode == 0 else None
+            original_mounts = before["mounts"]
+            mutation_started = False
+            mount_attempted = False
+
+            def write_config(run, value):
+                if value is None:
+                    run(["rm", "-f", DISPLAY_RATE_FILE])
+                else:
+                    run(["sh", "-c", f"set -e; f=$(mktemp {DISPLAY_RATE_FILE}.XXXXXX); "
+                         "trap 'rm -f \"$f\"' EXIT; cat >\"$f\"; chmod 0644 \"$f\"; "
+                         f"mv -f \"$f\" {DISPLAY_RATE_FILE}"], data=value)
+
+            try:
+                mutation_started = True
+                write_config(execute, f"{fps}\n".encode() if fps else None)
+                if fps and (before.get("sha") != DISPLAY_LIBRARY_SHA256 or not original_mounts):
+                    stage = f"{DISPLAY_STAGE_DIR}/hwcomposer-{DISPLAY_LIBRARY_SHA256}.so"
+                    execute(["mkdir", "-p", DISPLAY_STAGE_DIR])
+                    execute(["sh", "-c", f"set -e; f=$(mktemp {DISPLAY_STAGE_DIR}/library.XXXXXX); "
+                             "trap 'rm -f \"$f\"' EXIT; cat >\"$f\"; chmod 0644 \"$f\"; "
+                             f"mv -f \"$f\" {stage}"], data=binary)
+                    mount_attempted = True
+                    execute(["mount", "--bind", stage, DISPLAY_LIBRARY])
+                execute(["setprop", "ctl.restart", "vendor.hwcomposer-2-1"])
+                after = self.display_wait(execute, fps, deadline, previous_pid=before.get("sf_pid"))
+                self.display_bootstrap(manager, execute, deadline)
+                proxy = self.display_proxy_reconcile(manager, deadline, force=True)
+            except RuntimeIdentityError:
+                # Never issue rollback commands after the container binding is lost.
+                raise
+            except BaseException as error:
+                if not mutation_started:
+                    raise
+                # Cleanup has its own configured transport budget so an expired
+                # apply deadline cannot prevent restoration of the prior display.
+                rollback_deadline = time.monotonic() + seconds if seconds else None
+                def restore(args, **options):
+                    return self.native_display_exec(manager, args, deadline=rollback_deadline,
+                                                    stopping=False, **options)
+                try:
+                    write_config(restore, old_config)
+                    if mount_attempted:
+                        restore(["sh", "-c", "set -e; "
+                                 f"while [ \"$(awk '$5 == \"{DISPLAY_LIBRARY}\" {{ n++ }} END {{ print n+0 }}' /proc/self/mountinfo)\" -gt {original_mounts} ]; do "
+                                 f"umount {DISPLAY_LIBRARY}; done"])
+                    previous_pid = restore(["pidof", "surfaceflinger"], check=False).stdout.decode().strip()
+                    restore(["setprop", "ctl.restart", "vendor.hwcomposer-2-1"])
+                    rollback_period = before["period"] or None
+                    if rollback_period is None and before.get("sha") == DISPLAY_LIBRARY_SHA256 and old_config:
+                        saved_rate = old_config.strip()
+                        if saved_rate.isdigit() and 0 < int(saved_rate) <= 1_000_000_000:
+                            rollback_period = 1_000_000_000 // int(saved_rate)
+                    self.display_wait(restore, None, rollback_deadline,
+                                      period=rollback_period, previous_pid=previous_pid, stopping=False)
+                    self.display_bootstrap(manager, restore, rollback_deadline, stopping=False)
+                    proxy = self.display_proxy_reconcile(manager, rollback_deadline, force=True, stopping=False)
+                except BaseException as rollback_error:
+                    raise TransportUnavailable(f"Display change failed ({error}); rollback could not be verified ({rollback_error})") from error
+                network = "" if proxy.get("ready") else "; desired proxy recovery remains pending"
+                raise TransportUnavailable(f"Display change failed; previous configuration restored{network}: {error}") from error
+        self.window_offer = None
+        if self.log:
+            self.log("action", f"Display rate {'native' if fps == 0 else str(fps) + ' FPS'} verified; Android graphics restarted")
+        return {"fps": fps, "changed": True, "restarted": True,
+                "period_ns": after["period"], "container_id": self.container_id, "proxy": proxy}
+
+    def adb(self, args, timeout=None):
+        if self.stopping.is_set():
+            raise RuntimeError("Device script is stopping")
+        seconds = self.config.get("command_timeout", 0) if timeout is None else timeout
+        if self.package_metadata_may_change(args):
+            # A package-manager request can partially change state even if it
+            # later errors or times out, so discard cached proof before sending.
+            self.app_cache.clear()
+            self.resolved_app = None
+        try:
+            result = self.owned_call(args, seconds or None)
+        except subprocess.TimeoutExpired as error:
+            # A timeout says nothing about whether a mutating command completed.
+            # Classify it for the caller, but never resend the command here.
+            detail = f"ADB {args[0] if args else 'command'} timed out after {error.timeout}s"
+            raise TransportUnavailable(detail) from error
+        if not result.get("ok"):
+            detail = result.get("stderr") or result.get("message") or result.get("error") or "ADB command failed"
+            detail = str(detail).strip()[:320]
+            if "offline" in detail.lower() or re.search(r"device .+ not found|no devices/emulators found", detail, re.I):
+                raise TransportUnavailable(detail)
+            raise RuntimeError(detail)
+        output = (result.get("stdout") or "").strip()
+        return output
+
+    @staticmethod
+    def package_metadata_may_change(args):
+        if args[:1] in (["install"], ["install-multiple"], ["install-multi-package"], ["uninstall"], ["root"], ["unroot"], ["reboot"]):
+            return True
+        if args[:1] != ["shell"]:
+            return False
+        text = " ".join(args[1:])
+        # Only cache invalidation, not a command allowlist. Data-only pm clear
+        # deliberately keeps the APK cache: it does not replace package code.
+        return bool(re.search(r"\b(?:pm|cmd\s+package)\s+(?:install\S*|uninstall|remove-user|create-user)\b|\bam\s+switch-user\b", text))
+
+    def app_assignment_key(self):
+        assigned = self.assigned_apk or {}
+        return (self.container_id, self.config.get("instance_id"), self.config.get("resource_tag"),
+                self.android_user(), assigned.get("id"), assigned.get("sha256"), self.assigned_apk_size)
+
+    def cleanup(self):
+        with self.forward_lock:
+            port, self.port = self.port, None
+        if port is not None:
+            # A disconnected ADB transport releases its forwards. Never remove a port through a new runtime.
+            self.owned_call(["forward", "--remove", f"tcp:{port}"], 4)
+
+    @staticmethod
+    def inspection_priority(value):
+        if value is not None and (type(value) is not int or not -20 <= value <= 19):
+            raise ValueError("UI inspection priority must be an integer from -20 to 19 or null")
+        return value
+
+    def focus_command(self, priority=None):
+        priority = self.inspection_priority(priority)
+        return ["shell", *(["nice", "-n", str(priority)] if priority is not None else []), "dumpsys", "window"]
+
+    def ui_hierarchy(self, timeout, priority=None):
+        priority = self.inspection_priority(priority)
+        # A host adb timeout does not kill its guest Java process. Bound the
+        # actual uiautomator executable (its wrapper execs app_process), not a
+        # surrounding shell: toybox timeout does not reliably kill grandchildren.
+        seconds = self.config.get("command_timeout", 0) if timeout is None else timeout
+        marker = "XENOID_UI_FOCUS_AFTER"
+        ui_args = ["uiautomator", "dump"]
+        if seconds:
+            guest_budget = max(1, seconds - 2)
+            ui_args = ["timeout", "-s", "KILL", str(guest_budget), *ui_args]
+            post_focus = (f"remaining=$(({guest_budget} - $(date +%s) + started))\n"
+                          "[ \"$remaining\" -gt 0 ] || exit 124\n"
+                          "timeout -s KILL \"$remaining\" dumpsys window")
+        else:
+            post_focus = "dumpsys window"
+        # uiautomator's file writer does not reliably emit XML through /dev/tty
+        # or /proc/self/fd/1 under adb shell. Use a private, unique guest file and
+        # stream it only after a successful dump; the shell always removes it.
+        body = ("umask 077\n"
+                "dump=$(mktemp /data/local/tmp/xenoid-ui.XXXXXX) || exit 1\n"
+                "trap 'rm -f \"$dump\"' 0\n"
+                "trap 'exit 130' 1 2 15\n"
+                "started=$(date +%s)\n" + shlex.join(ui_args) + " \"$dump\" >/dev/null\n"
+                "status=$?\n"
+                "[ \"$status\" -eq 0 ] || exit \"$status\"\n"
+                "[ -s \"$dump\" ] || exit 65\n"
+                "cat \"$dump\"\n"
+                f"printf '\\n{marker}\\n'\n" + post_focus)
+        if priority is not None:
+            # Per-call scheduling only: renderer/app priorities are not changed.
+            body = shlex.join(["nice", "-n", str(priority), "sh", "-c", body])
+        self._hierarchy_focus_observed = False
+        self._hierarchy_focus = None
+        try:
+            xml = self.adb(["shell", body], timeout=seconds)
+        except RuntimeIdentityError:
+            raise
+        except RuntimeError as error:
+            raise TransportUnavailable("Android UI inspection failed: " + str(error)) from error
+        if marker in xml:
+            xml, focus_dump = xml.rsplit(marker, 1)
+            self._hierarchy_focus = foreground_window(focus_dump)
+            self._hierarchy_focus_observed = True
+        start, end = xml.find("<hierarchy"), xml.rfind("</hierarchy>")
+        if start < 0 or end < start:
+            raise RuntimeError("Invalid Android UI hierarchy")
+        return xml[start:end + len("</hierarchy>")]
+
+    def inspect_window(self, package=None, priority=None):
+        priority = self.inspection_priority(priority)
+        if package is not None and (
+            not isinstance(package, str) or len(package) > 255 or not ANDROID_PACKAGE.fullmatch(package)
+        ):
+            raise ValueError("Supply an Android package name")
+        focus = foreground_window(self.adb(self.focus_command(priority)))
+        snapshot = {"package": "", "component": "", "stable": False, "controls": [], "truncated": False}
+        if focus is not None:
+            _, _, current_package, activity = focus
+            component = f"{current_package}/{activity}" if current_package else activity
+            snapshot.update(package=current_package, component=component, stable=True)
+        self._hierarchy_focus_observed = False
+        try:
+            hierarchy = self.ui_hierarchy(None) if priority is None else self.ui_hierarchy(None, priority=priority)
+            controls, truncated = shared_policy("visible_controls", hierarchy=hierarchy, package=package)
+        except TransportUnavailable:
+            raise
+        except (RuntimeError, ValueError, ElementTree.ParseError):
+            snapshot["stable"] = False
+            return snapshot
+        current = (self._hierarchy_focus if self._hierarchy_focus_observed else
+                   foreground_window(self.adb(self.focus_command(priority))))
+        snapshot["stable"] = focus is not None and current == focus
+        if not snapshot["package"]:
+            snapshot["package"] = next((control.get("package", "") for control in controls
+                                        if control.get("package")), "")
+        snapshot.update(controls=controls, truncated=truncated)
+        return snapshot
+
+    def discover_shared_app(self):
+        listing = self.adb(["shell", "pm", "list", "packages", "--user", self.android_user(), "-f"])
+        paths = shared_policy("apk_candidates", listing=listing)
+        # The panel binds a specific APK archive to this device. Filter by byte size first.
+        # Package names and paths come from Android, and only verified data-app base APKs are eligible.
+        find_digest = r"""
+size=$1
+digest=$2
+shift 2
+for apk do
+    actual=$(stat -c %s "$apk" 2>/dev/null) || continue
+    [ "$actual" = "$size" ] || continue
+    sha=$(sha256sum "$apk" 2>/dev/null) || continue
+    if [ "${sha%% *}" = "$digest" ]; then
+        printf '%s\n' "$apk"
+    fi
+done
+"""
+        command = shlex.join(["sh", "-c", find_digest, "fleet-app-scan", str(self.assigned_apk_size),
+                              self.assigned_apk["sha256"], *paths])
+        matching = self.adb(["shell", command]).splitlines()
+        package = shared_policy("apk_match", paths=paths, matching=matching)
+        # Discovery has already checked exact file size and SHA-256. Repeating
+        # pm path + sha256sum here and before every action added substantial I/O.
+        key = self.app_assignment_key()
+        self.app_cache["resolution"] = (key, package)
+        self.app_cache["verified"] = (key, package)
+        return package
+
+    def android_user(self):
+        user = self.config.get("android_user")
+        return "current" if user is None else str(user)
+
+    def verify_test_app(self):
+        strict = self.config.get("verify_apk", False)
+        package = self.config.get("package") or (self.app_test or {}).get("package") or self.resolved_app
+        if package is None and self.assigned_apk:
+            resolved = self.app_cache.get("resolution")
+            if resolved and resolved[0] == self.app_assignment_key():
+                package = resolved[1]
+        if package is None and self.assigned_apk:
+            try:
+                package = self.discover_shared_app()
+            except (RuntimeError, ValueError):
+                if strict:
+                    raise
+        if package is None and not strict:
+            focus = foreground_window(self.adb(["shell", "dumpsys", "window"]))
+            package = focus[2] if focus else None
+        if not package:
+            raise RuntimeError("Set package in panel/script settings, or bring an app to the foreground")
+        if not ANDROID_PACKAGE.fullmatch(package):
+            raise ValueError("Invalid Android package")
+        self.resolved_app = package
+        if strict:
+            if not self.assigned_apk:
+                raise RuntimeError("APK verification requires an assigned APK")
+            key = self.app_assignment_key()
+            if self.app_cache.get("verified") != (key, package):
+                path = shared_policy("apk_path", output=self.adb(
+                    ["shell", "pm", "path", "--user", self.android_user(), package]))
+                checksum = self.adb(["shell", "sha256sum", path])
+                shared_policy("apk_checksum", path=path, checksum=checksum, expected=self.assigned_apk["sha256"])
+                self.app_cache["verified"] = (self.app_assignment_key(), package)
+        return package
+
+    def tap_test_control(self, package, resource_id, *, dialog=False):
+        selector = shared_policy("selector", package=package, resource_id=resource_id, dialog=dialog,
+                                 debug_only=False)
+        root = ElementTree.fromstring(self.ui_hierarchy(None))
+        bounds = shared_policy("unique_control", root=root, package=None, selector=selector)
+        if bounds is None:
+            return False
+        left, top, right, bottom = bounds
+        self.official_tap((left + right) // 2, (top + bottom) // 2)
+        return True
+
+    def app_test_action(self, action, args):
+        # UI selectors and positive system buttons do not require APK ownership.
+        if action == "app-confirm":
+            return self.tap_test_control("", "", dialog=True)
+        if action == "app-tap" and ":id/" in args[0]:
+            return self.tap_test_control("", args[0])
+        package = self.verify_test_app()
+        user = self.android_user()
+        if action == "app-package":
+            return package
+        if action == "app-tap":
+            return self.tap_test_control(package, args[0])
+        if action == "app-open":
+            resolved = self.adb(["shell", "cmd", "package", "resolve-activity", "--brief", "--user", user,
+                                 "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER",
+                                 "-p", package])
+            components = re.findall(r"(?m)^" + re.escape(package) + r"/[.\w$]+$", resolved, re.ASCII)
+            if not components:
+                raise RuntimeError("The selected app has no launcher activity")
+            self.adb(["shell", "am", "start", "--user", user, "-W", "-n", components[0]])
+        elif action == "app-close":
+            self.adb(["shell", "am", "force-stop", "--user", user, package])
+        elif action == "app-reset":
+            if self.adb(["shell", "pm", "clear", "--user", user, package]) != "Success":
+                raise RuntimeError("Android did not confirm clearing the selected app")
+        elif action == "app-grant-permission":
+            permission = args[0] if "." in args[0] else "android.permission." + args[0]
+            self.adb(["shell", "pm", "grant", "--user", user, package, permission])
+        return True
+
+    def detect_window(self):
+        snapshot = self.inspect_window()
+        choices = {"back": ("Back", None)}
+        # inspect_window already acquired the hierarchy. Reuse its controls
+        # instead of starting a second uiautomator process for every observation.
+        for node in snapshot.get("controls", []):
+            bounds = node.get("bounds")
+            if node.get("enabled") is False or not bounds or len(bounds) != 4:
+                continue
+            words = {node.get("text", "").strip().casefold(), node.get("content_desc", "").strip().casefold()}
+            rid = node.get("resource_id", "")
+            action = None
+            if rid == "android:id/button1" or words & {"allow", "ok", "continue", "اجازه دادن", "تأیید", "موافقم"}:
+                action = "allow"
+            elif rid == "android:id/button2" or words & {"cancel", "لغو"}:
+                action = "cancel"
+            elif words & {"close", "close ad", "dismiss", "×", "✕", "بستن", "بستن تبلیغ"}:
+                action = "close"
+            elif words & {"connect", "اتصال"}:
+                action = "connect"
+            if action and action not in choices:
+                left, top, right, bottom = bounds
+                choices[action] = (node.get("text") or node.get("content_desc") or action,
+                                   ((left + right) // 2, (top + bottom) // 2))
+        token = secrets.token_urlsafe(24)
+        self.window_offer = token, choices
+        package = snapshot["package"]
+        kind = "vpn" if package == "com.android.vpndialogs" else "window"
+        return {**snapshot, "kind": kind, "observation": token,
+                "actions": [{"name": name, "label": label} for name, (label, _) in choices.items()]}
+
+    def handle_window(self, observation, action):
+        if not self.window_offer or observation != self.window_offer[0]:
+            return {"handled": False, "action": action, "reason": "Observe the window before choosing an action"}
+        choices = self.window_offer[1]
+        if action not in choices:
+            return {"handled": False, "action": action, "reason": "The selected control was not found"}
+        point = choices[action][1]
+        if point is None:
+            self.adb(["shell", "input", "keyevent", "KEYCODE_BACK"])
+        else:
+            self.official_tap(*point)
+        return {"handled": True, "action": action, "reason": "Input sent"}
+
+    def qa_cycle(self, options):
+        """Legacy one-call workflow with administrator-provided timing and cleanup."""
+        if not isinstance(options, dict):
+            raise ValueError("Cycle options must be an object")
+        settings = {"timeout": 0, "poll_interval": 1, "initial_wait": 0, "final_wait": 0,
+                    "close_app": True, "clear_data": True, "tap_center": True, **options}
+        for key in ("timeout", "poll_interval", "initial_wait", "final_wait"):
+            value = settings[key]
+            if type(value) not in (int, float) or value < 0:
+                raise ValueError(f"{key} must be a non-negative number")
+        for key in ("close_app", "clear_data", "tap_center"):
+            if type(settings[key]) is not bool:
+                raise ValueError(f"{key} must be a boolean")
+        self.app_test_action("app-open", [])
+        if self.stopping.wait(settings["initial_wait"]):
+            raise RuntimeError("Device script is stopping")
+        deadline = time.monotonic() + settings["timeout"] if settings["timeout"] else None
+        delivered = set()
+        result = {"connected": False, "retried": False, "detail": "No connected Android VPN route found"}
+        while not self.stopping.is_set():
+            result = self.legacy_qa_action("qa-connect-check-v3", [])
+            if result["connected"]:
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+            window = self.detect_window()
+            names = {item["name"] for item in window["actions"]}
+            action = ("allow" if window["kind"] == "vpn" and "allow" in names else
+                      "close" if "close" in names else "connect" if "connect" in names else None)
+            key = (window.get("component"), action, json.dumps(window.get("controls", []), sort_keys=True))
+            if action and key not in delivered:
+                self.handle_window(window["observation"], action)
+                if action == "allow":
+                    delivered = {item for item in delivered if item[1] not in {"connect", "center"}}
+                delivered.add(key)
+            elif not action and settings["tap_center"]:
+                # Older Flutter builds expose status text without a named power button.
+                words = {control.get("text", "").strip().casefold() for control in window.get("controls", [])}
+                center_key = (window.get("component"), "center")
+                if words & {"disconnected", "not connected", "قطع اتصال", "متصل نیست"} and center_key not in delivered:
+                    self.legacy_qa_action("qa-center", [])
+                    delivered.add(center_key)
+            if self.stopping.wait(settings["poll_interval"]):
+                raise RuntimeError("Device script is stopping")
+        if self.stopping.is_set():
+            raise RuntimeError("Device script is stopping")
+        if self.stopping.wait(settings["final_wait"]):
+            raise RuntimeError("Device script is stopping")
+        if settings["close_app"]:
+            self.app_test_action("app-close", [])
+        if settings["clear_data"]:
+            self.app_test_action("app-reset", [])
+        return result
+
+    def legacy_qa_action(self, action, args):
+        """Compatibility aliases; scripts control sequence, timing and target selection."""
+        if action == "qa-cycle-v4":
+            if len(args) > 1:
+                raise ValueError("Supply one optional cycle settings object")
+            return self.qa_cycle(args[0] if args else {})
+        if args:
+            raise ValueError("This compatibility method accepts no arguments")
+        if action == "qa-open":
+            self.app_test_action("app-open", [])
+            return "opened"
+        if action in {"qa-dismiss", "qa-dismiss-v2"}:
+            window = self.detect_window()
+            names = {item["name"] for item in window["actions"]}
+            if "close" in names:
+                self.handle_window(window["observation"], "close")
+            return "dismissed-v2" if action == "qa-dismiss-v2" else "dismissed"
+        if action in {"qa-center", "qa-center-v2"}:
+            window = self.detect_window()
+            if any(item["name"] == "connect" for item in window["actions"]):
+                result = self.handle_window(window["observation"], "connect")
+            else:
+                sizes = re.findall(r"(?m)^(?:Physical|Override) size: (\d+)x(\d+)\s*$",
+                                   self.adb(["shell", "wm", "size"]))
+                if not sizes:
+                    raise RuntimeError("Android did not report its screen dimensions")
+                width, height = map(int, sizes[-1])
+                self.official_tap(width // 2, height // 2)
+                result = {"handled": True}
+            if action == "qa-center-v2":
+                # Approval is a script-invoked operation, without caller-package gating.
+                confirm = self.detect_window()
+                if confirm["kind"] == "vpn":
+                    self.handle_window(confirm["observation"], "allow")
+            return "tapped"
+        if action == "qa-connect-check-v3":
+            package = self.verify_test_app()
+            packages = self.adb(["shell", "pm", "list", "packages", "-U", "--user", self.android_user(), package])
+            ids = re.findall(r"(?m)^package:" + re.escape(package) + r" uid:(\d+)$", packages)
+            output = self.adb(["shell", "dumpsys", "connectivity"])
+            network = vpn_record(output, ids[0]) if len(ids) == 1 else None
+            return {"connected": network is not None, "retried": False,
+                    "detail": "Connected Android VPN route for " + package if network else
+                              "No connected Android VPN route found for " + package}
+        if action in {"qa-finish", "qa-finish-v3"}:
+            self.app_test_action("app-close", [])
+            self.app_test_action("app-reset", [])
+            return "finished"
+        raise ValueError("Unknown compatibility action")
+
+    def dispatch(self, action, args):
+        if not isinstance(args, list):
+            raise ValueError("Expected an argument list")
+        if action == "set-frame-rate" and 1 <= len(args) <= 2:
+            return self.set_frame_rate(*args)
+        if action == "settings" and not args:
+            return {key: self.config.get(key) for key in (
+                "repeat_count", "initial_delay", "interval", "timeout", "command_timeout", "verify_apk", "package", "android_user")}
+        if action == "configure-run" and len(args) == 1:
+            if not self.configure_callback:
+                raise RuntimeError("Run configuration is unavailable")
+            previous_user = self.android_user()
+            previous_verify = self.config.get("verify_apk", False)
+            result = self.configure_callback(args[0])
+            self.resolved_app = None
+            if self.android_user() != previous_user or self.config.get("verify_apk", False) != previous_verify:
+                self.app_cache.clear()
+            return result
+        if action == "inspect-window" and len(args) <= 2:
+            return self.inspect_window(*args)
+        if action in APP_ACTIONS:
+            shared_policy("app_action", action=action, args=args)
+            return self.app_test_action(action, args)
+        if action == "detect-window" and not args:
+            return self.detect_window()
+        if action == "handle-window" and len(args) == 2:
+            return self.handle_window(*args)
+        if action in QA_ACTIONS:
+            return self.legacy_qa_action(action, args)
+        if action == "tap" and len(args) == 2:
+            return self.official_tap(int(args[0]), int(args[1]))
+        if action == "adb-command" and len(args) == 2:
+            seconds = args[1]
+            if seconds is not None and (type(seconds) is not int or seconds < 0):
+                raise ValueError("Command timeout must be a non-negative integer")
+            return self.adb(safe_adb(args[0]), timeout=seconds)
+        if action == "open-url" and len(args) == 1:
+            url = check_url(args[0])
+            cmd = ["am", "start", "-W", "-a", "android.intent.action.VIEW", "-d", url, "-p", CHROME]
+            result = self.adb(["shell", shlex.join(cmd)])
+            if "Error:" in result or "Exception" in result or "com.android.chrome" not in result:
+                raise RuntimeError("Chrome did not accept the Android VIEW intent")
+            self.url = url
+            self.log("action", f"Opened Chrome: {urlsplit(url).hostname}{urlsplit(url).path}")
+            return result
+        if action == "page-json" and len(args) <= 1:
+            if not self.url:
+                raise ValueError("Open a URL before reading its page")
+            seconds = args[0] if args else 35
+            if type(seconds) is not int or seconds < 0:
+                raise ValueError("Page timeout must be a non-negative integer")
+            with self.forward_lock:
+                port = integer(int(self.adb(["forward", "tcp:0", "localabstract:chrome_devtools_remote"])), 1, 65535)
+                self.port = port
+            try:
+                deadline = time.monotonic() + seconds if seconds else None
+                while deadline is None or time.monotonic() < deadline:
+                    try:
+                        result = browser_json(port, self.url)
+                        self.adb(["get-state"])
+                        self.log("action", "Read JSON from the rendered Chrome page")
+                        return result
+                    except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException):
+                        if self.stopping.wait(0.5):
+                            raise RuntimeError("Device script is stopping")
+                raise RuntimeError("Timed out waiting for rendered JSON at the opened URL")
+            finally:
+                self.cleanup()
+        if action == "close-chrome" and not args:
+            self.adb(["shell", "am", "force-stop", CHROME])
+            # A successful ADB shell is required even when pidof reports no process.
+            pid = self.adb(["shell", "pidof com.android.chrome || echo stopped"])
+            if pid != "stopped":
+                raise RuntimeError("Chrome was still running after force-stop")
+            self.log("action", "Closed Chrome; confirmed its browser process stopped")
+            return "stopped"
+        if action == "adb" and args in (["exec-out", "uiautomator", "dump", "/dev/tty"],
+                                        ["shell", "uiautomator", "dump", "/dev/tty"]):
+            action, args = "ui-dump", []
+        if action == "ui-dump" and not args:
+            xml = self.ui_hierarchy(None)
+            self.log("action", "Read the Android UI hierarchy")
+            return xml
+        if action == "adb":
+            result = self.adb(safe_adb(args))
+            if args[:2] == ["shell", "input"] and len(args) > 2:
+                detail = " ".join(args[3:]) if len(args) > 2 and args[2] in {"tap", "swipe"} else ""
+                self.log("action", f"Android input {args[2]} {detail}".rstrip())
+            return result
+        raise ValueError("Unknown device action")
+
+
+class DeviceServer(socketserver.UnixStreamServer):
+    """One device command at a time without blocking supervisor shutdown."""
+
+    def __init__(self, address, handler):
+        self.pending = queue.Queue(maxsize=2)
+        super().__init__(address, handler)
+        self.active = threading.Thread(target=self.handle_queue, daemon=True)
+
+    def handle_queue(self):
+        while not self.broker.stopping.is_set():
+            try:
+                connection, address = self.pending.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            try:
+                super().process_request(connection, address)
+            except OSError:
+                self.shutdown_request(connection)
+
+    def process_request(self, connection, address):
+        try:
+            self.pending.put_nowait((connection, address))
+        except queue.Full:
+            try:
+                connection.sendall(b'{"ok":false,"error":"Device command queue is full"}\n')
+            except OSError:
+                pass
+            self.shutdown_request(connection)
+
+    def server_close(self):
+        super().server_close()
+        while not self.pending.empty():
+            self.shutdown_request(self.pending.get_nowait()[0])
+
+
+class Requests(socketserver.BaseRequestHandler):
+    def handle(self):
+        self.request.settimeout(3)
+        with self.request.makefile("rb") as stream:
+            try:
+                packet = stream.readline()
+                if not packet.endswith(b"\n"):
+                    raise ValueError("Incomplete device request")
+                message = json.loads(packet)
+                value = self.server.broker.dispatch(message["action"], message["args"])
+                response = {"ok": True, "value": value}
+            except Exception as exc:
+                response = {"ok": False, "error": str(exc)[:400]}
+            try:
+                self.request.sendall(json.dumps(response).encode() + b"\n")
+            except OSError:
+                pass
+
+
+def jail_layout(root, config):
+    root.chmod(0o755)
+    for item in ("usr", "usr/bin", "usr/lib", "dev", "proc", "sys", "tmp", "run", "etc", "work", "work/bin"):
+        (root / item).mkdir(mode=0o755, exist_ok=True)
+        (root / item).chmod(0o755)
+    for name in ("bin", "lib"):
+        (root / name).symlink_to("usr/" + name)
+    if Path("/lib64").exists():
+        (root / "lib64").mkdir()
+    sdk = root / "work" / "xenoid_device.py"
+    shutil.copyfile(HERE / "script_runtime.py", sdk)
+    sdk.chmod(0o555)
+    file = root / "work" / ("script.py" if config["language"] == "python" else "script.sh")
+    file.write_text(config["source"])
+    file.chmod(0o444)
+    return file.name
+
+
+def sandbox_command(number, manager, config, root, filename, name):
+    properties = [
+        f"RootDirectory={root}", "WorkingDirectory=/tmp", "DynamicUser=yes", "PrivateNetwork=yes",
+        "RestrictAddressFamilies=AF_UNIX", "PrivateDevices=yes", "NoNewPrivileges=yes",
+        "CapabilityBoundingSet=", "ProtectProc=invisible", "ProcSubset=pid", "RestrictNamespaces=yes",
+        "RestrictSUIDSGID=yes", "ProtectSystem=strict", "ProtectKernelTunables=yes",
+        "ProtectKernelModules=yes", "ProtectControlGroups=yes", "LockPersonality=yes",
+        "SystemCallFilter=@system-service", "SystemCallErrorNumber=EPERM",
+        "MemoryMax=128M", "TasksMax=24", "CPUQuota=50%", "LimitNOFILE=128",
+        "LimitCORE=0", "LimitFSIZE=16777216", "UMask=0077",
+        "TemporaryFileSystem=/tmp:rw,nosuid,nodev,size=16M /work/bin:rw,nosuid,nodev,exec,size=1M,mode=1777", "BindReadOnlyPaths=/usr/bin /usr/lib",
+        "RuntimeMaxSec=infinity", "TimeoutStopSec=2s", "KillMode=control-group",
+        f"BindsTo={unit(number)}", f"After={unit(number)}",
+    ]
+    if Path("/lib64").exists():
+        properties.append("BindReadOnlyPaths=/lib64")
+    command = ["systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit", name]
+    for prop in properties:
+        command.extend(["--property", prop])
+    env = {"PATH": "/work/bin:/usr/bin:/bin", "HOME": "/tmp", "TMPDIR": "/tmp", "LANG": "C.UTF-8",
+           "PYTHONUNBUFFERED": "1", "PYTHONDONTWRITEBYTECODE": "1", "ANDROID_SERIAL": manager.adb_target,
+           "XENOID_INSTANCE": f"phone-{number}", "XENOID_DEVICE_ID": str(number), "XENOID_RUN_ID": config["run_id"]}
+    for key, value in env.items():
+        command.extend(["--setenv", f"{key}={value}"])
+    command.extend(["/usr/bin/python3", "-s", "/work/xenoid_device.py", "--launch", config["language"], "/work/" + filename])
+    return command
+
+
+def drain(process, log, timeout):
+    # Limit both retained and incoming lines. A script can never fill a privileged temp file.
+    pending = b""
+    quota = 65536
+    line_count = 0
+    started = time.monotonic()
+
+    def emit(line):
+        nonlocal line_count
+        if line_count < 250:
+            log("output", line.decode(errors="replace"))
+        elif line_count == 250:
+            log("warning", "Script output truncated for this iteration")
+        line_count += 1
+
+    with selectors.DefaultSelector() as mux:
+        mux.register(process.stdout, selectors.EVENT_READ)
+        while True:
+            # Read the live setting each pass: scripts may extend, shorten or
+            # remove this round's deadline while they are already running.
+            seconds = timeout() if callable(timeout) else timeout
+            if seconds and time.monotonic() - started >= seconds:
+                raise TimeoutError("Script execution timed out")
+            if not mux.select(timeout=1):
+                continue
+            chunk = os.read(process.stdout.fileno(), 16384)
+            if not chunk:
+                if pending:
+                    emit(pending)
+                return process.wait(timeout=5)
+            if quota <= 0:
+                continue
+            pending += chunk[:quota]
+            quota -= len(chunk)
+            while b"\n" in pending:
+                line, pending = pending.split(b"\n", 1)
+                emit(line)
+            if quota <= 0:
+                emit(pending)
+                pending = b""
+                log("warning", "Maximum script output bytes reached for this iteration")
+    raise TimeoutError("Script execution timed out")
+
+
+def run_iteration(folder, number, config, manager, iteration, app_cache=None):
+    run = config["run_id"]
+
+    def log(level, message):
+        with db(folder) as conn:
+            record(conn, run, iteration, level, message)
+
+    broker = Broker(manager, log, verify=lambda: trusted_device(number, config), config=config, app_cache=app_cache)
+    with tempfile.TemporaryDirectory(prefix=f"xp-{number}-", dir="/run") as temp:
+        root = Path(temp) / "root"
+        root.mkdir()
+        filename = jail_layout(root, config)
+        name = f"xenoid-script-sandbox-{number}-{os.urandom(5).hex()}.service"
+        def configure(changes):
+            if not isinstance(changes, dict):
+                raise ValueError("Run settings must be an object")
+            allowed = {"repeat_count", "initial_delay", "interval", "timeout", "command_timeout", "verify_apk", "package", "android_user"}
+            if not set(changes) <= allowed:
+                raise ValueError("Unknown run settings: " + ", ".join(sorted(set(changes) - allowed)))
+            candidate = validate({**config, **changes})
+            config.update({key: candidate.get(key) for key in changes})
+            with db(folder) as conn:
+                conn.execute("UPDATE runs SET config=?,updated=? WHERE id=?",
+                             (json.dumps(config, sort_keys=True), now(), run))
+            return {key: config.get(key) for key in allowed}
+
+        broker.configure_callback = configure
+        address = str(root / "work/device.sock")
+        with DeviceServer(address, Requests) as server:
+            server.broker = broker
+            server.active.start()
+            os.chmod(address, 0o666)
+            # Only root can traverse the containing /run path from the host. The sandbox sees /work.
+            # Host directory itself can be 0700; the DynamicUser needs search access to its chroot root.
+            thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
+            thread.start()
+            try:
+                command = sandbox_command(number, manager, config, root, filename, name)
+                with subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT) as process:
+                    try:
+                        return drain(process, log, lambda: config["timeout"])
+                    finally:
+                        if process.poll() is None:
+                            subprocess.run(["systemctl", "stop", name], stdout=subprocess.DEVNULL,
+                                           stderr=subprocess.DEVNULL, timeout=8)
+                            process.kill()
+            finally:
+                broker.stopping.set()
+                server.shutdown()
+                thread.join(timeout=1)
+                if server.active is not None:
+                    server.active.join(timeout=2)
+                broker.cleanup()
+
+
+class Shutdown(BaseException):
+    pass
+
+
+def supervisor(folder, number):
+    def on_signal(_signo, _frame):
+        raise Shutdown
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
+    with db(folder) as conn:
+        row = conn.execute("SELECT * FROM runs WHERE current=1").fetchone()
+    if row is None or row["state"] in TERMINAL:
+        return
+    config = json.loads(row["config"])
+    run, index = config["run_id"], row["iteration"]
+    app_cache = {}
+    try:
+        if row["state"] == "running":
+            # A power loss leaves it unknown whether a UI action finished. Never silently execute it twice.
+            raise RuntimeError("Previous iteration was interrupted; start a new run to retry")
+        due = row["resume_at"]
+        last_wait = None
+        reconnect_after = 0
+        while True:
+            if due > time.time():
+                time.sleep(max(0, due - time.time()))
+            manager = trusted_device(number, config)
+            try:
+                probe = Broker(manager, None, config=config, app_cache=app_cache)
+                boot = probe.adb(["shell", "getprop", "sys.boot_completed"], timeout=6)
+                wait_reason = None if boot == "1" else f"Android sys.boot_completed={boot!r}"
+            except TransportUnavailable as error:
+                wait_reason = str(error)
+                if time.monotonic() >= reconnect_after:
+                    reconnect_after = time.monotonic() + 30
+                    try:
+                        # The native connect verb targets this lease only, after Docker ownership validation.
+                        probe.adb(["connect"], timeout=5)
+                    except RuntimeIdentityError:
+                        raise
+                    except RuntimeError as reconnect_error:
+                        wait_reason = str(reconnect_error)
+            except RuntimeIdentityError:
+                raise
+            except RuntimeError as error:
+                wait_reason = str(error)
+            if wait_reason:
+                if last_wait != wait_reason:
+                    update(folder, run, "waiting", index, "Waiting for device: " + wait_reason, "warning")
+                last_wait = wait_reason
+                due = time.time() + 8
+                continue
+            last_wait = None
+            index += 1
+            update(folder, run, "running", index, f"Iteration {index} started")
+            rc = run_iteration(folder, number, config, manager, index, app_cache=app_cache)
+            if rc == 75:
+                # EX_TEMPFAIL is an explicit request from the editable workflow.
+                # Keep failed attempts visible instead of reporting them as success.
+                if config["repeat_count"] and index >= config["repeat_count"]:
+                    raise RuntimeError(f"Iteration {index} failed; configured attempt count exhausted")
+                due = time.time() + config["interval"]
+                update(folder, run, "waiting", index,
+                       f"Iteration {index} failed (retry requested); next attempt in {config['interval']}s",
+                       "error", resume_at=due)
+                continue
+            if rc:
+                raise RuntimeError(f"Iteration {index} exited with status {rc} (see script output)")
+            if config["repeat_count"] and index >= config["repeat_count"]:
+                update(folder, run, "completed", index, f"Iteration {index} finished; run complete")
+                return
+            due = time.time() + config["interval"]
+            update(folder, run, "waiting", index, f"Iteration {index} finished; next in {config['interval']}s", resume_at=due)
+            row = {"state": "waiting", "resume_at": due}
+    except Shutdown:
+        # Controller stop persists desired state before SIGTERM. A host reboot resumes queued/interval waits.
+        return
+    except Exception as error:
+        update(folder, run, "failed", index, str(error)[:800] or type(error).__name__, "error")
+
+
+def main():
+    os.umask(0o077)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("action", choices=("start", "stop", "status", "logs", "poll", "worker"))
+    parser.add_argument("device", nargs="?")
+    parser.add_argument("--run-id")
+    parser.add_argument("--after", type=int, default=0)
+    args = parser.parse_args()
+    if os.geteuid() != 0:
+        raise PermissionError("The managed helper requires the host controller account")
+    if args.run_id and not RUN_ID.fullmatch(args.run_id):
+        raise ValueError("Invalid run ID")
+    if args.action == "poll":
+        items = read_json(65536)
+        if not isinstance(items, list) or len(items) > 150:
+            raise ValueError("Invalid poll request")
+        results = []
+        for item in items:
+            number = device_number(item["device_id"])
+            run = item["run_id"]
+            if not RUN_ID.fullmatch(run):
+                raise ValueError("Invalid run ID")
+            results.append(snapshot(STATE / str(number), number, run, integer(item.get("after", 0), 0, 2**63-1),
+                                    limit=max(1, min(32, 110 // max(1, len(items))))))
+        return {"items": results}
+    number = device_number(args.device)
+    folder = STATE / str(number)
+    if args.action in {"start", "worker"}:
+        # The pinned native CLI derives canonical relative build inputs from its checkout cwd.
+        os.chdir(UPSTREAM)
+        os.environ["XENOID_PROJECT"] = str(UPSTREAM)
+    if args.action == "worker":
+        supervisor(folder, number)
+    elif args.action in {"start", "stop"}:
+        STATE.mkdir(mode=0o700, exist_ok=True)
+        return manage(args.action, folder, number, args.run_id)
+    else:
+        return snapshot(folder, number, args.run_id, args.after if args.action == "logs" else None)
+
+
+if __name__ == "__main__":
+    try:
+        response = main()
+        if response is not None:
+            print(json.dumps(response, ensure_ascii=False))
+    except Exception as error:
+        print(str(error)[:800] or type(error).__name__, file=sys.stderr)
+        sys.exit(1)

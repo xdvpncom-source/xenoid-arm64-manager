@@ -1,0 +1,45 @@
+#!/bin/bash
+# Compressed swap for the host running the Android QA containers.
+set -euo pipefail
+umask 077
+exec 9>/run/xenoid-qa-zram.lock
+flock 9
+ZRAM_SIZE_MIB=auto
+ZRAM_ALGORITHM=auto
+ZRAM_PRIORITY=100
+if [[ -f /etc/default/xenoid-qa-zram ]]; then
+    source /etc/default/xenoid-qa-zram
+fi
+if [[ "$ZRAM_SIZE_MIB" == 0 ]]; then exit 0; fi
+if [[ "$ZRAM_SIZE_MIB" == auto ]]; then
+    ZRAM_SIZE_MIB=$(awk '/^MemTotal:/ { printf "%d", $2 / 2048 }' /proc/meminfo)
+fi
+[[ "$ZRAM_SIZE_MIB" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid ZRAM_SIZE_MIB' >&2; exit 1; }
+[[ "$ZRAM_ALGORITHM" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo 'Invalid ZRAM_ALGORITHM' >&2; exit 1; }
+[[ "$ZRAM_PRIORITY" =~ ^[0-9]+$ ]] || { echo 'Invalid ZRAM_PRIORITY' >&2; exit 1; }
+if [[ -f /run/xenoid-qa-zram.device ]]; then
+    read -r zram_device </run/xenoid-qa-zram.device
+    [[ "$zram_device" =~ ^/dev/zram[0-9]+$ ]] || exit 1
+    if swapon --show=NAME --noheadings --raw | grep -Fxq "$zram_device"; then exit 0; fi
+fi
+# Existing swap belongs to the administrator; leave it unchanged.
+if [[ -n "$(swapon --show=NAME --noheadings --raw)" ]]; then
+    echo 'Existing swap detected; no additional compressed swap created.'
+    exit 0
+fi
+modprobe zram num_devices=1
+if ! zram_device=$(zramctl --find); then
+    zram_number=$(cat /sys/class/zram-control/hot_add)
+    zram_device="/dev/zram${zram_number}"
+fi
+[[ "$zram_device" =~ ^/dev/zram[0-9]+$ ]] || exit 1
+if [[ "$ZRAM_ALGORITHM" == auto ]]; then
+    # Keep the kernel's working default instead of assuming an advertised
+    # optional crypto algorithm is available on this running host.
+    zramctl --size "${ZRAM_SIZE_MIB}M" "$zram_device"
+else
+    zramctl --algorithm "$ZRAM_ALGORITHM" --size "${ZRAM_SIZE_MIB}M" "$zram_device"
+fi
+mkswap --label xenoid-qa-zram "$zram_device"
+swapon --priority "$ZRAM_PRIORITY" "$zram_device"
+printf '%s\n' "$zram_device" >/run/xenoid-qa-zram.device

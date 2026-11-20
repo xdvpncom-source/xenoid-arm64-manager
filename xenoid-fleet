@@ -22,7 +22,7 @@ from typing import Iterator
 
 
 NAME_PREFIX = "phone-"
-VERSION = "v0.1.9"
+VERSION = "v0.1.10"
 DEVICE_ID = re.compile(r"[1-9][0-9]{0,25}")
 INSTALL_ROOT = Path(__file__).resolve().parent
 CHROME_SCHEMA = "dev.xenoid.fleet.chrome-baseline/v1"
@@ -623,6 +623,29 @@ def create_device(upstream: Upstream, device_id: str, args: argparse.Namespace,
         proxy_default.converge(upstream, device_id)
     if baseline is not None:
         baseline.converge(upstream, device_id, base_id)
+    qa_reconcile([device_id], force=True)
+
+
+def qa_reconcile(ids: list[str], *, force: bool = False, required: bool = False, report: bool = False) -> int:
+    helper = INSTALL_ROOT / "panel-scripts" / "qa_resources.py"
+    # A source checkout may be used without installing the optional host addon.
+    # Installed releases always include it; the installer verifies its manifest.
+    if not helper.is_file():
+        if required or (INSTALL_ROOT / ".qa-addon-installed").exists():
+            raise FleetError("QA resource addon is missing; rerun the Fleet installer")
+        return 0
+    command = [sys.executable, str(helper)]
+    if force:
+        command.append("--force")
+    for device_id in ids:
+        command.extend(("--device", NAME_PREFIX + device_id))
+    # Lifecycle callers retain the native command's stdout protocol. Explicit
+    # `qa reconcile` exposes its own JSON reports to the caller.
+    result = subprocess.run(command, stdin=subprocess.DEVNULL,
+                            stdout=None if report else sys.stderr, check=False)
+    if result.returncode:
+        raise FleetError("QA resource convergence remains pending; see xenoid-qa-resources.service")
+    return 0
 
 
 def list_devices(upstream: Upstream, *, as_json: bool) -> int:
@@ -677,6 +700,9 @@ def run_devices(upstream: Upstream, ids: list[str], command: list[str]) -> int:
                         if settings.get("image") == baseline.runtime.image:
                             base_id = baseline.runtime.base_image_id(docker_context(settings), build=False)
                             baseline.converge(upstream, device_id, base_id)
+                if (code == 0 and command and command[0] in {"up", "start", "recreate"}
+                        and "--no-wait" not in command and "--dry-run" not in command):
+                    qa_reconcile([device_id], force=True)
         except (OSError, FleetError) as error:
             report_failure(device_id, error)
             code = 1
@@ -689,10 +715,17 @@ def run_devices(upstream: Upstream, ids: list[str], command: list[str]) -> int:
 
 
 def execute(args: argparse.Namespace, command: list[str]) -> int:
+    if args.action == "qa" and args.qa_action == "configure":
+        helper = INSTALL_ROOT / "panel-scripts" / "qa_resources.py"
+        if not helper.is_file():
+            raise FleetError("QA resource addon is not installed")
+        return subprocess.run([sys.executable, str(helper), "--configure"], check=False).returncode
     upstream = Upstream()
     if args.action == "list":
         return list_devices(upstream, as_json=args.json)
     ids = device_ids(args.ids) if args.action == "create" else selection(upstream, args.ids)
+    if args.action == "qa":
+        return qa_reconcile(ids, force=args.force, required=True, report=True)
     if args.action == "run":
         return run_devices(upstream, ids, command)
     baseline = ChromeBaseline.load() if args.action == "create" else None
@@ -734,6 +767,13 @@ def main(argv: list[str] | None = None) -> int:
     run = commands.add_parser("run", help="pass a stock instance command to the selected devices")
     run.add_argument("ids", metavar="ID|CSV|all")
     run.add_argument("command", nargs=argparse.REMAINDER, metavar="-- COMMAND [ARG ...]")
+    qa = commands.add_parser("qa", help="manage panel-controlled resource defaults")
+    qa_commands = qa.add_subparsers(dest="qa_action", required=True)
+    qa_configure = qa_commands.add_parser("configure", help="atomically store JSON from standard input")
+    qa_configure.add_argument("--json-stdin", required=True, action="store_true")
+    qa_apply = qa_commands.add_parser("reconcile", help="apply defaults once per container boot/configuration")
+    qa_apply.add_argument("ids", metavar="ID|CSV|all")
+    qa_apply.add_argument("--force", action="store_true", help="explicitly reapply even when already marked")
     args = parser.parse_args(argv)
     command = []
     if args.action == "run":

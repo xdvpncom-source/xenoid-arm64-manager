@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Install the verified source-only QA addon on an existing Fleet host.
+set -euo pipefail
+[[ $EUID == 0 ]] || { echo 'Run as root' >&2; exit 1; }
+qa_source=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+(
+    cd "$qa_source"
+    sha256sum --check --status qa/manifest.sha256
+)
+qa_target=/opt/xenoid-fleet/panel-scripts
+install -d -o root -g root -m 0755 "$qa_target"
+exec 8>"$qa_target/.installer-lock"
+flock 8
+for qa_file in script_host.py script_runtime.py shared_policy.py qa_lifecycle.py qa_vpn_probe.py shared-app-script.py vpn-cycle.py qa_resources.py restore-display.py restore-default-display.py; do
+    qa_temp=$(mktemp "$qa_target/.install.XXXXXXXX")
+    install -o root -g root -m 0755 "$qa_source/qa/$qa_file" "$qa_temp"
+    mv -f "$qa_temp" "$qa_target/$qa_file"
+done
+install -d -o root -g root -m 0700 /etc/xenoid-fleet /var/lib/xenoid-fleet/qa-resources
+if [[ ! -e /etc/xenoid-fleet/qa-resources.json ]]; then
+    install -o root -g root -m 0600 "$qa_source/qa/qa-resources.json" /etc/xenoid-fleet/qa-resources.json
+fi
+if [[ ! -e /etc/default/xenoid-qa-zram ]]; then
+    install -o root -g root -m 0644 "$qa_source/deploy/xenoid-qa-zram.default" /etc/default/xenoid-qa-zram
+fi
+install -o root -g root -m 0755 "$qa_source/deploy/xenoid-qa-zram" /usr/local/sbin/xenoid-qa-zram
+for qa_unit in xenoid-qa-zram.service xenoid-qa-resources.service xenoid-qa-resources.timer; do
+    install -o root -g root -m 0644 "$qa_source/deploy/$qa_unit" "/etc/systemd/system/$qa_unit"
+done
+systemctl daemon-reload
+systemctl enable --now xenoid-qa-zram.service xenoid-qa-resources.timer
+sha256sum "$qa_source/qa/manifest.sha256" | cut -d' ' -f1 >/opt/xenoid-fleet/.qa-addon-installed
+chmod 0644 /opt/xenoid-fleet/.qa-addon-installed
+printf 'Installed configurable QA defaults; existing settings were retained.\n'

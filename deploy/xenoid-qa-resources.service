@@ -1,0 +1,11 @@
+[Unit]
+Description=Apply panel-controlled Xenoid QA resource defaults
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/xenoid-fleet/panel-scripts/qa_resources.py --all
+# Each device has its own administrator-controlled timeout, including unlimited.
+TimeoutStartSec=0
+UMask=0077

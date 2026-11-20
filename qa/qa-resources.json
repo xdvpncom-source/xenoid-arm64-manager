@@ -1,0 +1,8 @@
+{
+  "enabled": true,
+  "fps": 20,
+  "scale": "minimum",
+  "min_side": 200,
+  "dpi": 72,
+  "timeout": 180
+}

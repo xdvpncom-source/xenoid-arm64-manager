@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-release=v0.1.9
+release=v0.1.10
 fleet_repository=https://github.com/xdvpncom-source/xenoid-arm64-manager.git
-fleet_sha256=70a0e3cce6aa3161323f40436d9e854003d38e6cb4e3c2a914962ea707b31562
+fleet_sha256=57432cc72bf68a058ed956ad1939948db0d26a3f012ae20b3089719cda4351a3
 toolchain_sha256=f657aba4c546b5c6c3a9c37b513db9ceca4fb31f26b33bf3106a5852052cf9c8
 daemon_patch_sha256=a76a728fea8ebee104fc5e7230eb02ec69d11db5d24f51eff0f9edfa4f9ae467
 keymint_patch_sha256=5fd4a5fe25479ebe8fa068bd8cf55fe72ddf3245787e19feaf4a06f67859fa16
 protection_patch_sha256=1e57b90e7008a26a7f4a04a926ddcc82e9b79d78c367bba3562e41f4a19c26a3
 proxy_acceptance_patch_sha256=fb6da2a5e665527ce8a1e3daaa85ec65a3536a03269d3c4c76253a39a9ce3f19
+qa_manifest_sha256=f77059074f5aaf2e1860465305206c3bcb8823567d715fa2b4e67e01d0045c86
+qa_installer_sha256=ab52866ddb793476e73c27f776999499b7d822a782e13b96077c65e659332483
 v011_daemon_blob=ef4394904d9798a529fb8cf609989cf8526b4a89
 upstream_repository=https://github.com/Umiade/xenoid.git
 upstream_revision=c07e56b4aef8cd7e4d56eed11c84781369d29997
@@ -185,7 +187,8 @@ fi
     printf '%s  %s\n' "$fleet_sha256" xenoid-fleet "$toolchain_sha256" install-toolchain.sh \
         "$daemon_patch_sha256" patches/standalone-manifest.patch "$keymint_patch_sha256" patches/keymint-paths.patch \
         "$protection_patch_sha256" patches/shared-protection-inspect.patch \
-        "$proxy_acceptance_patch_sha256" patches/proxy-live-acceptance.patch | \
+        "$proxy_acceptance_patch_sha256" patches/proxy-live-acceptance.patch \
+        "$qa_manifest_sha256" qa/manifest.sha256 "$qa_installer_sha256" install-qa-addon.sh | \
         sha256sum --check --status
 ) || fail "The CLI, toolchain installer, or source patches did not match release $release."
 
@@ -228,6 +231,9 @@ elif [[ -e $launcher || -L $launcher ]]; then
 else
     ln -s "$prefix/xenoid-fleet" "$launcher"
 fi
+
+printf 'Installing panel-controlled QA helpers and host resource services\n'
+bash "$source_tree/install-qa-addon.sh"
 
 if (( ! install_only )); then
     cd "$upstream"

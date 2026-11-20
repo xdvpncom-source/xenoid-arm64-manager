@@ -1,6 +1,6 @@
 # Xenoid Fleet command reference
 
-This reference covers Fleet `v0.1.7` and the Xenoid CLI at commit `c07e56b4aef8cd7e4d56eed11c84781369d29997`. Use `-h` or `--help` at each command level to see the installed parser's help. Brackets mark optional arguments. Uppercase words in syntax are values to supply. [Fleet launcher](../xenoid-fleet) · [Pinned Xenoid parser](https://github.com/Umiade/xenoid/blob/c07e56b4aef8cd7e4d56eed11c84781369d29997/src/xenoid/cli.py#L4058)
+This reference covers Fleet `v0.1.10` and the Xenoid CLI at commit `c07e56b4aef8cd7e4d56eed11c84781369d29997`. Use `-h` or `--help` at each command level to see the installed parser's help. Brackets mark optional arguments. Uppercase words in syntax are values to supply. [Fleet launcher](../xenoid-fleet) · [Pinned Xenoid parser](https://github.com/Umiade/xenoid/blob/c07e56b4aef8cd7e4d56eed11c84781369d29997/src/xenoid/cli.py#L4058)
 
 برای دستگاه اول `run 1 --`، برای چند دستگاه `run 1,3 --` و برای همهٔ دستگاه‌های عددی این میزبان `run all --` را قبل از فرمان Xenoid بگذارید. مثال‌های ساخت، حذف، خواندن مشخصات و گرفتن عکس در همین صفحه آمده‌اند.
 
@@ -9,8 +9,8 @@ This reference covers Fleet `v0.1.7` and the Xenoid CLI at commit `c07e56b4aef8c
 The installer requires native ARM64 Ubuntu 24.04 and starts device `1` after installation. `--accept-android-licenses` accepts the Android SDK licenses during the installation. `--install-only` prepares the host so device creation can be scheduled separately.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.7/install.sh | sudo -H bash -s -- --accept-android-licenses
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.7/install.sh | sudo -H bash -s -- --accept-android-licenses --install-only
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.10/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.10/install.sh | sudo -H bash -s -- --accept-android-licenses --install-only
 bash install.sh --help
 ```
 
@@ -27,6 +27,8 @@ Use `sudo -H` for the root registry created by the installer. Numeric ID `2` sel
 | `xenoid-fleet create ID[,ID...] [PROFILE] [--no-google-services]` | `sudo -H xenoid-fleet create 1,2 ./qa-profile.json` | Create or recreate these devices, validate readiness, then apply the optional fingerprint profile. An existing Android data volume is retained. |
 | `xenoid-fleet delete SELECTOR [--dry-run \| --yes]` | `sudo -H xenoid-fleet delete 2,3 --dry-run` | Preview by default. `--yes` releases the owned containers and permanently deletes their volumes. |
 | `xenoid-fleet run SELECTOR -- COMMAND [ARG ...]` | `sudo -H xenoid-fleet run all -- status` | Pass the remaining arguments to upstream Xenoid with the matching instance selected. |
+| `xenoid-fleet qa configure --json-stdin` | `sudo -H xenoid-fleet qa configure --json-stdin < qa-resources.json` | Atomically store panel-controlled resource defaults. |
+| `xenoid-fleet qa reconcile SELECTOR [--force]` | `sudo -H xenoid-fleet qa reconcile all --force` | Apply defaults to running devices; force explicitly reapplies a previously marked boot. |
 
 ```bash
 sudo -H xenoid-fleet --help
@@ -39,6 +41,7 @@ sudo -H xenoid-fleet delete 3 --dry-run
 sudo -H xenoid-fleet delete 3 --yes
 ```
 
+- [QA resource defaults](../README.md#panel-controlled-qa-defaults) apply after create/recreate and waited start/up. Dry-run operations skip the addon. The boot timer handles new running container boots without changing a later script-selected display on the same boot.
 - `create` accepts an explicit ID or list. Use `--no-google-services` at creation. Provider selection is bound when Android data is created.
 - `create` and plain `run ID -- up` apply a configured private Chrome baseline after native startup. [Chrome baseline setup](../README.md#optional-chrome-baseline)
 - `run` and `delete` accept an explicit ID, list, or `all`. Batch execution processes devices sequentially, continues after an individual failure, and exits nonzero if any selected operation fails. A single-device `run` returns the upstream exit code.

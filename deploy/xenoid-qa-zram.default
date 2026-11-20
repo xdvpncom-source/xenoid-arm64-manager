@@ -1,0 +1,6 @@
+# auto allocates a compressed swap device with logical size of half host RAM.
+# Physical RAM is consumed only for pages actually stored, after compression.
+# Set ZRAM_SIZE_MIB=0 to disable creation on the next boot.
+ZRAM_SIZE_MIB=auto
+ZRAM_ALGORITHM=auto
+ZRAM_PRIORITY=100
