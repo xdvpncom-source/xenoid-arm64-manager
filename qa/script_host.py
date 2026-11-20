@@ -559,7 +559,23 @@ class RegenerationPending(RuntimeError):
         super().__init__("Official regeneration pending: " + self.code)
 
 
-def foreground_window(dump):
+def foreground_window(dump, display_id=0):
+    """Parse current display output; archived ANR windows are never actionable."""
+    if type(display_id) is not int or display_id < 0:
+        return None
+    if (re.search(r"(?im)^\s*WINDOW MANAGER LAST ANR\b", dump)
+            or len(re.findall(r"(?m)^WINDOW MANAGER DISPLAY CONTENTS\b", dump)) > 1):
+        return None
+    displays = list(re.finditer(r"(?m)^[ \t]*Display: mDisplayId=(-?\d+)\b[^\n]*$", dump))
+    if displays:
+        selected = [(match.end(), displays[index + 1].start() if index + 1 < len(displays) else len(dump))
+                    for index, match in enumerate(displays) if int(match[1]) == display_id]
+        if len(selected) != 1:
+            return None
+        start, end = selected[0]
+        dump = dump[start:end]
+    elif display_id != 0:
+        return None
     focused = re.findall(r"(?m)^[ \t]*mCurrentFocus=(\S.*)$", dump)
     if len(focused) != 1:
         return None
@@ -694,6 +710,7 @@ class Broker:
         self.config = options
         self.configure_callback = None
         self.window_offer = None
+        self._native_display_id = 0
         self.container_id = options.get("expected_container_id")
         self.forward_lock = threading.Lock()
         self.log = log
@@ -1269,7 +1286,7 @@ class Broker:
         command = ("cat /data/local/tmp/xenoid-profile/effective.json; "
                    "printf '\\nXENOID_INPUT_MAPPING\\n'; dumpsys input")
         if foreground:
-            command += "; printf '\\nXENOID_FOREGROUND_WINDOW\\n'; dumpsys window"
+            command += "; printf '\\nXENOID_FOREGROUND_WINDOW\\n'; dumpsys window displays"
         response = self.native_display_exec(manager, ["sh", "-c", command], deadline=deadline)
         try:
             profile_bytes, raw = response.stdout.split(b"\nXENOID_INPUT_MAPPING\n", 1)
@@ -1280,13 +1297,15 @@ class Broker:
             dump = raw.decode()
         except (ValueError, UnicodeError) as error:
             raise TransportUnavailable("Native touch mapping could not be read") from error
-        focus = foreground_window(focus_dump.decode()) if focus_dump is not None else None
-        window = {"ready": focus is not None, "package": focus[2] if focus else "",
-                  "component": (focus[2] + "/" + focus[3]) if focus and focus[2] else ""}
         try:
             _x, _y, mapping = native_touch_point(dump, profile, None, None)
         except TransportUnavailable:
             mapping = None
+        if mapping is not None:
+            self._native_display_id = mapping["display_id"]
+        focus = foreground_window(focus_dump.decode(), self._native_display_id) if focus_dump is not None else None
+        window = {"ready": focus is not None, "package": focus[2] if focus else "",
+                  "component": (focus[2] + "/" + focus[3]) if focus and focus[2] else ""}
         return {"ready": mapping is not None, "mapping": mapping, "profile": profile,
                 "profile_sha256": hashlib.sha256(profile_bytes).hexdigest(), "dump": dump,
                 "foreground": window}
@@ -1856,7 +1875,7 @@ class Broker:
 
     def focus_command(self, priority=None):
         priority = self.inspection_priority(priority)
-        return ["shell", *(["nice", "-n", str(priority)] if priority is not None else []), "dumpsys", "window"]
+        return ["shell", *(["nice", "-n", str(priority)] if priority is not None else []), "dumpsys", "window", "displays"]
 
     def ui_hierarchy(self, timeout, priority=None):
         priority = self.inspection_priority(priority)
@@ -1871,9 +1890,9 @@ class Broker:
             ui_args = ["timeout", "-s", "KILL", str(guest_budget), *ui_args]
             post_focus = (f"remaining=$(({guest_budget} - $(date +%s) + started))\n"
                           "[ \"$remaining\" -gt 0 ] || exit 124\n"
-                          "timeout -s KILL \"$remaining\" dumpsys window")
+                          "timeout -s KILL \"$remaining\" dumpsys window displays")
         else:
-            post_focus = "dumpsys window"
+            post_focus = "dumpsys window displays"
         # uiautomator's file writer does not reliably emit XML through /dev/tty
         # or /proc/self/fd/1 under adb shell. Use a private, unique guest file and
         # stream it only after a successful dump; the shell always removes it.
@@ -1900,7 +1919,7 @@ class Broker:
             raise TransportUnavailable("Android UI inspection failed: " + str(error)) from error
         if marker in xml:
             xml, focus_dump = xml.rsplit(marker, 1)
-            self._hierarchy_focus = foreground_window(focus_dump)
+            self._hierarchy_focus = foreground_window(focus_dump, self._native_display_id)
             self._hierarchy_focus_observed = True
         start, end = xml.find("<hierarchy"), xml.rfind("</hierarchy>")
         if start < 0 or end < start:
@@ -1913,7 +1932,7 @@ class Broker:
             not isinstance(package, str) or len(package) > 255 or not ANDROID_PACKAGE.fullmatch(package)
         ):
             raise ValueError("Supply an Android package name")
-        focus = foreground_window(self.adb(self.focus_command(priority)))
+        focus = foreground_window(self.adb(self.focus_command(priority)), self._native_display_id)
         snapshot = {"package": "", "component": "", "stable": False, "controls": [], "truncated": False}
         if focus is not None:
             _, _, current_package, activity = focus
@@ -1929,7 +1948,7 @@ class Broker:
             snapshot["stable"] = False
             return snapshot
         current = (self._hierarchy_focus if self._hierarchy_focus_observed else
-                   foreground_window(self.adb(self.focus_command(priority))))
+                   foreground_window(self.adb(self.focus_command(priority)), self._native_display_id))
         snapshot["stable"] = focus is not None and current == focus
         if not snapshot["package"]:
             snapshot["package"] = next((control.get("package", "") for control in controls
@@ -1984,7 +2003,7 @@ done
                 if strict:
                     raise
         if package is None and not strict:
-            focus = foreground_window(self.adb(["shell", "dumpsys", "window"]))
+            focus = foreground_window(self.adb(self.focus_command()), self._native_display_id)
             package = focus[2] if focus else None
         if not package:
             raise RuntimeError("Set package in panel/script settings, or bring an app to the foreground")

@@ -108,7 +108,7 @@ CRASH_WORDS = {"keeps stopping", "has stopped", "isn't responding", "is not resp
                "متوقف شده", "متوقف می شود", "پاسخ نمی دهد"}
 CRASH_CLOSE_WORDS = {"close app", "force close", "بستن برنامه", "توقف اجباری"}
 SYSTEM_DIALOG_PACKAGES = {"android", "com.android.systemui"}
-CRASH_FOCUS_COMMAND = ["shell", "dumpsys window | grep -E 'mCurrentFocus=|mFocusedApp='"]
+CRASH_FOCUS_COMMAND = ["shell", "dumpsys window displays | grep -E 'mCurrentFocus=|mFocusedApp='"]
 CRASH_FOCUS_HINTS = {"application error", "application not responding", "apperrordialog",
                      "appnotrespondingdialog", "keeps stopping", "has stopped"}
 
