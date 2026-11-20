@@ -91,9 +91,20 @@ values are passed to Android and verified by readback; unsupported values fail
 with rollback. `timeout: 0` permits unlimited setup time. These are resource
 defaults, with no action/package/ADB/round policy added to scripts.
 
-`qa/vpn-cycle.py` includes the current editable QA workflow as a reference. The
-panel supplies each device's APK assignment and saved script version. Installing
-the addon does not select an app, clear app data or begin a QA cycle by itself.
+The panel supplies each device's APK assignment and saved script version.
+Installing the addon does not select an app, clear app data or begin a QA cycle
+by itself. Workflow revisions are independent of Fleet installer releases:
+the panel's saved version governs execution on existing and newly assigned
+devices, so changing ad selectors or timing does not require a Fleet upgrade.
+
+`qa/vpn-cycle.py` is the release-time reference protected by the installer
+manifest. The latest tested panel workflow is mirrored in
+[`examples/current-vpn-cycle.py`](examples/current-vpn-cycle.py) on `main` and as
+the separately versioned
+[`vpn-cycle-v11.py` release asset](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.12/vpn-cycle-v11.py).
+Its [SHA-256 sidecar](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.12/vpn-cycle-v11.py.sha256)
+identifies the exact exported panel source. Updating this
+example or asset does not alter the immutable v0.1.12 tag or installer checksums.
 
 ```bash
 printf '%s\n' '{"enabled":true,"fps":30,"scale":"minimum","min_side":240,"dpi":96,"timeout":180}' |
