@@ -394,7 +394,8 @@ class Tests(unittest.TestCase):
 
     def test_missing_connect_does_not_tap_physical_screen_center(self):
         clock=Clock();d=FakeDevice(clock);d.state='main';c=m.Cycle(d,'qa.vpn')
-        with patch.object(m,'time',clock),patch.object(m,'CONNECT_POSITION',None):
+        d.inspect_window=lambda **kwargs:window('MainActivity',[])
+        with patch.object(m,'time',clock),patch.object(m,'CONNECT_POSITION',None),patch.object(m,'POST_ACTION_QUIET_SECONDS',0):
             with self.assertRaisesRegex(RuntimeError,'No unique Connect control'):c.connect(window('MainActivity',[]))
         self.assertFalse(any(row[0]=='tap' for row in d.trace))
         self.assertFalse(any(row[0]=='adb' and row[2]==['shell','wm','size'] for row in d.trace))

@@ -598,22 +598,36 @@ class Cycle:
         raise RuntimeError("App did not return to an unobstructed foreground window")
 
     def connect(self, window=None):
-        window = window or self.prepare_screen(CONNECT_READY_SECONDS)
-        selected = explicit_control(window, CONNECT_SELECTORS)
-        if selected is None:
-            selected = choose_unique([(1, control) for control in controls(window)
-                                      if control.get("package", self.package) == self.package
-                                      and labels(control) & CONNECT_WORDS])
-        if selected:
-            self.tap(selected, "Connect button")
-        else:
-            if CONNECT_POSITION is None:
-                raise RuntimeError("No unique Connect control was found; set CONNECT_SELECTORS or CONNECT_POSITION")
-            point = CONNECT_POSITION
-            if (not isinstance(point, (tuple, list)) or len(point) != 2
-                    or any(type(value) is not int for value in point)):
-                raise ValueError("CONNECT_POSITION must be an explicit pair of integer coordinates")
-            self.tap_point(*point, "configured Connect position " + str(point))
+        deadline = time.monotonic() + CONNECT_READY_SECONDS if CONNECT_READY_SECONDS else None
+        while True:
+            if window is None:
+                remaining = deadline - time.monotonic() if deadline is not None else 0
+                if deadline is not None and remaining <= 0:
+                    break
+                window = self.prepare_screen(remaining)
+                if deadline is not None and time.monotonic() >= deadline:
+                    break
+            selected = explicit_control(window, CONNECT_SELECTORS)
+            if selected is None:
+                selected = choose_unique([(1, control) for control in controls(window)
+                                          if control.get("package", self.package) == self.package
+                                          and labels(control) & CONNECT_WORDS])
+            if selected:
+                self.tap(selected, "Connect button")
+                return
+            if CONNECT_POSITION is not None:
+                point = CONNECT_POSITION
+                if (not isinstance(point, (tuple, list)) or len(point) != 2
+                        or any(type(value) is not int for value in point)):
+                    raise ValueError("CONNECT_POSITION must be an explicit pair of integer coordinates")
+                self.tap_point(*point, "configured Connect position " + str(point))
+                return
+            remaining = deadline - time.monotonic() if deadline is not None else None
+            if remaining is not None and remaining <= 0:
+                break
+            time.sleep(min(POLL_SECONDS, remaining) if remaining is not None else POLL_SECONDS)
+            window = None
+        raise RuntimeError("No unique Connect control was found; set CONNECT_SELECTORS or CONNECT_POSITION")
 
     def vpn_allowed(self):
         try:
