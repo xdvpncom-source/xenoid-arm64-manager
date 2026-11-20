@@ -876,7 +876,7 @@ class Broker:
                 if retained.get(key) != runtime.get(observed):
                     raise RegenerationPending("regeneration_preparation_storage_changed")
 
-    def prepare_regeneration(self, cli, manager, args, binding, receipt, store, operation_key, check_budget):
+    def prepare_regeneration(self, cli, manager, args, binding, receipt, store, operation_key, check_budget, deadline=None):
         preflight = cli._regeneration_runtime_preflight(manager)
         if preflight.get("ok") is True:
             return
@@ -912,6 +912,9 @@ class Broker:
                         raise RegenerationPending("regeneration_preparation_storage_changed")
                 except RegenerationPending as error:
                     raise error_type(error.code, phase="inspecting") from None
+                if deadline is not None:
+                    outer = kwargs.get("deadline")
+                    kwargs["deadline"] = deadline if outer is None else min(deadline, outer)
                 return super()._execute_plan(candidate, **kwargs)
 
             def _phase_call(inner, phase, method_name, reporter, outer_deadline, **kwargs):
@@ -927,6 +930,8 @@ class Broker:
                         raise RegenerationPending("regeneration_preparation_storage_changed")
                 except RegenerationPending as error:
                     raise error_type(error.code, phase=phase) from None
+                if deadline is not None:
+                    outer_deadline = deadline if outer_deadline is None else min(deadline, outer_deadline)
                 return super()._phase_call(phase, method_name, reporter, outer_deadline, **kwargs)
 
         captured = []
@@ -1025,30 +1030,37 @@ class Broker:
             store.save(key, receipt)
             raise RegenerationPending("regeneration_post_cache_pending") from None
 
-    def regenerate(self, timeout=0, operation_key=None, post_cache=None):
+    def regenerate(self, timeout=0, operation_key=None, post_cache=None, *, _deadline=None):
         if type(timeout) is not int or timeout < 0:
             raise ValueError("Regeneration timeout must be a nonnegative integer; zero is unlimited")
         if not isinstance(operation_key, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", operation_key):
             raise ValueError("Supply a nonempty regeneration operation key")
         post_cache = self.regeneration_post_cache(post_cache)
         try:
-            return self._regenerate(timeout, operation_key, post_cache)
+            return self._regenerate(timeout, operation_key, post_cache, _deadline=_deadline)
         except (RuntimeIdentityError, RegenerationPending):
             raise
         except Exception as error:
             raise RegenerationPending(getattr(error, "code", None)) from None
 
-    def _regenerate(self, timeout, operation_key, post_cache=None):
+    def _regenerate(self, timeout, operation_key, post_cache=None, *, _deadline=None):
         store = self.regeneration_receipts
         if store is None:
             raise RuntimeError("Regeneration receipts are unavailable outside a managed script iteration")
         if self.stopping.is_set():
             raise RegenerationPending("script_stopping")
         deadline = time.monotonic() + timeout if timeout else None
+        if _deadline is not None:
+            deadline = _deadline if deadline is None else min(deadline, _deadline)
+        remaining = timeout or None
+        if _deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RegenerationPending("regeneration_timeout")
         manager = self.verify() if self.verify else self.manager
         # The official in-process command shares this native ContextVar. Never
         # launch a child CLI while holding the native lock.
-        with manager.instance_operation_lock(timeout_seconds=timeout or None):
+        with manager.instance_operation_lock(timeout_seconds=remaining):
             binding = self.regeneration_binding(manager, running=False)
             receipt = store.load(operation_key)
             if receipt is not None and receipt.get("binding") != binding:
@@ -1135,10 +1147,13 @@ class Broker:
             previous_operation_lock = getattr(manager, "operation_lock_held", False)
             manager.operation_lock_held = True
             try:
-                with self.display_raw_docker(manager, deadline):
+                # Native subprocess and daemon socket timeouts share the same
+                # recovery deadline; retry must not reset their budget.
+                budget = cli.command_timeout(deadline - time.monotonic()) if _deadline is not None else nullcontext()
+                with self.display_raw_docker(manager, deadline), budget:
                     check_budget()
                     if live_state is None and saved_state is None:
-                        self.prepare_regeneration(cli, manager, args, binding, receipt, store, operation_key, check_budget)
+                        self.prepare_regeneration(cli, manager, args, binding, receipt, store, operation_key, check_budget, deadline=deadline)
                     if live_state is None and saved_state is not None:
                         verified = cli._verify_regeneration_target_state(manager, cli.DeviceIdentityStore(manager.context), saved_state)
                         google = cli._regeneration_google_runtime_postcondition(manager)
@@ -2482,10 +2497,20 @@ class Shutdown(BaseException):
     pass
 
 
+def recovery_current(folder, config):
+    """An acknowledged stop/replacement must never resume an old decision."""
+    with db(folder) as conn:
+        row = conn.execute("SELECT id,state,config FROM runs WHERE current=1").fetchone()
+    if (row is None or row["id"] != config["run_id"] or row["state"] in TERMINAL
+            or json.loads(row["config"]) != config):
+        raise Shutdown
+
+
 def resume_regeneration_receipts(folder, number, config, iteration, app_cache):
     """Finish recorded native transactions before any new user app actions."""
     store = RegenerationReceipts(folder, config["run_id"], iteration)
     recovered_current = False
+    recovery_current(folder, config)
     manager = trusted_device(number, config)
     for run, index, key, receipt in store.pending():
         binding = receipt.get("binding") or {}
@@ -2500,7 +2525,27 @@ def resume_regeneration_receipts(folder, number, config, iteration, app_cache):
         log("warning", "Resuming a recorded official regeneration before the next app iteration")
         broker = Broker(manager, log, verify=lambda: trusted_device(number, pinned), config=pinned, app_cache=app_cache)
         broker.regeneration_receipts = RegenerationReceipts(folder, run, index)
-        broker.regenerate(receipt.get("timeout", 0), key, receipt.get("post_cache"))
+        timeout = receipt.get("timeout", 0)
+        deadline = time.monotonic() + timeout if timeout else None
+        while True:
+            recovery_current(folder, config)
+            if deadline is not None and time.monotonic() >= deadline:
+                raise RegenerationPending("regeneration_timeout")
+            try:
+                options = {} if deadline is None else {"_deadline": deadline}
+                broker.regenerate(timeout, key, receipt.get("post_cache"), **options)
+                break
+            except RegenerationPending as error:
+                recovery_current(folder, config)
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    raise RegenerationPending("regeneration_timeout") from None
+                delay = config["interval"] if remaining is None else min(config["interval"], remaining)
+                update(folder, config["run_id"], "waiting", iteration, str(error), "warning",
+                       resume_at=time.time() + delay)
+                # SIGTERM/SIGINT interrupt this wait through Shutdown. Zero is
+                # the administrator's explicit immediate-retry setting.
+                time.sleep(delay)
         recovered_current |= run == config["run_id"]
     return recovered_current
 

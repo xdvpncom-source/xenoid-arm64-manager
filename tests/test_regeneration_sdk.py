@@ -45,6 +45,11 @@ class Manager:
 
 def native_cli(manager):
     cli=types.SimpleNamespace()
+    @contextlib.contextmanager
+    def command_budget(seconds):
+        manager.command_budgets=getattr(manager,'command_budgets',[])+[seconds]
+        yield
+    cli.command_timeout=command_budget
     class Journal:
         def __init__(self,context):self.context=context
         def validate(self,state):
@@ -153,6 +158,8 @@ class RegenerationRuntimeTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name);h.prepare(self.root)
+        with h.db(self.root) as conn:
+            conn.execute('INSERT INTO runs(id,created,config,state,iteration,current,updated,resume_at) VALUES(?,?,?,?,?,?,?,?)', (BASE['run_id'],h.now(),json.dumps(BASE),'running',1,1,h.now(),0))
         self.manager=Manager(self.root/'native')
         self.broker=h.Broker(self.manager,lambda *_:None,config=BASE.copy(),app_cache={'old':'cache'})
         self.broker.regeneration_receipts=h.RegenerationReceipts(self.root,BASE['run_id'],1)
@@ -440,6 +447,8 @@ class RegenerationRuntimeTests(unittest.TestCase):
         self.manager.failure='prepared'
         with self.assertRaises(h.RegenerationPending):self.broker.regenerate(0,'key')
         current={**BASE,'run_id':'new-run'}
+        with h.db(self.root) as conn:
+            conn.execute('UPDATE runs SET id=?,config=? WHERE current=1',(current['run_id'],json.dumps(current)))
         with patch.object(h,'trusted_device',return_value=self.manager), \
              patch.object(h.Broker,'regeneration_cli',side_effect=lambda:native_cli(self.manager)), \
              patch.object(h.Broker,'display_raw_docker',return_value=contextlib.nullcontext()), \
@@ -560,5 +569,109 @@ class RegenerationRuntimeTests(unittest.TestCase):
 
     def test_existing_version7_and11_configs_validate_unchanged(self):
         for version in (7,11):self.assertEqual(h.validate({**BASE,'version':version})['version'],version)
+
+
+class SupervisorRecoveryTests(unittest.TestCase):
+    """Execute the real supervisor against durable SQLite, not just the resume helper."""
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name);h.prepare(self.root);self.manager=Manager(self.root/'native')
+        self.config={**BASE,'repeat_count':2,'interval':0}
+        with h.db(self.root) as conn:
+            conn.execute('INSERT INTO runs(id,created,config,state,iteration,current,updated,resume_at) VALUES(?,?,?,?,?,?,?,?)',
+                         (self.config['run_id'],h.now(),json.dumps(self.config),'running',1,1,h.now(),0))
+        self.broker=h.Broker(self.manager,None,config=self.config)
+        self.broker.regeneration_receipts=h.RegenerationReceipts(self.root,BASE['run_id'],1)
+        for target, replacement in [('trusted_device',lambda *_args:self.manager)]:
+            patcher=patch.object(h,target,side_effect=replacement);patcher.start();self.addCleanup(patcher.stop)
+        for target,replacement in [('regeneration_cli',lambda *_args:native_cli(self.manager)),
+                                   ('display_raw_docker',lambda *_args,**_kwargs:contextlib.nullcontext()),
+                                   ('display_bootstrap',lambda *_args:None),('ensure_native_interaction',lambda *_args,**_kwargs:{'ready':True})]:
+            patcher=patch.object(h.Broker,target,replacement);patcher.start();self.addCleanup(patcher.stop)
+        signals=patch.object(h.signal,'signal');signals.start();self.addCleanup(signals.stop)
+        boot=patch.object(h.Broker,'adb',return_value='1');boot.start();self.addCleanup(boot.stop)
+    def state(self):
+        with h.db(self.root) as conn:return dict(conn.execute('SELECT * FROM runs WHERE current=1').fetchone())
+    def config_save(self,**values):
+        self.config.update(values)
+        with h.db(self.root) as conn:conn.execute('UPDATE runs SET config=? WHERE current=1',(json.dumps(self.config),))
+    def cache_result(self,package):return {'ok':True,'package':package,'user':0,'uid_verified':True,'cache_only':True,'data_cleared':False}
+    def partial_cache(self,timeout=0):
+        from unittest.mock import MagicMock
+        plan={'packages':['org.example.one','org.example.two'],'user':0,'timeout':0}
+        self.broker.clear_cache=MagicMock(side_effect=[self.cache_result('org.example.one'),RuntimeError('interrupted')])
+        with self.assertRaises(h.RegenerationPending):self.broker.regenerate(timeout,'fixed-original-key',plan)
+        return plan
+    def test_startup_cache_pending_retries_same_key_partial_progress_then_runs_next_iteration(self):
+        plan=self.partial_cache();calls=[];sleeps=[];original=h.Broker.regenerate
+        def replay(broker,*args,**kwargs):calls.append((args,kwargs));return original(broker,*args,**kwargs)
+        def pause(delay):self.assertFalse(self.manager.held);sleeps.append(delay)
+        def app(*_args,**_kwargs):
+            self.assertEqual(self.broker.regeneration_receipts.load('fixed-original-key')['status'],'committed');return 0
+        with patch.object(h.Broker,'regenerate',replay),patch.object(h.Broker,'clear_cache',side_effect=[RuntimeError('temporary PM busy'),self.cache_result('org.example.two')]) as clear,patch.object(h.time,'sleep',side_effect=pause),patch.object(h,'run_iteration',side_effect=app) as run:
+            self.assertIsNone(h.supervisor(self.root,1))
+        self.assertEqual(self.state()['state'],'completed');self.assertEqual(self.state()['iteration'],2)
+        self.assertEqual([call[0] for call in calls],[(0,'fixed-original-key',plan)]*2)
+        self.assertEqual([call.args[0] for call in clear.call_args_list],['org.example.two']*2)
+        self.assertEqual(sleeps,[0]);run.assert_called_once();self.assertEqual(run.call_args.args[4],2)
+        self.assertEqual(self.manager.rotations,1);self.assertEqual(self.manager.commands,1)
+    def test_startup_native_pending_retries_same_target_then_continues(self):
+        self.manager.failure='prepared'
+        with self.assertRaises(h.RegenerationPending):self.broker.regenerate(0,'fixed-native-key')
+        self.manager.failure='prepared'
+        with patch.object(h.time,'sleep') as pause,patch.object(h,'run_iteration',return_value=0) as run:
+            h.supervisor(self.root,1)
+        self.assertEqual(self.state()['state'],'completed');self.assertEqual(self.manager.rotations,1)
+        self.assertEqual(self.manager.commands,3);pause.assert_called_once_with(0);run.assert_called_once()
+    def test_finite_recovery_uses_one_deadline_clips_lock_cache_and_stops_without_app(self):
+        self.partial_cache(timeout=10);self.config_save(interval=2);clock=[0.0];deadlines=[];self.manager.requests.clear()
+        def fail(package,**kwargs):deadlines.append(kwargs['_deadline']);clock[0]+=3;raise RuntimeError('still busy')
+        def pause(delay):self.assertFalse(self.manager.held);clock[0]+=delay
+        with patch.object(h.time,'monotonic',side_effect=lambda:clock[0]),patch.object(h.time,'sleep',side_effect=pause),patch.object(h.Broker,'clear_cache',side_effect=fail),patch.object(h,'run_iteration') as app:
+            h.supervisor(self.root,1)
+        self.assertEqual(self.state()['state'],'failed');self.assertEqual(clock[0],10)
+        self.assertEqual(deadlines,[10,10]);self.assertEqual(self.manager.requests,[10,5]);self.assertEqual(self.manager.command_budgets,[10,5]);app.assert_not_called()
+        receipt=self.broker.regeneration_receipts.load('fixed-original-key');self.assertEqual(receipt['status'],'pending')
+        self.assertEqual(list(receipt['post_cache_completed']),['org.example.one']);self.assertEqual(self.manager.rotations,1)
+    def test_stop_persisted_during_wait_exits_without_retry_or_failed_state(self):
+        self.partial_cache();self.config_save(interval=7)
+        def stop(delay):self.assertEqual(delay,7);h.update(self.root,BASE['run_id'],'stopped',1,'admin stop')
+        with patch.object(h.Broker,'clear_cache',side_effect=RuntimeError('busy')) as clear,patch.object(h.time,'sleep',side_effect=stop),patch.object(h,'run_iteration') as app:
+            h.supervisor(self.root,1)
+        self.assertEqual(self.state()['state'],'stopped');clear.assert_called_once();app.assert_not_called()
+        self.assertEqual(self.broker.regeneration_receipts.load('fixed-original-key')['status'],'pending')
+    def test_replaced_current_config_during_wait_stops_old_worker(self):
+        self.partial_cache()
+        def replace(delay):
+            changed={**self.config,'version':99}
+            with h.db(self.root) as conn:conn.execute('UPDATE runs SET config=? WHERE current=1',(json.dumps(changed),))
+        with patch.object(h.Broker,'clear_cache',side_effect=RuntimeError('busy')) as clear,patch.object(h.time,'sleep',side_effect=replace),patch.object(h,'run_iteration') as app:
+            h.supervisor(self.root,1)
+        self.assertEqual(self.state()['state'],'waiting');clear.assert_called_once();app.assert_not_called()
+    def test_replaced_current_run_during_wait_stops_old_worker(self):
+        self.partial_cache()
+        def replace(delay):
+            with h.db(self.root) as conn:conn.execute('UPDATE runs SET id=? WHERE current=1',('replacement-run',))
+        with patch.object(h.Broker,'clear_cache',side_effect=RuntimeError('busy')) as clear,patch.object(h.time,'sleep',side_effect=replace),patch.object(h,'run_iteration') as app:
+            h.supervisor(self.root,1)
+        self.assertEqual(self.state()['id'],'replacement-run');self.assertEqual(self.state()['state'],'waiting');clear.assert_called_once();app.assert_not_called()
+    def test_sigterm_interrupts_backoff_leaves_receipt_pending(self):
+        self.partial_cache();self.config_save(interval=1000)
+        with patch.object(h.Broker,'clear_cache',side_effect=RuntimeError('busy')) as clear,patch.object(h.time,'sleep',side_effect=h.Shutdown),patch.object(h,'run_iteration') as app:
+            h.supervisor(self.root,1)
+        self.assertEqual(self.state()['state'],'waiting');clear.assert_called_once();app.assert_not_called()
+        self.assertEqual(self.broker.regeneration_receipts.load('fixed-original-key')['status'],'pending')
+    def test_binding_failure_remains_fatal_without_retry(self):
+        self.partial_cache();self.manager.cid='b'*64
+        with patch.object(h.time,'sleep') as pause,patch.object(h,'run_iteration') as app:
+            h.supervisor(self.root,1)
+        self.assertEqual(self.state()['state'],'failed');pause.assert_not_called();app.assert_not_called()
+    def test_new_supervisor_after_interrupted_cache_wait_resumes_saved_key(self):
+        self.partial_cache()
+        with patch.object(h.Broker,'clear_cache',side_effect=RuntimeError('busy')),patch.object(h.time,'sleep',side_effect=h.Shutdown):
+            h.supervisor(self.root,1)
+        with patch.object(h.Broker,'clear_cache',return_value=self.cache_result('org.example.two')) as clear,patch.object(h,'run_iteration',return_value=0):
+            h.supervisor(self.root,1)
+        self.assertEqual(self.state()['state'],'completed');clear.assert_called_once();self.assertEqual(self.manager.rotations,1)
 
 if __name__=='__main__':unittest.main()
