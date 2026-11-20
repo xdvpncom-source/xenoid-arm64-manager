@@ -17,9 +17,9 @@ SOURCE='shipped-native-backend-patch'
 NAMES={'_rootd_authentication','_rootd_owned_authentication','_rootd_deployed_candidate','_recover_current_rootd_orphan','_terminate_rootd_process','_proc_start_time','ensure_rootd_root','_rootd_owned_process','_rootd_port_inodes'}
 PATCHED_SOURCE=patched_observer()
 tree=ast.parse(PATCHED_SOURCE);methods=[n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name in NAMES]
-# Reviewed complete native backend SHA256 c42b8f7cc122e6c597a44fd0cd1969d5e2b5f728e0366f7f0aa80387dd5b0ebc.
+# Reviewed complete native backend SHA256 46e5a44a328ef3d6e401d4f9f7e7a88e3082d3f5ef730f3e2b5926e8d029d74f.
 assert len(methods)==len(NAMES)
-assert hashlib.sha256('\n'.join(ast.get_source_segment(PATCHED_SOURCE,n) for n in sorted(methods,key=lambda n:n.name)).encode()).hexdigest()=='96d03e60023df4a7c0af4a835fbc5c1b6fe676b8fc6e03e1296bae395c8a774d'
+assert hashlib.sha256('\n'.join(ast.get_source_segment(PATCHED_SOURCE,n) for n in sorted(methods,key=lambda n:n.name)).encode()).hexdigest()=='db22b7ec6831b8613bab126456228dba52e13264682006c65af5b07edd35ecf6'
 class_node=ast.ClassDef(name='Native',bases=[],keywords=[],body=methods,decorator_list=[])
 namespace={'subprocess':__import__('subprocess'),'json':json,'Optional':__import__('typing').Optional,'Any':object,'Mapping':__import__('collections.abc',fromlist=['Mapping']).Mapping,'Path':Path,'hashlib':hashlib,'stat':stat,'re':re,'shlex':shlex,'time':time,'which':lambda name:'/usr/bin/'+name,'InstanceError':RuntimeError,'DaemonClient':object,'_ROOTD_PROVISION_TIMEOUT_SECONDS':30,'_ROOTD_REMOTE_PATH':'/data/local/tmp/xenoid-rootd','_ROOTD_LEGACY_PATH':'/data/local/tmp/.netd-helper','_ROOTD_RUN_DIRECTORY':'/data/local/tmp/xenoid-rootd-run','_ROOTD_PROCESS_RECORD':'/data/local/tmp/xenoid-rootd-run/process.json','_ROOTD_PROCESS_SCHEMA':'dev.xenoid.rootd-process/v1'}
 exec(compile(ast.fix_missing_locations(ast.Module(body=[class_node],type_ignores=[])),str(SOURCE),'exec'),namespace)
@@ -170,7 +170,7 @@ class ProducerSafetyTests(unittest.TestCase):
  def test_unreadable_tcp_tables_are_conflict_not_free_port(self):
   for failed in ('/proc/net/tcp','/proc/net/tcp6'):
    with self.subTest(failed=failed):
-    f=Fixture();f._rootd_output=lambda args,**kwargs:None if args[1]==failed else 'header\n'
+    f=Fixture();f._rootd_output=lambda args,**kwargs:None if args[-1]==failed else 'header\n'
     self.assertEqual(Native._rootd_port_inodes(f),(set(),True))
  def test_real_free_tables_can_be_empty(self):
   f=Fixture();f._rootd_output=lambda *_args,**_kwargs:'header\n';self.assertEqual(Native._rootd_port_inodes(f),(set(),False))

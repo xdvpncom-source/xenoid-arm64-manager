@@ -145,7 +145,23 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
              else "unknown"
          )
          pending = self._observe_pending_operations()
-@@ -8765,7 +8799,7 @@
+@@ -8751,6 +8785,8 @@
+         *,
+         deadline: Optional[float] = None,
+     ) -> tuple[set[str], bool]:
++        if type(self.lease.rootd_port) is not int or not 1 <= self.lease.rootd_port <= 65535:
++            return set(), True
+         expected_port = format(self.lease.rootd_port, "04X")
+         loopback = {
+             "0100007F",
+@@ -8760,12 +8796,13 @@
+         conflict = False
+         for path in ("/proc/net/tcp", "/proc/net/tcp6"):
+             output = self._rootd_output(
+-                ["cat", path],
++                ["awk", "-v", "port=:" + expected_port,
++                 'FNR == 1 || ($4 == "0A" && toupper(substr($2, length($2)-4)) == port)', path],
+                 limit=64 * 1024,
                  deadline=deadline,
              )
              if output is None:
@@ -154,7 +170,7 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
              for line in output.splitlines()[1:]:
                  fields = line.split()
                  if len(fields) < 10 or fields[3] != "0A":
-@@ -8872,11 +8906,14 @@
+@@ -8872,11 +8909,14 @@
          deadline: Optional[float] = None,
      ) -> tuple[Optional[dict[str, Any]], str]:
          exists = self._rootd_output(
@@ -171,7 +187,7 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
          directory = self._rootd_stat(
              _ROOTD_RUN_DIRECTORY,
              deadline=deadline,
-@@ -8925,6 +8962,15 @@
+@@ -8925,6 +8965,15 @@
              deadline=deadline,
          )
          if current_stat is None:
@@ -187,7 +203,7 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
              return None, "stale"
          identity = self._rootd_process_identity(
              document["pid"],
-@@ -8938,7 +8984,7 @@
+@@ -8938,7 +8987,7 @@
              identity is None
              or identity["startTime"] != document["startTime"]
          ):
@@ -196,7 +212,7 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
          return identity, "valid"
 
      def _rootd_authentication(
-@@ -8955,6 +9001,12 @@
+@@ -8955,6 +9004,12 @@
          if timeout == 0.0:
              return "rootd_unavailable"
          status = client.root_status(timeout=timeout)
@@ -209,7 +225,7 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
          if (
              isinstance(status, dict)
              and status.get("ok") is True
-@@ -8965,13 +9017,108 @@
+@@ -8965,13 +9020,108 @@
              )
          ):
              return "ok"
@@ -323,7 +339,7 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
 
      def _terminate_rootd_process(
          self,
-@@ -9149,6 +9296,102 @@
+@@ -9149,6 +9299,102 @@
              deadline=deadline,
          ), True
 
@@ -426,7 +442,7 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
      def _launch_rootd_with_token(
          self,
          container_id: str,
-@@ -9277,6 +9520,7 @@
+@@ -9277,6 +9523,7 @@
              or re.fullmatch(r"[0-9a-f]{64}", container_id) is None
          ):
              return failure("rootd_resource_conflict")
@@ -434,7 +450,7 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
          if not self._remove_legacy_android_rootd_token(
              container_id,
              deadline=deadline,
-@@ -9330,8 +9574,8 @@
+@@ -9330,8 +9577,8 @@
              return failure("rootd_unavailable")
          legacy_adopted = False
          if owned is not None:
@@ -445,7 +461,7 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
                  deadline=deadline,
              )
              if authentication == "ok" and owned["digest"] == candidate_digest:
-@@ -9344,6 +9588,10 @@
+@@ -9344,6 +9591,10 @@
                  }
              if authentication == "rootd_unauthorized":
                  return failure("rootd_unauthorized")
@@ -456,7 +472,7 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
              if not self._terminate_rootd_process(owned, deadline=deadline):
                  return failure(
                      "rootd_unavailable"
-@@ -9373,10 +9621,18 @@
+@@ -9373,10 +9624,18 @@
          if inodes or listener_conflict:
              if record_state != "absent" or listener_conflict:
                  return failure("rootd_resource_conflict")
@@ -479,7 +495,7 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
              if not adopted:
                  return failure(
                      "rootd_unavailable"
-@@ -9385,42 +9641,51 @@
+@@ -9385,42 +9644,51 @@
                  )
              legacy_adopted = legacy_seen
 
@@ -561,7 +577,7 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
          cleanup_timeout = remaining()
          if cleanup_timeout <= 0:
              return failure("rootd_unavailable")
-@@ -9436,9 +9701,15 @@
+@@ -9436,9 +9704,15 @@
          container_id = container.get("Id") if isinstance(container, dict) else None
          if (
              not isinstance(container_id, str)
@@ -578,7 +594,7 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
          launch_timeout = remaining(10.0)
          if launch_timeout <= 0 or not self._launch_rootd_with_token(
              container_id,
-@@ -9455,8 +9726,8 @@
+@@ -9455,8 +9729,8 @@
                  and state == "valid"
                  and process["digest"] == candidate_digest
              ):
@@ -589,7 +605,7 @@ diff --git a/src/xenoid/backend.py b/src/xenoid/backend.py
                      deadline=deadline,
                  )
                  if last_authentication == "ok":
-@@ -9468,7 +9739,7 @@
+@@ -9468,7 +9742,7 @@
                          "legacyAdopted": legacy_adopted,
                          "port": self.lease.rootd_port,
                      }

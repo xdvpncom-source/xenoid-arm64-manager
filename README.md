@@ -7,7 +7,7 @@ Install Xenoid on an ARM64 Ubuntu server and manage headless Android 13 instance
 Use an **ARM64 (aarch64) server running Ubuntu 24.04**, such as a Hetzner CAX server. The installer requires root access, outbound HTTPS, and free disk space for the build toolchain, container images, and Android data. Install and management commands use the same operator account and Xenoid registry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.19/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.20/install.sh | sudo -H bash -s -- --accept-android-licenses
 ```
 
 The `--accept-android-licenses` flag accepts the Android SDK licenses for the pinned build tools from Google. The installer prepares the host and starts device `1`. Allow tens of minutes for the first build on a small server. The CLI is installed as `/usr/local/bin/xenoid-fleet` and the managed checkout lives under `/opt/xenoid-fleet/upstream`. Rerunning the installer reuses the toolchain and converges device `1` with its existing data.
@@ -25,7 +25,7 @@ sudo -H xenoid-fleet run 1 -- adb shell getprop sys.boot_completed
 Use `--install-only` to prepare the host before creating the first device or upgrade an existing installation without issuing a device start. Upgrades also refresh enabled proxies on already-running devices when their native control/process revision has not been verified.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.19/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.20/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
 ```
 
 ## Devices
@@ -112,9 +112,15 @@ on the device can also use normal startup without a redundant ADB upload, after
 its ownership, mode, link count, size and digest are verified and rechecked before
 launch. Missing or different files retain the normal deployment path.
 
+Listener collection filters each guest TCP table to its header and LISTEN rows
+for the exact leased local port before the existing bounded capture. Large
+unrelated connection tables therefore do not hide a valid root-helper listener.
+Both-family read/filter failures, ambiguous listeners and non-loopback addresses
+still fail ownership checks.
+
 ### Panel-controlled QA defaults
 
-Version v0.1.19 installs the QA SDK/backend, the native logical-to-raw input
+Version v0.1.20 installs the QA SDK/backend, the native logical-to-raw input
 coordinate correction, and configurable resource defaults for all instances,
 including devices with no APK or shared script assignment. The stock pinned
 Redroid image, each native instance identity, persistent data, and saved proxy
@@ -171,8 +177,8 @@ devices, so changing ad selectors or timing does not require a Fleet upgrade.
 `qa/vpn-cycle.py` is the release-time reference protected by the installer
 manifest. The current panel workflow is also mirrored in
 [`examples/current-vpn-cycle.py`](examples/current-vpn-cycle.py) and exported as
-the [`vpn-cycle-v15.py` release asset](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.19/vpn-cycle-v15.py)
-with a [SHA-256 sidecar](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.19/vpn-cycle-v15.py.sha256).
+the [`vpn-cycle-v15.py` release asset](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.20/vpn-cycle-v15.py)
+with a [SHA-256 sidecar](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.20/vpn-cycle-v15.py.sha256).
 The historical v0.1.17 `vpn-cycle-v14.py`, v0.1.16 `vpn-cycle-v14.py`, v0.1.15 `vpn-cycle-v13.py`, v0.1.14 `vpn-cycle-v13.py`, v0.1.13 `vpn-cycle-v12.py` and v0.1.12 `vpn-cycle-v11.py` assets remain unchanged. Updating the
 editable workflow never rewrites an existing release tag or its installer pins.
 
