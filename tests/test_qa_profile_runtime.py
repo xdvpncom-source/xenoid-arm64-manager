@@ -1,6 +1,7 @@
 """Durable native profile application: replay, fencing and separate reload."""
 import copy
 import base64
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -26,6 +27,7 @@ class Store:
 class Manager:
     def __init__(self, profile):
         self.profile = copy.deepcopy(profile)
+        self.property_profile = copy.deepcopy(profile)
         self.context = types.SimpleNamespace(instance_id=INSTANCE)
         self.cfg = self.lease = None
         self.binding = {"instance_id": INSTANCE, "resource_tag": "a" * 12, "container_id": "b" * 64}
@@ -45,7 +47,7 @@ class Manager:
         assert kwargs["reset_ssaid"] is False and kwargs["require_health"] is False
         if not kwargs["userspace_restart_observed"]:
             self.actual_reloads += 1
-            self.epoch = "epoch-after-profile"
+            self.epoch = "epoch-after-profile-" + str(self.actual_reloads)
             self.token = kwargs["restart_receipt"]
         if self.fail_reload_once:
             self.fail_reload_once = False
@@ -87,13 +89,14 @@ class Broker:
             ("cat", "/data/local/tmp/xenoid-profile/statfs_fsid"): self.fsid,
         }
         for key, prop in {"model": "ro.product.model", "fingerprint": "ro.build.fingerprint", "id": "ro.build.id", "incremental": "ro.build.version.incremental", "release": "ro.build.version.release", "sdk": "ro.build.version.sdk", "security_patch": "ro.build.version.security_patch", "bootloader": "ro.bootloader"}.items():
-            values[("getprop", prop)] = profile["build"][key]
+            values[("getprop", prop)] = manager.property_profile["build"][key]
         return types.SimpleNamespace(returncode=0, stdout=(values[tuple(args)] + "\n").encode())
 
 
 class Cli:
     def __init__(self, manager):
         self.manager = manager; self.apply_calls = 0; self.lose_apply_response = False
+        self.hide_calls = 0; self.lose_hide_response = False; self.skip_property_publish = False
         self.runtime = lambda _args: manager
         self.print_json = lambda _value: None
         self.fail_nested_action = False
@@ -109,6 +112,16 @@ class Cli:
             self.lose_apply_response = False
             raise ConnectionError("response lost after native apply")
         self.print_json({"ok": True, "rotated": False, "apply": {"ok": True, "actions": [{"ok": not self.fail_nested_action}]}})
+        return 0
+    def cmd_hide_apply(self, args):
+        assert args.policy is None and args._operation_lock_held is True
+        self.hide_calls += 1
+        if not self.skip_property_publish:
+            self.manager.property_profile = copy.deepcopy(self.manager.profile)
+        if self.lose_hide_response:
+            self.lose_hide_response = False
+            raise ConnectionError("native property publication response lost")
+        self.print_json({"ok": True, "failures": [], "actions": [{"name": "property-area", "ok": True, "required": True}]})
         return 0
     def cmd_device_regenerate(self, _args): raise AssertionError("Profile phase must never repeat native GEN")
 
@@ -137,6 +150,7 @@ class RuntimeTest(unittest.TestCase):
         result = self.complete()
         self.assertTrue(result["official_apply"] and result["native_ids_preserved"])
         self.assertEqual(self.cli.apply_calls, 1)
+        self.assertEqual(self.cli.hide_calls, 1)
         self.assertEqual(self.manager.identity, old_ids)
         self.assertEqual(self.manager.actual_reloads, 1)
         state = runtime.load_applied(INSTANCE, "a" * 12, "b" * 64, state_dir=self.root / "state")
@@ -170,6 +184,41 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(self.cli.apply_calls, 1); self.assertEqual(self.manager.actual_reloads, 1)
 
+    def select_only(self, choices):
+        policy = self.receipt["profile_plan"]["policy"]
+        for descriptor in engine.field_catalog(self.base):
+            if descriptor["mutable"]:
+                policy["fields"][descriptor["path"]]["enabled"] = descriptor["path"] in choices
+        for path, values in choices.items(): policy["fields"][path]["values"] = values
+        self.receipt["profile_plan"]["policy_sha256"] = engine.profile_sha256(policy)
+
+    def test_selected_identical_values_are_not_reported_as_success(self):
+        value = self.receipt["profile_plan"]["previous_profile"]["battery"]["temperature"]
+        self.select_only({"battery.temperature": [value]})
+        with self.assertRaisesRegex(runtime.ProfilePending, "profile_no_effect"): self.complete()
+        self.assertEqual(self.cli.apply_calls, 0)
+        self.assertIsNone(runtime.load_applied(INSTANCE, state_dir=self.root / "state"))
+
+    def test_all_fields_off_intentionally_retains_profile_without_randomization(self):
+        self.select_only({})
+        result = self.complete()
+        self.assertEqual(result["randomization_skipped"], "no_enabled_fields")
+        self.assertEqual(result["effective_changes_verified"], [])
+        self.assertTrue(result["official_apply"])
+
+    def test_native_id_changes_alone_do_not_satisfy_selected_field_effect(self):
+        value = self.receipt["profile_plan"]["previous_profile"]["battery"]["temperature"]
+        self.select_only({"battery.temperature": [value]})
+        self.receipt["profile_plan"]["previous_profile"]["ids"]["serial"] = "OLD0000000000000"
+        self.receipt["profile_plan"]["previous_sha256"] = engine.profile_sha256(self.receipt["profile_plan"]["previous_profile"])
+        with self.assertRaisesRegex(runtime.ProfilePending, "profile_no_effect"): self.complete()
+        self.assertEqual(self.cli.apply_calls, 0)
+
+    def test_peak_only_metadata_change_is_not_an_actual_fps_effect(self):
+        value = self.receipt["profile_plan"]["previous_profile"]["display"]["peakRefreshRateHz"]
+        self.select_only({"display.peakRefreshRateHz": [value + 1]})
+        with self.assertRaisesRegex(runtime.ProfilePending, "profile_no_effect"): self.complete()
+
     def test_lost_apply_reply_reuses_same_durable_target(self):
         self.cli.lose_apply_response = True
         with self.assertRaises(ConnectionError): self.complete()
@@ -179,6 +228,35 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(self.cli.apply_calls, 1)
         self.assertEqual(result["profile_sha256"], engine.profile_sha256(target))
         self.assertEqual(self.manager.actual_reloads, 1)
+
+    def test_official_property_stage_preserves_fixed_build_before_reload(self):
+        original = self.manager.property_profile["build"]["fingerprint"]
+        self.complete()
+        self.assertEqual(self.manager.property_profile["build"]["fingerprint"], original)
+        self.assertEqual(self.cli.hide_calls, 1)
+        self.assertEqual(self.manager.actual_reloads, 1)
+
+    def test_lost_property_publication_reply_retries_without_profile_or_id_rotation(self):
+        self.cli.lose_hide_response = True
+        with self.assertRaises(ConnectionError): self.complete()
+        self.assertEqual(self.cli.apply_calls, 1)
+        self.complete()
+        self.assertEqual(self.cli.apply_calls, 1)
+        self.assertEqual(self.cli.hide_calls, 2)
+        self.assertEqual(self.manager.actual_reloads, 1)
+
+    def test_post_reload_build_check_remains_strict(self):
+        self.cli.skip_property_publish = True
+        self.manager.property_profile["build"]["fingerprint"] = "wrong-runtime-fingerprint"
+        with self.assertRaisesRegex(runtime.ProfilePending, "profile_build_readback_mismatch"):
+            self.complete()
+        self.assertEqual(self.manager.actual_reloads, 1)
+        self.assertIsNone(runtime.load_applied(INSTANCE, state_dir=self.root / "state"))
+
+
+
+
+
 
     def test_pending_marker_blocks_resource_overwrite_until_published(self):
         self.cli.lose_apply_response = True
@@ -284,6 +362,91 @@ class RuntimeTest(unittest.TestCase):
         self.manager.token = None
         with self.assertRaisesRegex(runtime.ProfilePending, "receipt_missing"): self.complete()
         self.assertEqual(self.manager.actual_reloads, 1)
+
+    def abandoned_profile_target(self):
+        target = copy.deepcopy(self.manager.profile)
+        target["build"]["id"] += ".QA"
+        target["build"]["incremental"] += ".q-old"
+        target["build"]["fingerprint"] = "{brand}/{product}/{device}:{release}/{id}/{incremental}:{type}/{tags}".format(**target["build"])
+        target["build"]["description"] = "{product}-{type} {release} {id} {incremental} {tags}".format(**target["build"])
+        old_sha = engine.profile_sha256(target)
+        self.manager.profile = target
+        self.receipt["status"] = "pending"
+        self.receipt["profile_progress"] = {"target_profile": target, "target_sha256": old_sha, "apply_started": True, "created_at": "2026-11-21T00:00:00+00:00"}
+        for field in ("id", "incremental", "fingerprint", "description"):
+            self.receipt["profile_plan"]["policy"]["fields"]["build." + field] = {"enabled": True, "values": [target["build"][field]]}
+        self.receipt["profile_plan"]["policy_sha256"] = engine.profile_sha256(self.receipt["profile_plan"]["policy"])
+        key = "round-8-natural-5"
+        path = self.root / "state" / "pending" / INSTANCE / (hashlib.sha256(key.encode()).hexdigest() + ".json")
+        runtime._atomic_json(path, target)
+        runtime._atomic_json(self.root / "state" / (INSTANCE + ".pending.json"), {"schema": runtime.PENDING_SCHEMA, **self.manager.binding, "operation_key": key, "target_sha256": old_sha})
+        return old_sha
+
+    def test_authorized_scope_rebase_keeps_completed_native_gen_and_restores_fixed_build(self):
+        old_sha = self.abandoned_profile_target()
+        native = copy.deepcopy(self.receipt["native_completion"])
+        policy = engine.default_policy([self.base], self.resources); policy["revision"] = 2
+        result = runtime.rebase_pending_profile(self.broker, self.manager, self.cli, self.receipt, self.store,
+            "round-8-natural-5", policy, reason="administrator_json_only_scope_change")
+        self.assertEqual(result["old_target_sha256"], old_sha)
+        self.assertEqual(self.receipt["native_completion"], native)
+        self.assertEqual(self.receipt["profile_progress"]["target_profile"]["build"], self.base["build"])
+        self.assertEqual(self.cli.apply_calls, 0)
+        self.complete()
+        self.assertEqual(self.manager.profile["build"], self.base["build"])
+        self.assertEqual(self.receipt["native_completion"], native)
+        self.assertEqual(len(self.receipt["profile_scope_history"]), 1)
+        self.assertEqual(self.manager.actual_reloads, 1)
+
+    def test_scope_rebase_cannot_cross_started_postprocessing_or_reload(self):
+        self.abandoned_profile_target()
+        policy = engine.default_policy([self.base], self.resources)
+        for extra in ({"post_cache_completed": {"gms": {"ok": True}}}, {"post_google_progress": {"registration_started": True}}):
+            receipt = copy.deepcopy(self.receipt); receipt.update(extra)
+            with self.assertRaisesRegex(runtime.ProfilePending, "not_allowed"):
+                runtime.rebase_pending_profile(self.broker, self.manager, self.cli, receipt, self.store,
+                    "round-8-natural-5", policy, reason="administrator_json_only_scope_change")
+        receipt = copy.deepcopy(self.receipt); receipt["profile_progress"]["reload"] = {"requested": True}
+        with self.assertRaisesRegex(runtime.ProfilePending, "not_allowed"):
+            runtime.rebase_pending_profile(self.broker, self.manager, self.cli, receipt, self.store,
+                "round-8-natural-5", policy, reason="administrator_json_only_scope_change")
+
+    def test_repeated_scope_rebase_preserves_original_predecessor_until_file_migration(self):
+        old_sha = self.abandoned_profile_target()
+        policy = engine.default_policy([self.base], self.resources); policy["revision"] = 2
+        args = (self.broker, self.manager, self.cli, self.receipt, self.store, "round-8-natural-5", policy)
+        first = runtime.rebase_pending_profile(*args, reason="administrator_json_only_scope_change")
+        repeated = runtime.rebase_pending_profile(*args, reason="administrator_json_only_scope_change")
+        self.assertEqual(first, repeated)
+        self.assertEqual(self.receipt["profile_scope_transition"]["old_target_sha256"], old_sha)
+        self.assertEqual(len(self.receipt["profile_scope_history"]), 1)
+        self.complete()
+        self.assertEqual(self.manager.profile["build"], self.base["build"])
+        self.assertEqual(self.cli.apply_calls, 1)
+
+    def test_different_policy_cannot_rewrite_an_existing_scope_transition(self):
+        self.abandoned_profile_target()
+        policy = engine.default_policy([self.base], self.resources); policy["revision"] = 2
+        runtime.rebase_pending_profile(self.broker, self.manager, self.cli, self.receipt, self.store,
+            "round-8-natural-5", policy, reason="administrator_json_only_scope_change")
+        before = copy.deepcopy(self.receipt["profile_scope_transition"])
+        policy["revision"] = 3
+        with self.assertRaisesRegex(runtime.ProfilePending, "already_recorded"):
+            runtime.rebase_pending_profile(self.broker, self.manager, self.cli, self.receipt, self.store,
+                "round-8-natural-5", policy, reason="administrator_json_only_scope_change")
+        self.assertEqual(self.receipt["profile_scope_transition"], before)
+        self.assertEqual(len(self.receipt["profile_scope_history"]), 1)
+
+    def test_scope_rebase_does_not_replace_another_operations_marker(self):
+        self.abandoned_profile_target()
+        policy = engine.default_policy([self.base], self.resources)
+        runtime.rebase_pending_profile(self.broker, self.manager, self.cli, self.receipt, self.store,
+            "round-8-natural-5", policy, reason="administrator_json_only_scope_change")
+        marker = self.root / "state" / (INSTANCE + ".pending.json")
+        other = json.loads(marker.read_text()); other["operation_key"] = "other-operation"; runtime._atomic_json(marker, other)
+        with self.assertRaisesRegex(runtime.ProfilePending, "another_profile_operation"):
+            self.complete()
+        self.assertEqual(self.cli.apply_calls, 0)
 
 
 if __name__ == "__main__": unittest.main()

@@ -526,9 +526,11 @@ then follow the applied profile. Retries reuse the same target and operation key
 The existing Google cache/data/reset-registration stages run after profile verification.
 
 The panel shows checkboxes and editable candidate arrays for supported dynamic
-fields, with deterministic `{token}` / `{digits}` placeholders for QA build
+fields, with deterministic `{token}` / `{digits}` placeholders for supported text
 metadata. Coupled values are validated together. Original hardware/OS fields
 that this runtime compiles into native components are read-only with an explicit
 reason; native-managed IDs continue to rotate through official regeneration.
-QA-generated fingerprints do not assert OEM signing, physical hardware changes,
-or hardware-backed DRM certification.
+Compiled Build strings such as the app-visible fingerprint remain read-only in this
+release; the panel does not install a native shim to change unsupported fields.
+A changed JSON value does not assert OEM signing, physical hardware changes, or
+hardware-backed DRM certification.

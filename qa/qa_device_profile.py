@@ -21,7 +21,7 @@ MAX_PROFILE_BYTES = 256 * 1024  # Native stageEffectiveProfile contract.
 _MISSING = object()
 _NATIVE_IDS = {"android_id", "serial", "imei", "imeisv", "boot_id"}
 _BUILD_KEYS = set("brand manufacturer model device product board platform hardware soc_manufacturer soc_model release sdk id incremental description fingerprint bootloader security_patch first_api_level sku tags type kernel_build_suffix abi abilist abilist32 abilist64 bionic_arch dalvik_isa_arm64 dalvik_isa_arm".split())
-_BUILD_RUNTIME = set("brand manufacturer model device product board platform hardware soc_manufacturer soc_model release sdk first_api_level sku tags type bootloader security_patch abi abilist abilist32 abilist64 bionic_arch dalvik_isa_arm64 dalvik_isa_arm".split())
+_BUILD_RUNTIME = set("brand manufacturer model device product board platform hardware soc_manufacturer soc_model release sdk first_api_level sku tags type bootloader security_patch id incremental fingerprint description abi abilist abilist32 abilist64 bionic_arch dalvik_isa_arm64 dalvik_isa_arm".split())
 _BUILD_LINKED = ("brand", "product", "device", "release", "id", "incremental", "type", "tags", "description", "fingerprint")
 _DISPLAY_KEYS = {"width", "height", "densityDpi", "physicalPpi", "defaultRefreshRateHz", "peakRefreshRateHz"}
 _BATTERY_KEYS = set("level scale voltage temperature status plugged health present technology capacityMah minimumCapacityMah chargeFullDesignUah chargeFullUah chargeCounterUah".split())
@@ -97,6 +97,8 @@ def _descriptor(path, value=None):
         mutable = key not in _BUILD_RUNTIME and key != "kernel_build_suffix"
         reason = "A different hardware/OS family requires a matching native image." if not mutable else "Build identity choices are applied as one coherent bundle; QA labels are not OEM certification."
         if key == "kernel_build_suffix": reason = "Kernel build suffix is compiled into the native runtime, not applied by this JSON setter."
+        if key in {"id", "incremental", "fingerprint", "description"}:
+            reason = "The current native app runtime fixes this Build field; a JSON-only change is not applied consistently."
     elif path.startswith("display.") and path.split(".", 1)[1] in _DISPLAY_KEYS:
         mutable, reason = path != "display.physicalPpi", "Dimensions and input coordinate limits stay synchronized. Refresh still uses the verified display adapter."
         if not mutable: reason = "The hardware PPI belongs to the fixed native display contract."
@@ -250,13 +252,6 @@ def normalize_resources(profile, resource_config=None):
 
 def _default_choices(profile):
     choices = {d["path"]: [_get(profile, d["path"])] for d in field_catalog(profile)}
-    build = profile["build"]
-    for suffix in ("q{token}", "q{digits}"):
-        candidate = dict(build, id=build["id"] + ".QA{digits}", incremental=build["incremental"] + "." + suffix)
-        candidate["fingerprint"] = "{brand}/{product}/{device}:{release}/{id}/{incremental}:{type}/{tags}".format(**candidate)
-        candidate["description"] = "{product}-{type} {release} {id} {incremental} {tags}".format(**candidate)
-        for key in ("id", "incremental", "fingerprint", "description"):
-            choices["build." + key].append(candidate[key])
     display = profile["display"]
     width, height = int(display["width"]), int(display["height"])
     next_width = width + 2
@@ -486,4 +481,4 @@ def generate_profile(base, policy, operation_key, previous=None, native_ids=None
     for path, desc in catalog.items():
         if enabled(path) and _get(result, path) == _get(current, path):
             unchanged.append({"path": path, "reason": reasons.get(path, "No distinct compatible configured candidate")})
-    return {"profile": result, "sha256": profile_sha256(result), "changed_fields": changed, "unchanged_enabled_fields": unchanged, "managed_fields": [path for path, desc in catalog.items() if desc["native_managed"]], "policy_revision": policy["revision"], "seed_sha256": seed.hex(), "qa_build_metadata": True, "unique_profile": bool(changed), "enabled": policy["enabled"]}
+    return {"profile": result, "sha256": profile_sha256(result), "changed_fields": changed, "unchanged_enabled_fields": unchanged, "managed_fields": [path for path, desc in catalog.items() if desc["native_managed"]], "policy_revision": policy["revision"], "seed_sha256": seed.hex(), "qa_build_metadata": False, "unique_profile": bool(changed), "enabled": policy["enabled"]}

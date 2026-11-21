@@ -18,7 +18,7 @@ import stat
 import tempfile
 import time
 
-from qa_device_profile import canonical_bytes, generate_profile, profile_sha256, validate_policy, validate_profile
+from qa_device_profile import canonical_bytes, field_catalog, generate_profile, profile_sha256, validate_policy, validate_profile
 
 CONFIG = Path("/etc/xenoid-fleet/device-profile-policy.json")
 RESOURCE_CONFIG = Path("/etc/xenoid-fleet/qa-resources.json")
@@ -240,16 +240,17 @@ def _verify_staged(broker, manager, target, deadline):
     return len(expected)
 
 
-def _verify_applied_fields(broker, manager, target, deadline):
+def _verify_applied_fields(broker, manager, target, deadline, *, check_build=True):
     if not _matches_profile(broker, manager, target, deadline):
         raise ProfilePending("profile_effective_json_mismatch")
     properties = {"model": "ro.product.model", "fingerprint": "ro.build.fingerprint", "id": "ro.build.id",
                   "incremental": "ro.build.version.incremental", "release": "ro.build.version.release",
                   "sdk": "ro.build.version.sdk", "security_patch": "ro.build.version.security_patch",
                   "bootloader": "ro.bootloader"}
-    for name, prop in properties.items():
-        if _execute(broker, manager, ["getprop", prop], deadline) != str(target["build"][name]):
-            raise ProfilePending("profile_build_readback_mismatch")
+    if check_build:
+        for name, prop in properties.items():
+            if _execute(broker, manager, ["getprop", prop], deadline) != str(target["build"][name]):
+                raise ProfilePending("profile_build_readback_mismatch")
     display = _display(broker, manager, deadline)
     if display["size"] != [target["display"]["width"], target["display"]["height"]] or display["density"] != target["display"]["densityDpi"]:
         raise ProfilePending("profile_display_readback_mismatch")
@@ -258,7 +259,9 @@ def _verify_applied_fields(broker, manager, target, deadline):
 
 def _matches_applied_fields(broker, manager, target, deadline):
     try:
-        _verify_applied_fields(broker, manager, target, deadline)
+        # The official fingerprint apply stages data first. Read-only Build
+        # properties are published by the separate native hide/identity apply.
+        _verify_applied_fields(broker, manager, target, deadline, check_build=False)
         return True
     except (ValueError, ProfilePending):
         return False
@@ -272,6 +275,8 @@ def _verify_readback(broker, manager, target, deadline):
 
 def _failed_action(value):
     if isinstance(value, dict):
+        if value.get("required") is False:
+            return False
         if "ok" in value and value["ok"] is not True or isinstance(value.get("exitCode"), int) and value["exitCode"] != 0:
             return True
         return any(_failed_action(child) for child in value.values())
@@ -348,6 +353,115 @@ def _remove_target(path, expected_sha256):
         return False
 
 
+def _scope_rebase_matches(receipt, key, old_sha, new_sha):
+    transition = receipt.get("profile_scope_transition")
+    return (isinstance(transition, dict)
+            and transition.get("schema") == "dev.xenoid.profile-scope-transition/v1"
+            and transition.get("reason") == "administrator_json_only_scope_change"
+            and transition.get("operation_key") == key
+            and transition.get("old_target_sha256") == old_sha
+            and transition.get("new_target_sha256") == new_sha)
+
+
+def _profile_value(profile, path):
+    current = profile
+    for part in path.split("."):
+        current = current[int(part)] if isinstance(current, list) else current[part]
+    return current
+
+
+def _meaningful_changes(plan, target):
+    previous = plan["previous_profile"]
+    fields = plan["policy"]["fields"]
+    selected = [d["path"] for d in field_catalog(previous)
+                if d["mutable"] and fields.get(d["path"], {}).get("enabled") is True]
+    # Peak metadata is not a second independent physical display cadence.
+    # The default rate is verified separately through the actual HWC period.
+    changed = [path for path in selected if path != "display.peakRefreshRateHz"
+               and _profile_value(previous, path) != _profile_value(target, path)]
+    return selected, changed
+
+
+def rebase_pending_profile(broker, manager, cli, receipt, store, key, new_policy, deadline=None, *, reason):
+    """Explicit administrative scope migration; never a general retry behavior.
+
+    The caller must hold the native lock and have stopped the owning observer.
+    It archives the abandoned profile phase while preserving the exact completed
+    native GEN transaction and IDs. Host-file reconciliation is replayable from
+    this durable intent when complete() resumes.
+    """
+    progress = receipt.get("profile_progress") or {}
+    old_plan = receipt.get("profile_plan")
+    if (reason != "administrator_json_only_scope_change" or receipt.get("status") != "pending"
+            or not isinstance(old_plan, dict) or old_plan.get("schema") != PLAN_SCHEMA
+            or old_plan.get("binding") != receipt.get("binding")
+            or (receipt.get("native_journal") or {}).get("phase") != "committed"
+            or not receipt.get("native_completion") or progress.get("completed")
+            or (progress.get("reload") or {}).get("requested")
+            or receipt.get("post_cache_completed") or receipt.get("post_google_progress")):
+        raise ProfilePending("profile_scope_rebase_not_allowed")
+    native = _verify_core(broker, manager, cli, receipt, deadline)
+    base, previous = copy.deepcopy(old_plan["base_profile"]), copy.deepcopy(old_plan["previous_profile"])
+    if (profile_sha256(base) != old_plan.get("base_sha256")
+            or profile_sha256(previous) != old_plan.get("previous_sha256")):
+        raise ProfilePending("profile_scope_rebase_baseline_changed")
+    validate_profile(base); validate_profile(previous)
+    transition = receipt.get("profile_scope_transition")
+    if transition is not None:
+        policy = validate_policy(new_policy, [base, previous])
+        history = receipt.get("profile_scope_history")
+        archived = history[-1] if isinstance(history, list) and history else None
+        archived_progress = archived.get("profile_progress") if isinstance(archived, dict) else None
+        if (not isinstance(transition, dict)
+                or not _scope_rebase_matches(receipt, key, transition.get("old_target_sha256"), progress.get("target_sha256"))
+                or profile_sha256(policy) != old_plan.get("policy_sha256")
+                or profile_sha256(old_plan.get("policy")) != old_plan.get("policy_sha256")
+                or not isinstance(archived_progress, dict)
+                or archived.get("reason") != reason
+                or profile_sha256(archived_progress.get("target_profile")) != transition.get("old_target_sha256")
+                or profile_sha256(progress.get("target_profile")) != transition.get("new_target_sha256")):
+            raise ProfilePending("profile_scope_rebase_already_recorded")
+        # A lost response must not replace the predecessor hash while its file
+        # and pending marker still need migration to this fixed successor.
+        return {"old_target_sha256": transition["old_target_sha256"],
+                "new_target_sha256": transition["new_target_sha256"],
+                "native_ids_preserved": True, "native_transaction_preserved": True}
+    # Fields outside the JSON runtime's scope return to their captured native
+    # baseline, rather than retaining a partially staged experimental value.
+    for descriptor in field_catalog(base):
+        if descriptor["mutable"] or descriptor["native_managed"]:
+            continue
+        parts = descriptor["path"].split(".")
+        source, destination = base, previous
+        for part in parts[:-1]:
+            source = source[int(part)] if isinstance(source, list) else source[part]
+            destination = destination[int(part)] if isinstance(destination, list) else destination[part]
+        item = source[int(parts[-1])] if isinstance(source, list) else source[parts[-1]]
+        if isinstance(destination, list): destination[int(parts[-1])] = copy.deepcopy(item)
+        else: destination[parts[-1]] = copy.deepcopy(item)
+    policy = validate_policy(new_policy, [base, previous])
+    generated = generate_profile(base, policy, key, previous=previous, native_ids=native,
+                                 resource_config=old_plan.get("resource_config"))
+    old_target = progress.get("target_profile")
+    old_sha = progress.get("target_sha256")
+    if not isinstance(old_target, dict) or profile_sha256(old_target) != old_sha:
+        raise ProfilePending("profile_scope_rebase_target_invalid")
+    new_plan = {**old_plan, "policy": policy, "policy_sha256": profile_sha256(policy),
+                "previous_profile": previous, "previous_sha256": profile_sha256(previous)}
+    new_plan.pop("bridge_sha256", None)
+    receipt.setdefault("profile_scope_history", []).append({"reason": reason, "archived_at": _now(),
+        "profile_plan": copy.deepcopy(old_plan), "profile_progress": copy.deepcopy(progress)})
+    receipt["profile_plan"] = new_plan
+    receipt["profile_progress"] = {"target_profile": generated["profile"], "target_sha256": generated["sha256"],
+                                   "generated": generated, "created_at": _now()}
+    receipt["profile_scope_transition"] = {"schema": "dev.xenoid.profile-scope-transition/v1",
+        "reason": reason, "operation_key": key, "old_target_sha256": old_sha,
+        "new_target_sha256": generated["sha256"], "authorized_at": _now()}
+    store.save(key, receipt)
+    return {"old_target_sha256": old_sha, "new_target_sha256": generated["sha256"],
+            "native_ids_preserved": True, "native_transaction_preserved": True}
+
+
 def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=STATE):
     """Resume the pinned profile operation; all retries reuse the same JSON."""
     plan = _plan(receipt)
@@ -367,22 +481,36 @@ def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=S
     target = validate_profile(progress["target_profile"])
     if profile_sha256(target) != progress.get("target_sha256") or target["ids"] != native:
         raise ProfilePending("profile_target_digest_or_identity_mismatch")
+    selected, meaningful = _meaningful_changes(plan, target)
+    progress["selected_profile_fields"] = selected
+    progress["meaningful_fields"] = meaningful
+    if selected and not meaningful:
+        progress["no_effect"] = True
+        store.save(key, receipt)
+        raise ProfilePending("profile_no_effect")
     instance = receipt["binding"]["instance_id"]
     if not _INSTANCE.fullmatch(instance): raise ProfilePending("profile_instance_invalid")
     path = Path(state_dir) / "pending" / instance / (hashlib.sha256(key.encode()).hexdigest() + ".json")
     if path.exists():
-        if profile_sha256(_read_json(path)) != progress["target_sha256"]:
-            raise ProfilePending("profile_target_file_changed")
+        file_sha = profile_sha256(_read_json(path))
+        if file_sha != progress["target_sha256"]:
+            if _scope_rebase_matches(receipt, key, file_sha, progress["target_sha256"]):
+                _atomic_json(path, target)
+            else:
+                raise ProfilePending("profile_target_file_changed")
     else:
         _atomic_json(path, target)
     pending_path = Path(state_dir) / (instance + ".pending.json")
     pending = pending_for_binding(instance, receipt["binding"]["resource_tag"], receipt["binding"]["container_id"], state_dir=state_dir)
     if pending is not None and (pending["operation_key"] != key or pending["target_sha256"] != progress["target_sha256"]):
-        raise ProfilePending("another_profile_operation_pending")
+        if pending["operation_key"] == key and _scope_rebase_matches(receipt, key, pending["target_sha256"], progress["target_sha256"]):
+            pending = None  # The durable administrative migration names this exact old target.
+        else:
+            raise ProfilePending("another_profile_operation_pending")
     if pending is None:
         _atomic_json(pending_path, {"schema": PENDING_SCHEMA, **receipt["binding"], "operation_key": key,
                                     "target_sha256": progress["target_sha256"], "created_at": progress["created_at"]})
-    if not progress.get("apply_verified"):
+    if not progress.get("apply_verified") or not progress.get("hide_verified"):
         if not progress.get("apply_started") or not _matches_applied_fields(broker, manager, target, deadline):
             progress["apply_started"] = True
             store.save(key, receipt)
@@ -400,13 +528,37 @@ def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=S
             answer = captured[-1] if captured else {}
             if result or not isinstance(answer, dict) or answer.get("ok") is not True or answer.get("rotated") is not False or _failed_action(answer):
                 raise ProfilePending("profile_official_apply_pending")
-        _verify_applied_fields(broker, manager, target, deadline)
+        _verify_applied_fields(broker, manager, target, deadline, check_build=False)
+        if not progress.get("hide_verified"):
+            # This is the same official /hide/apply stage that native GEN uses
+            # after apply_fingerprint. It publishes --identity properties.
+            progress["hide_started"] = True
+            store.save(key, receipt)
+            captured = []
+            old_runtime, old_print = cli.runtime, cli.print_json
+            cli.runtime = lambda _args: manager
+            cli.print_json = lambda value: captured.append(value)
+            args = argparse.Namespace(context=manager.context, config=manager.cfg, lease=manager.lease,
+                                      policy=None, _operation_lock_held=True)
+            try:
+                code = cli.cmd_hide_apply(args)
+            finally:
+                cli.runtime, cli.print_json = old_runtime, old_print
+            answer = captured[-1] if captured else {}
+            if (code or not isinstance(answer, dict) or answer.get("ok") is not True
+                    or answer.get("failures") or _failed_action(answer)
+                    or not any(action.get("name") == "property-area" and action.get("ok") is True
+                               for action in answer.get("actions", []) if isinstance(action, dict))):
+                raise ProfilePending("profile_official_property_apply_pending")
+            _verify_core(broker, manager, cli, receipt, deadline)
+            progress["hide_verified"] = True
+            store.save(key, receipt)
         _verify_core(broker, manager, cli, receipt, deadline)
         progress["apply_verified"] = True
         store.save(key, receipt)
 
-    # Build.* is cached in Zygote. A second userspace reload refreshes the new
-    # profile, but explicitly preserves the native GEN IDs and SSAID store.
+    # The official reload refreshes native profile consumers while explicitly
+    # preserving the completed GEN identities and the per-app SSAID store.
     reload = progress.get("reload")
     if reload is None:
         epoch = manager._userspace_runtime_epoch(deadline=deadline)
@@ -443,6 +595,7 @@ def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=S
         raise ProfilePending("profile_frame_rate_readback_mismatch")
     stage_count = _verify_readback(broker, manager, target, deadline)
     _verify_core(broker, manager, cli, receipt, deadline)
+    progress["effective_changes_verified"] = meaningful
     progress.setdefault("completed_at", _now())
     _atomic_json(Path(state_dir) / (instance + ".json"), {
         "schema": STATE_SCHEMA, **receipt["binding"], "profile": target,
@@ -464,4 +617,6 @@ def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=S
             "unchanged_enabled_fields": progress["generated"]["unchanged_enabled_fields"],
             "official_apply": True, "native_ids_preserved": True, "input_ready": True,
             "profile_reload_observed": True, "staged_fields_verified": stage_count,
-            "fps": fps, "period_ns": period, "temporary_target_removed": progress["target_file_removed"]}
+            "fps": fps, "period_ns": period, "temporary_target_removed": progress["target_file_removed"],
+            "effective_changes_verified": meaningful,
+            "randomization_skipped": "no_enabled_fields" if not selected else None}

@@ -30,7 +30,7 @@ class ProfilePolicyTest(unittest.TestCase):
 
     def test_every_editable_default_has_alternatives_and_changes(self):
         mutable = [d["path"] for d in q.field_catalog(self.base) if d["mutable"]]
-        self.assertEqual(len(mutable), 43)
+        self.assertEqual(len(mutable), 39)
         for path in mutable:
             self.assertGreaterEqual(len(self.policy["fields"][path]["values"]), 2, path)
         previous = q.normalize_resources(self.base, self.resources)
@@ -46,11 +46,12 @@ class ProfilePolicyTest(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(q.canonical_bytes(first["profile"]), q.canonical_bytes(second["profile"]))
 
-    def test_different_device_or_operation_changes_qa_build_identity(self):
+    def test_different_operation_changes_supported_profile_but_keeps_build(self):
         first, second = self.generate(), self.generate("another-device-or-operation")
-        self.assertNotEqual(first["profile"]["build"]["fingerprint"], second["profile"]["build"]["fingerprint"])
-        self.assertNotEqual(first["profile"]["build"]["id"], second["profile"]["build"]["id"])
-        self.assertTrue(first["qa_build_metadata"])
+        self.assertNotEqual(first["sha256"], second["sha256"])
+        self.assertEqual(first["profile"]["build"], self.base["build"])
+        self.assertEqual(second["profile"]["build"], self.base["build"])
+        self.assertFalse(first["qa_build_metadata"])
 
     def test_profile_hardware_family_and_os_abi_are_retained(self):
         got = self.generate()["profile"]
@@ -114,12 +115,10 @@ class ProfilePolicyTest(unittest.TestCase):
         self.assertFalse(catalog["build.kernel_build_suffix"]["mutable"])
         self.assertFalse(catalog["sensors.0.name"]["mutable"])
 
-    def test_unchecked_fingerprint_is_not_changed_by_other_build_checks(self):
-        self.policy["fields"]["build.fingerprint"]["enabled"] = False
-        got = self.generate()
-        self.assertEqual(got["profile"]["build"]["fingerprint"], self.base["build"]["fingerprint"])
-        self.assertEqual(got["profile"]["build"]["id"], self.base["build"]["id"])
-        self.assertTrue(any(x["path"] == "build.id" for x in got["unchanged_enabled_fields"]))
+    def test_json_unsupported_build_fields_are_readonly(self):
+        for path in ("build.id", "build.incremental", "build.fingerprint", "build.description"):
+            self.assertFalse(next(d for d in q.field_catalog(self.base) if d["path"] == path)["mutable"])
+            self.assertEqual(self.policy["fields"][path]["values"], [])
 
     def test_disabled_input_limit_blocks_incompatible_dimension(self):
         self.policy["fields"]["input.x.maximum"]["enabled"] = False
