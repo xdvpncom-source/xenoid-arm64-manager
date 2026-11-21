@@ -1,0 +1,148 @@
+{
+  "source_capture": "outputs/reliability-fix/ad-stuck-h7-d4.json",
+  "window": {
+    "package": "v2.vpn.fast",
+    "component": "v2.vpn.fast/com.google.android.gms.ads.AdActivity",
+    "stable": true,
+    "truncated": false,
+    "controls": [
+      {
+        "resource_id": "",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "",
+        "class_name": "android.widget.LinearLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "android:id/content",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "",
+        "class_name": "android.widget.RelativeLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "",
+        "class_name": "android.webkit.WebView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": true
+      },
+      {
+        "resource_id": "",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          169,
+          0,
+          200,
+          31
+        ],
+        "enabled": true,
+        "clickable": true
+      },
+      {
+        "resource_id": "",
+        "class_name": "android.widget.ImageButton",
+        "text": "",
+        "content_desc": "Interstitial close button",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          169,
+          0,
+          200,
+          31
+        ],
+        "enabled": true,
+        "clickable": true
+      },
+      {
+        "resource_id": "android:id/navigationBarBackground",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      }
+    ]
+  },
+  "events": [],
+  "source_note": "Actual fenced device observation; no synthetic controls added."
+}

@@ -1,0 +1,289 @@
+{
+  "source_capture": "work/ad-rootfix/watch-20261121T161635Z/host-17-device-4-iteration-42.json",
+  "window": {
+    "package": "com.android.vending",
+    "component": "com.android.vending/com.google.android.finsky.unauthenticated.activity.UnauthenticatedMainActivity",
+    "stable": true,
+    "controls": [
+      {
+        "resource_id": "",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.vending",
+        "bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "",
+        "class_name": "android.widget.LinearLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.vending",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.vending",
+        "bounds": [
+          0,
+          11,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "com.android.vending:id/0_resource_name_obfuscated",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.vending",
+        "bounds": [
+          0,
+          11,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "android:id/content",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.vending",
+        "bounds": [
+          0,
+          11,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "com.android.vending:id/0_resource_name_obfuscated",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.vending",
+        "bounds": [
+          0,
+          11,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "com.android.vending:id/0_resource_name_obfuscated",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.vending",
+        "bounds": [
+          0,
+          11,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "",
+        "class_name": "android.view.ViewGroup",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.vending",
+        "bounds": [
+          0,
+          11,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "com.android.vending:id/0_resource_name_obfuscated",
+        "class_name": "android.widget.ImageView",
+        "text": "",
+        "content_desc": "Options",
+        "package": "com.android.vending",
+        "bounds": [
+          180,
+          19,
+          194,
+          33
+        ],
+        "enabled": true,
+        "clickable": true
+      },
+      {
+        "resource_id": "com.android.vending:id/0_resource_name_obfuscated",
+        "class_name": "android.widget.LinearLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.vending",
+        "bounds": [
+          20,
+          101,
+          180,
+          245
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "com.android.vending:id/0_resource_name_obfuscated",
+        "class_name": "android.widget.ImageView",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.vending",
+        "bounds": [
+          78,
+          101,
+          121,
+          144
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "",
+        "class_name": "android.widget.ImageView",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.vending",
+        "bounds": [
+          61,
+          159,
+          138,
+          173
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "com.android.vending:id/0_resource_name_obfuscated",
+        "class_name": "android.widget.TextView",
+        "text": "Sign in to find the latest Android apps, games, movies, music & more",
+        "content_desc": "",
+        "package": "com.android.vending",
+        "bounds": [
+          20,
+          201,
+          180,
+          209
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "com.android.vending:id/0_resource_name_obfuscated",
+        "class_name": "android.widget.Button",
+        "text": "Sign in",
+        "content_desc": "",
+        "package": "com.android.vending",
+        "bounds": [
+          73,
+          226,
+          127,
+          242
+        ],
+        "enabled": true,
+        "clickable": true
+      },
+      {
+        "resource_id": "android:id/statusBarBackground",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.vending",
+        "bounds": [
+          0,
+          0,
+          200,
+          11
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "android:id/navigationBarBackground",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.vending",
+        "bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      }
+    ],
+    "truncated": false
+  },
+  "events": [
+    {
+      "seq": 6103,
+      "time": "2026-11-21T16:21:02.681+00:00",
+      "iteration": 42,
+      "level": "output",
+      "message": "Input sent: close advertisement/popup"
+    },
+    {
+      "seq": 6102,
+      "time": "2026-11-21T16:21:02.670+00:00",
+      "iteration": 42,
+      "level": "action",
+      "message": "Xenoid native tap logical (189, 10) \u2192 raw (1359, 88) via /dev/uinput"
+    },
+    {
+      "seq": 6101,
+      "time": "2026-11-21T16:18:58.109+00:00",
+      "iteration": 42,
+      "level": "output",
+      "message": "Waiting 98s before ad dismissal"
+    },
+    {
+      "seq": 6100,
+      "time": "2026-11-21T16:18:58.094+00:00",
+      "iteration": 42,
+      "level": "output",
+      "message": "App opened: v2.vpn.fast"
+    },
+    {
+      "seq": 6099,
+      "time": "2026-11-21T16:18:56.136+00:00",
+      "iteration": 42,
+      "level": "output",
+      "message": "Display scale minimum: 720x1280@560 -> 200x356@72 (already applied)"
+    }
+  ],
+  "source_note": "Actual fenced device observation; no synthetic controls added."
+}

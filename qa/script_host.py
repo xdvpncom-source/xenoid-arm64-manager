@@ -138,7 +138,7 @@ Environment=HOME=/root
 Environment=PYTHONDONTWRITEBYTECODE=1
 Restart=on-failure
 RestartSec=5
-TimeoutStopSec=18
+TimeoutStopSec=30
 KillMode=control-group
 UMask=0077
 [Install]
@@ -371,7 +371,7 @@ def snapshot(folder, number, run=None, after=None, limit=32):
         return result
 
 
-def ctl(*args, timeout=24):
+def ctl(*args, timeout=36):
     process = subprocess.run(["systemctl", *args], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                              timeout=timeout, check=False)
     if process.returncode:
@@ -725,6 +725,7 @@ class Broker:
         self.assigned_apk = options.get("assigned_apk")
         self.app_cache = app_cache if app_cache is not None else {}
         self.regeneration_receipts = None
+        self._ui_reader = None
 
     @staticmethod
     def regeneration_cli():
@@ -756,6 +757,7 @@ class Broker:
         return {"instance_id": context.instance_id, "resource_tag": context.resource_tag, "container_id": owned["Id"]}
 
     def invalidate_regeneration_caches(self):
+        self.close_ui_reader(force=True)
         self.app_cache.clear()
         self.resolved_app = self.window_offer = self.url = None
         self._hierarchy_focus_observed = False
@@ -1891,11 +1893,25 @@ class Broker:
                 self.android_user(), assigned.get("id"), assigned.get("sha256"), self.assigned_apk_size)
 
     def cleanup(self):
+        reader_error = None
+        try:
+            self.close_ui_reader()
+        except Exception as error:
+            reader_error = error
         with self.forward_lock:
             port, self.port = self.port, None
         if port is not None:
             # A disconnected ADB transport releases its forwards. Never remove a port through a new runtime.
             self.owned_call(["forward", "--remove", f"tcp:{port}"], 4)
+        if reader_error:
+            raise reader_error
+
+    def close_ui_reader(self, *, force=False):
+        reader = getattr(self, "_ui_reader", None)
+        if reader is not None:
+            with reader.manager.instance_operation_lock(timeout_seconds=12):
+                reader.close(force=force)
+            self._ui_reader = None
 
     @staticmethod
     def inspection_priority(value):
@@ -1907,7 +1923,40 @@ class Broker:
         priority = self.inspection_priority(priority)
         return ["shell", *(["nice", "-n", str(priority)] if priority is not None else []), "dumpsys", "window", "displays"]
 
-    def ui_hierarchy(self, timeout, priority=None):
+    def ui_hierarchy(self, timeout, priority=None, windows=False, reader=None):
+        if reader not in (None, "persistent", "legacy"):
+            raise ValueError("reader must be persistent or legacy")
+        priority = self.inspection_priority(priority)
+        seconds = self.config.get("command_timeout", 0) if timeout is None else timeout
+        if reader == "legacy":
+            self.close_ui_reader()
+            return self.legacy_ui_hierarchy(timeout, priority, windows)
+        from qa_ui_reader import PersistentUiReader, UiReaderError
+        deadline = time.monotonic() + seconds if seconds else None
+        self._hierarchy_focus_observed = False
+        self._hierarchy_focus = None
+        try:
+            with self.owned_manager() as manager:
+                current = self._ui_reader
+                if (current is None or current.pipe is None or current.pipe.closed or
+                        current.pipe.process.poll() is not None or current.priority != priority):
+                    self.close_ui_reader()
+                    current = PersistentUiReader(manager, self.container_id, priority, deadline, self.stopping,
+                                                 defer_start=True)
+                    self._ui_reader = current
+                    current.start()
+                xml = current.read(manager, windows, deadline)
+        except RuntimeIdentityError:
+            raise
+        except (UiReaderError, OSError, TimeoutError) as error:
+            raise TransportUnavailable("Android UI inspection failed: " + str(error)) from error
+        root_tag = "displays" if windows else "hierarchy"
+        start, end = xml.find("<" + root_tag), xml.rfind("</" + root_tag + ">")
+        if start < 0 or end < start:
+            raise RuntimeError("Invalid Android UI hierarchy")
+        return xml[start:end + len(root_tag) + 3]
+
+    def legacy_ui_hierarchy(self, timeout, priority=None, windows=False):
         priority = self.inspection_priority(priority)
         # A host adb timeout does not kill its guest Java process. Bound the
         # actual uiautomator executable (its wrapper execs app_process), not a
@@ -1915,6 +1964,8 @@ class Broker:
         seconds = self.config.get("command_timeout", 0) if timeout is None else timeout
         marker = "XENOID_UI_FOCUS_AFTER"
         ui_args = ["uiautomator", "dump"]
+        if windows:
+            ui_args.append("--windows")
         if seconds:
             guest_budget = max(1, seconds - 2)
             ui_args = ["timeout", "-s", "KILL", str(guest_budget), *ui_args]
@@ -1951,13 +2002,18 @@ class Broker:
             xml, focus_dump = xml.rsplit(marker, 1)
             self._hierarchy_focus = foreground_window(focus_dump, self._native_display_id)
             self._hierarchy_focus_observed = True
-        start, end = xml.find("<hierarchy"), xml.rfind("</hierarchy>")
+        root_tag = "displays" if windows else "hierarchy"
+        start, end = xml.find("<" + root_tag), xml.rfind("</" + root_tag + ">")
         if start < 0 or end < start:
             raise RuntimeError("Invalid Android UI hierarchy")
-        return xml[start:end + len("</hierarchy>")]
+        return xml[start:end + len(root_tag) + 3]
 
-    def inspect_window(self, package=None, priority=None):
+    def inspect_window(self, package=None, priority=None, windows=False, reader=None):
         priority = self.inspection_priority(priority)
+        if type(windows) is not bool:
+            raise ValueError("windows must be Boolean")
+        if reader not in (None, "persistent", "legacy"):
+            raise ValueError("reader must be persistent or legacy")
         if package is not None and (
             not isinstance(package, str) or len(package) > 255 or not ANDROID_PACKAGE.fullmatch(package)
         ):
@@ -1970,8 +2026,21 @@ class Broker:
             snapshot.update(package=current_package, component=component, stable=True)
         self._hierarchy_focus_observed = False
         try:
-            hierarchy = self.ui_hierarchy(None) if priority is None else self.ui_hierarchy(None, priority=priority)
-            controls, truncated = shared_policy("visible_controls", hierarchy=hierarchy, package=package)
+            if windows:
+                kwargs = {"priority": priority, "windows": True}
+                if reader is not None:
+                    kwargs["reader"] = reader
+                hierarchy = self.ui_hierarchy(None, **kwargs)
+                window_data = shared_policy("window_snapshot", hierarchy=hierarchy,
+                                            display_id=self._native_display_id if self._native_display_id is not None else 0)
+                controls, truncated = window_data["controls"], window_data["truncated"]
+            else:
+                if reader is not None:
+                    hierarchy = self.ui_hierarchy(None, priority=priority, reader=reader)
+                else:
+                    hierarchy = self.ui_hierarchy(None) if priority is None else self.ui_hierarchy(None, priority=priority)
+                controls, truncated = shared_policy("visible_controls", hierarchy=hierarchy, package=package)
+                window_data = {}
         except TransportUnavailable:
             raise
         except (RuntimeError, ValueError, ElementTree.ParseError):
@@ -1983,6 +2052,7 @@ class Broker:
         if not snapshot["package"]:
             snapshot["package"] = next((control.get("package", "") for control in controls
                                         if control.get("package")), "")
+        snapshot.update(window_data)
         snapshot.update(controls=controls, truncated=truncated)
         return snapshot
 
@@ -2265,7 +2335,7 @@ done
             if self.android_user() != previous_user or self.config.get("verify_apk", False) != previous_verify:
                 self.app_cache.clear()
             return result
-        if action == "inspect-window" and len(args) <= 2:
+        if action == "inspect-window" and len(args) <= 4:
             return self.inspect_window(*args)
         if action in APP_ACTIONS:
             shared_policy("app_action", action=action, args=args)
@@ -2485,6 +2555,18 @@ def drain(process, log, timeout):
     raise TimeoutError("Script execution timed out")
 
 
+def finish_device_requests(server, thread, broker):
+    """Wait for the stop-aware active request before releasing owned resources."""
+    broker.stopping.set()
+    server.shutdown()
+    thread.join(timeout=1)
+    if server.active is not None:
+        server.active.join(timeout=20)
+        if server.active.is_alive():
+            raise RuntimeError("Device request cleanup did not finish before shutdown")
+    broker.cleanup()
+
+
 def run_iteration(folder, number, config, manager, iteration, app_cache=None):
     run = config["run_id"]
 
@@ -2529,17 +2611,13 @@ def run_iteration(folder, number, config, manager, iteration, app_cache=None):
                     try:
                         return drain(process, log, lambda: config["timeout"])
                     finally:
+                        broker.stopping.set()
                         if process.poll() is None:
                             subprocess.run(["systemctl", "stop", name], stdout=subprocess.DEVNULL,
                                            stderr=subprocess.DEVNULL, timeout=8)
                             process.kill()
             finally:
-                broker.stopping.set()
-                server.shutdown()
-                thread.join(timeout=1)
-                if server.active is not None:
-                    server.active.join(timeout=2)
-                broker.cleanup()
+                finish_device_requests(server, thread, broker)
 
 
 class Shutdown(BaseException):

@@ -7,7 +7,7 @@ import re
 root = Path(__file__).resolve().parents[1]
 required_host_modules = {
     "script_host.py", "script_runtime.py", "shared_policy.py",
-    "qa_lifecycle.py", "qa_vpn_probe.py", "qa_input_ready.py",
+    "qa_lifecycle.py", "qa_vpn_probe.py", "qa_input_ready.py", "qa_ui_reader.py",
 }
 missing = sorted(name for name in required_host_modules if not (root / "qa" / name).is_file())
 if missing:
@@ -16,7 +16,8 @@ files = sorted([*(root / "qa").glob("*.py"), root / "qa/qa-resources.json",
                 *(root / "deploy").glob("*"),
                 *(root / "native/xenoid-hwcomposer").glob("*.c"),
                 root / "native/xenoid-hwcomposer/build.sh", root / "native/xenoid-hwcomposer/README.txt",
-                root / "native/xenoid-gralloc/android_compat.h"])
+                root / "native/xenoid-gralloc/android_compat.h",
+                *(root / "native/xenoid-ui-reader").glob("*")])
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 (root / "qa/manifest.sha256").write_text("".join(

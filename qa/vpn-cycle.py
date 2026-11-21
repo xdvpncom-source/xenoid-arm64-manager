@@ -5,6 +5,7 @@ assignment are not queued. No app is selected from the current foreground window
 """
 
 import math
+import json
 import random
 import re
 import time
@@ -23,12 +24,19 @@ MIN_DISPLAY_DPI = 72
 DISPLAY_FPS = 20                       # None preserves current FPS; 0 restores native FPS.
 DISPLAY_SETUP_TIMEOUT = 180            # Initial native FPS setup may restart Android graphics.
 START_WAIT_SECONDS = (90, 120)
+COLD_START_APP = True                  # Close a surviving app/VPN session before each launch; preserve app data.
 AFTER_AD_WAIT_SECONDS = 5
 CONNECTED_WAIT_SECONDS = 100
 POLL_SECONDS = 2
-UI_INSPECTION_PRIORITY = -10           # None uses the runtime's default UI reader priority.
+UI_INSPECTION_PRIORITY = 0             # None uses the runtime's default UI reader priority.
+UI_ALL_WINDOWS = True                 # Read real WebView Close nodes and observed navigation controls.
 CRASH_POLL_SECONDS = 5
 CRASH_FALLBACK_SECONDS = 30
+# Idle waits use cheap focus reads between full UI inspections. Full reads still
+# happen periodically: an in-app overlay may not change Android's focused window.
+IDLE_FOCUS_POLL_SECONDS = 5
+IDLE_UI_MIN_SECONDS = 2
+IDLE_UI_MAX_SECONDS = 10
 ACTION_COOLDOWN_SECONDS = 2
 AD_READY_SECONDS = 180
 DIALOG_READY_SECONDS = 240
@@ -59,9 +67,16 @@ AD_CLOSE_SELECTORS = ()
 TERMS_CLOSE_SELECTORS = ()
 CONNECT_SELECTORS = ()
 CONNECT_POSITION = None               # Optional explicit (x, y); otherwise an observed Connect control is required.
-TAP_BACKEND = "native"                 # Official Xenoid input; "adb" is an explicit optional alternative.
-GEOMETRIC_AD_CLOSE = True              # Uses an observed clickable corner control on a recognized ad.
-TERMS_BACK_FALLBACK = False            # Enable only if Back is known to dismiss this app's terms dialog.
+TAP_BACKEND = "native"                 # Retained setting; this scenario accepts official native input only.
+GEOMETRIC_AD_CLOSE = False             # An anonymous corner can be an ad click-through, not Close.
+TERMS_BACK_FALLBACK = False            # Legacy setting; use an observed close control, never an ADB key.
+AD_LANDING_PACKAGES = ("com.android.vending",)  # Explicit destinations allowed after a recorded ad-close tap.
+AD_LANDING_RETURN_LIMIT = 1            # Tap only an observed native Android Back control.
+AD_LANDING_ORIGIN_BACK_LIMIT = 1       # After store Back, dismiss only the same originating ad.
+AD_MISSING_CLOSE_BACK_SECONDS = 15     # Grace after the initial dwell when a real AdActivity exposes no Close.
+AD_MISSING_CLOSE_BACK_LIMIT = 1        # Per semantic ad state, using only an observed native Back control.
+AD_LANDING_PROVENANCE_SECONDS = 120    # A store already foreground before an ad click is not recovered.
+AD_SAME_TARGET_ATTEMPT_LIMIT = 2        # Do not keep clicking an unchanged accessibility target.
 AD_ACTIVITY_HINTS = ("AdActivity", "Interstitial", "RewardedAd", "RewardedVideo", "AdUnitActivity")
 AD_ACTIVITY_NAMESPACE_PREFIXES = (
     "com.google.android.gms.ads.", "com.applovin.", "com.unity3d.services.ads.",
@@ -299,14 +314,25 @@ class Cycle:
         self.target_crash = None
         self.home_component = None
         self.home_checked = False
+        self.invalidate_idle_monitor()
+        self.ad_close_attempts = {}
+        self.ad_unsafe_targets = set()
+        self.last_ad_close = None
+        self.ad_landing_returns = 0
+        self.ad_landing_origin = None
+        self.missing_ad_close = None
+        self.missing_ad_close_backs = {}
+        self.last_ad_window = None
 
     def log(self, message):
         self.device.log(message)
 
     def observe(self):
         try:
-            window = (self.device.inspect_window() if UI_INSPECTION_PRIORITY is None
-                      else self.device.inspect_window(priority=UI_INSPECTION_PRIORITY))
+            options = {"windows": True} if UI_ALL_WINDOWS else {}
+            if UI_INSPECTION_PRIORITY is not None:
+                options["priority"] = UI_INSPECTION_PRIORITY
+            window = self.device.inspect_window(**options)
             self.last_observation_error = None
             return window if window.get("stable") else None
         except (RuntimeError, OSError) as error:
@@ -316,19 +342,19 @@ class Cycle:
                 self.last_observation_error = detail
             return None
 
+
     def tap(self, control, reason):
         return self.tap_point(*center(bounds(control)), reason)
 
     def tap_point(self, x, y, reason):
-        if TAP_BACKEND == "adb":
-            self.device.adb(["shell", "input", "tap", str(x), str(y)])
-        elif TAP_BACKEND == "native":
-            self.device.tap(x, y)
-        else:
-            raise ValueError("TAP_BACKEND must be 'adb' or 'native'")
+        self.invalidate_idle_monitor()
+        if TAP_BACKEND != "native":
+            raise ValueError("TAP_BACKEND must be 'native'; this scenario requires official Xenoid native input")
+        self.device.tap(x, y)
         self.last_action = time.monotonic()
         self.log("Input sent: " + reason)
         return True
+
 
     def check_target_crash(self):
         if self.target_crash:
@@ -423,6 +449,180 @@ class Cycle:
                 scored.append((20, control))
         return choose_unique(scored)
 
+    @staticmethod
+    def ad_target_key(window, control):
+        return (window.get("package"), window.get("component"),
+                control.get("resource_id", ""), normalized(control.get("text", "")),
+                normalized(control.get("content_desc", "")), bounds(control))
+
+    def ad_attempt_key(self, window, control):
+        # A later creative/dialog with the same Close ID gets its own budget.
+        # An unchanged hierarchy cannot consume the entire loop in repeated taps.
+        visible_state = tuple((item.get("resource_id", ""), item.get("class_name", ""),
+                               normalized(item.get("text", "")), normalized(item.get("content_desc", "")),
+                               bounds(item), bool(item.get("clickable")))
+                              for item in controls(window))
+        return self.ad_target_key(window, control), visible_state
+
+    def ad_close_control(self, window):
+        selected = self.close_control(window, AD_CLOSE_SELECTORS,
+                                      geometric=GEOMETRIC_AD_CLOSE and is_ad(window))
+        if selected is None:
+            return None
+        key = self.ad_target_key(window, selected)
+        attempt = self.ad_attempt_key(window, selected)
+        if attempt in self.ad_unsafe_targets or self.ad_close_attempts.get(attempt, 0) >= AD_SAME_TARGET_ATTEMPT_LIMIT:
+            return None
+        return selected
+
+    def close_ad_control(self, window, selected):
+        key = self.ad_target_key(window, selected)
+        self.tap(selected, "close advertisement/popup")
+        attempt = self.ad_attempt_key(window, selected)
+        self.ad_close_attempts[attempt] = self.ad_close_attempts.get(attempt, 0) + 1
+        if is_ad(window):
+            self.last_ad_close = {"target": attempt, "at": time.monotonic(),
+                                  "component": window.get("component", ""),
+                                  "package": window.get("package", "")}
+        return True
+
+    def service_missing_ad_close(self, window):
+        """Use one observed native Back when a confirmed ad exposes no Close.
+
+        Main screens and permission/terms dialogs never enter this path. Numeric
+        progress and accessibility window IDs do not create a new ad identity.
+        A Back attempt is not readiness: callers still verify the resulting UI.
+        """
+        if (window.get("stable") is not True or not is_ad_activity(window)
+                or is_terms(window) or is_notification(window) or is_crash_dialog(window)
+                or window.get("package") == VPN_PACKAGE):
+            self.missing_ad_close = None
+            return False
+        # An ambiguous pair of real Close controls is not an absent Close.
+        if any(self.close_control({**window, "controls": [control]}, AD_CLOSE_SELECTORS,
+                                  geometric=False) is not None for control in controls(window)):
+            self.missing_ad_close = None
+            return False
+        def semantic_text(value):
+            return re.sub(r"\d+(?:\.\d+)?", "#", normalized(value))
+        content = tuple(sorted({(control.get("class_name", ""), control.get("resource_id", ""),
+                                 semantic_text(control.get("text", "")), semantic_text(control.get("content_desc", "")),
+                                 bool(control.get("clickable"))) for control in controls(window)}))
+        key = (window.get("package"), self.canonical_component(window.get("component", "")), content)
+        now = time.monotonic()
+        if self.missing_ad_close is None or self.missing_ad_close[0] != key:
+            self.missing_ad_close = key, now
+            return False
+        if (now - self.missing_ad_close[1] < AD_MISSING_CLOSE_BACK_SECONDS
+                or now - self.last_action < ACTION_COOLDOWN_SECONDS
+                or self.missing_ad_close_backs.get(key, 0) >= AD_MISSING_CLOSE_BACK_LIMIT):
+            return False
+        back = self.observed_navigation_back(window)
+        if back is None:
+            return False
+        self.tap(back, "dismiss ad with no exposed Close via observed Android Back")
+        self.missing_ad_close_backs[key] = self.missing_ad_close_backs.get(key, 0) + 1
+        self.missing_ad_close = None
+        return True
+
+    def return_from_ad_landing(self, window):
+        """Use a freshly observed SystemUI Back control after an ad redirect.
+
+        Sending Back is not proof that the ad closed. Both callers still require
+        fresh unobstructed app observations afterwards. No key-injection fallback.
+        """
+        now = time.monotonic()
+        origin = self.ad_landing_origin
+        if origin is not None:
+            same_ad = (window.get("stable") is True and is_ad_activity(window)
+                       and window.get("package") == origin["package"]
+                       and self.canonical_component(window.get("component", "")) == origin["component"])
+            if now - origin["at"] > AD_LANDING_PROVENANCE_SECONDS:
+                self.ad_landing_origin = None
+            elif same_ad:
+                # Store Back can reveal the same ad instead of the app. Only
+                # that proven origin receives one separately bounded Back.
+                # An unchanged ad after this tap still fails normal readiness.
+                if (origin["attempts"] >= AD_LANDING_ORIGIN_BACK_LIMIT
+                        or now - self.last_action < ACTION_COOLDOWN_SECONDS):
+                    return False
+                selected = self.observed_navigation_back(window)
+                if selected is None:
+                    return False
+                self.tap(selected, "dismiss originating ad after store return via observed Android Back")
+                origin["attempts"] += 1
+                return True
+            elif window.get("package") == self.package and not is_ad(window):
+                self.ad_landing_origin = None
+        previous = self.last_ad_close
+        if (window.get("package") not in AD_LANDING_PACKAGES or previous is None
+                or now - previous["at"] > AD_LANDING_PROVENANCE_SECONDS):
+            return False
+        self.ad_unsafe_targets.add(previous["target"])
+        if self.ad_landing_returns >= AD_LANDING_RETURN_LIMIT:
+            raise RuntimeError("Configured ad landing return limit exhausted; assigned app is not ready")
+        selected = self.observed_navigation_back(window)
+        if selected is None or now - self.last_action < ACTION_COOLDOWN_SECONDS:
+            return False
+        self.ad_landing_returns += 1
+        self.log("Ad close reached configured external package: " + window["package"]
+                 + "; using observed Android Back without reset")
+        self.tap(selected, "return from ad landing via observed Android Back")
+        self.ad_landing_origin = {"package": previous["package"],
+                                  "component": self.canonical_component(previous["component"]),
+                                  "at": time.monotonic(), "attempts": 0}
+        return True
+
+    @staticmethod
+    def observed_navigation_back(window):
+        if window.get("stable") is not True or type(window.get("display_id")) is not int:
+            return None
+        matches = []
+        for control in window.get("navigation_controls", ()):
+            box = bounds(control)
+            viewport = control.get("window_bounds")
+            if (control.get("resource_id") != "com.android.systemui:id/back"
+                    or control.get("package") != "com.android.systemui"
+                    or control.get("enabled") is not True or control.get("clickable") is not True
+                    or control.get("window_type") != "TYPE_SYSTEM"
+                    or control.get("window_title") != "Navigation bar"
+                    or type(control.get("window_id")) is not int or type(control.get("window_layer")) is not int
+                    or control.get("display_id") != window.get("display_id")
+                    or box is None or not isinstance(viewport, (list, tuple)) or len(viewport) != 4
+                    or any(type(value) is not int for value in viewport)
+                    or not (viewport[0] <= box[0] < box[2] <= viewport[2]
+                            and viewport[1] <= box[1] < box[3] <= viewport[3])):
+                continue
+            matches.append((1, control))
+        return choose_unique(matches)
+
+    def ad_failure(self, message):
+        window = self.last_ad_window or {}
+        owner = str(window.get("package", "unknown"))
+        component = str(window.get("component", "unknown"))
+        # Diagnose the exact already-observed state that exhausted the budget.
+        # Reading again here could hide a transient blocker or add UI work.
+        visible = controls(window)
+        diagnostic = {"stable": window.get("stable") is True,
+                      "loading": is_loading(window, self.package),
+                      "terms": is_terms(window), "notification": is_notification(window),
+                      "ad": is_ad(window), "blocking_ad": is_blocking_ad(window, self.package),
+                      "control_count": len(window.get("controls", ())),
+                      "enabled_control_count": len(visible),
+                      "connect_label_matches": sum(control.get("package", self.package) == self.package
+                                                    and bool(labels(control) & CONNECT_WORDS)
+                                                    for control in visible),
+                      "connect_selector_matches": sum(any(matches(control, selector) for selector in CONNECT_SELECTORS)
+                                                       for control in visible),
+                      "active_windows": [{key: item.get(key) for key in
+                                          ("window_id", "window_layer", "window_type", "window_bounds",
+                                           "window_active", "window_focused", "display_id")}
+                                         for item in window.get("windows", ())
+                                         if item.get("window_active") or item.get("window_focused")]}
+        return RuntimeError(message + " | foreground=" + owner + " | component=" + component
+                            + " | recorded_close_attempts=" + str(sum(self.ad_close_attempts.values()))
+                            + " | predicates=" + json.dumps(diagnostic, separators=(",", ":")))
+
     def terms_close_control(self, window):
         selected = self.close_control(window, TERMS_CLOSE_SELECTORS)
         if selected:
@@ -457,6 +657,8 @@ class Cycle:
             return self.close_crash_dialog(window)
         if time.monotonic() - self.last_action < ACTION_COOLDOWN_SECONDS:
             return False
+        if ads and self.return_from_ad_landing(window):
+            return True
         package = window.get("package")
         if package == VPN_PACKAGE:
             if not vpn:
@@ -478,40 +680,101 @@ class Cycle:
             selected = self.terms_close_control(window)
             if selected:
                 return self.tap(selected, "close terms/disclosure")
-            if TERMS_BACK_FALLBACK:
-                self.device.back()
-                self.last_action = time.monotonic()
-                self.log("Input sent: configured Back for terms/disclosure")
-                return True
             return False
         if ads:
-            selected = self.close_control(window, AD_CLOSE_SELECTORS,
-                                          geometric=GEOMETRIC_AD_CLOSE and is_ad(window))
+            selected = self.ad_close_control(window)
             if selected:
-                return self.tap(selected, "close advertisement/popup")
+                return self.close_ad_control(window, selected)
+            return self.service_missing_ad_close(window)
         return False
 
+
     def wait(self, seconds, *, dialogs=False, vpn=False, ads=False, fail_on_target_crash=True):
+        if dialogs:
+            values = (IDLE_FOCUS_POLL_SECONDS, IDLE_UI_MIN_SECONDS, IDLE_UI_MAX_SECONDS)
+            if (any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0
+                    for value in values) or IDLE_UI_MAX_SECONDS < IDLE_UI_MIN_SECONDS):
+                raise ValueError("Use positive finite idle polling intervals; maximum must cover minimum")
+            self.invalidate_idle_monitor()
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
+            handled = False
             if dialogs:
-                window = self.observe()
+                window = self.observe_idle()
                 if window:
-                    self.service_dialog(window, vpn=vpn, ads=ads)
+                    handled = self.service_dialog(window, vpn=vpn, ads=ads)
+                if handled:
+                    self.invalidate_idle_monitor()
             else:
                 self.service_crash_once()
             if fail_on_target_crash:
                 self.check_target_crash()
+            # After input, immediately read again rather than reusing the old
+            # controls or waiting for the idle backoff. The action cooldown still
+            # applies to that fresh window and prevents a repeated instant tap.
+            if handled:
+                continue
             remaining = deadline - time.monotonic()
             if remaining > 0:
-                cadence = POLL_SECONDS if dialogs else CRASH_POLL_SECONDS
+                if dialogs:
+                    until_ui = self._idle_ui_due - time.monotonic()
+                    cadence = min(IDLE_FOCUS_POLL_SECONDS,
+                                  until_ui if until_ui > 0 else IDLE_UI_MIN_SECONDS)
+                else:
+                    cadence = CRASH_POLL_SECONDS
                 time.sleep(min(cadence, remaining))
+
+    def invalidate_idle_monitor(self):
+        self._idle_focus = None
+        self._idle_ui_due = float("-inf")
+        self._idle_ui_interval = None
+        self._idle_action_seen = self.last_action
+
+    def observe_idle(self):
+        """Return only a fresh full snapshot, or None when no read is due.
+
+        No hierarchy or coordinates are cached. Focus changes and crash hints
+        bypass the backoff; periodic full reads cover same-window UI changes.
+        """
+        now = time.monotonic()
+        try:
+            focus = self.device.adb(CRASH_FOCUS_COMMAND)
+            self.last_crash_probe_error = None
+        except (RuntimeError, OSError) as error:
+            if str(error) != self.last_crash_probe_error:
+                self.log("Waiting for idle-window probe: " + str(error))
+                self.last_crash_probe_error = str(error)
+            focus = ""
+        signature = normalized(focus)
+        ordinary = bool(re.search(r"mCurrentFocus=Window\{[^}]*\bu\d+\s+[^ /]+/[^}]+\}", str(focus)))
+        hinted = any(marker in signature for marker in CRASH_FOCUS_HINTS)
+        changed = signature != self._idle_focus or self.last_action != self._idle_action_seen
+        if not (changed or hinted or not ordinary or now >= self._idle_ui_due):
+            return None
+        self._idle_focus = signature
+        self._idle_action_seen = self.last_action
+        window = self.observe()
+        finished = time.monotonic()
+        if window is None or changed or hinted or not ordinary:
+            interval = IDLE_UI_MIN_SECONDS
+        else:
+            interval = min(IDLE_UI_MAX_SECONDS,
+                           (self._idle_ui_interval or IDLE_UI_MIN_SECONDS) * 2)
+        self._idle_ui_interval = interval
+        self._idle_ui_due = finished + interval
+        return window
 
     def dismiss_ads(self):
         deadline = time.monotonic() + AD_READY_SECONDS if AD_READY_SECONDS else None
         quiet_since = None
         while deadline is None or time.monotonic() < deadline:
             window = self.observe()
+            if window:
+                self.last_ad_window = window
+                if self.return_from_ad_landing(window):
+                    quiet_since = None
+                    time.sleep(POLL_SECONDS)
+                    continue
             if window and is_crash_dialog(window):
                 self.close_crash_dialog(window)
                 self.check_target_crash()
@@ -521,10 +784,11 @@ class Cycle:
             if window and (is_terms(window) or is_notification(window) or window.get("package") == VPN_PACKAGE):
                 return  # These dialogs are handled after the requested five-second pause.
             loading = window and is_loading(window, self.package)
-            selected = self.close_control(window, AD_CLOSE_SELECTORS,
-                                          geometric=GEOMETRIC_AD_CLOSE and is_ad(window)) if window and not loading else None
+            selected = self.ad_close_control(window) if window and not loading else None
             if selected and time.monotonic() - self.last_action >= ACTION_COOLDOWN_SECONDS:
-                self.tap(selected, "close advertisement/popup")
+                self.close_ad_control(window, selected)
+                quiet_since = None
+            elif window and self.service_missing_ad_close(window):
                 quiet_since = None
             elif window and not loading and not is_blocking_ad(window, self.package) and window.get("package") == self.package:
                 if quiet_since is None:
@@ -534,7 +798,8 @@ class Cycle:
             else:
                 quiet_since = None
             time.sleep(POLL_SECONDS)
-        raise RuntimeError("The advertisement did not expose a usable close control")
+        raise self.ad_failure("The advertisement did not expose a usable close control")
+
 
     def is_home_window(self, window):
         if window.get("package") == self.package:
@@ -565,6 +830,12 @@ class Cycle:
         reopened_from_home = False
         while deadline is None or time.monotonic() < deadline:
             window = self.observe()
+            if window:
+                self.last_ad_window = window
+                if ads and self.return_from_ad_landing(window):
+                    quiet_since = None
+                    time.sleep(POLL_SECONDS)
+                    continue
             # A stale Android permission task can outlive the force-stopped app.
             # Closing it may reveal HOME instead of returning to the target app.
             # Recover only that resolved HOME activity, never an arbitrary app.
@@ -581,7 +852,8 @@ class Cycle:
                 time.sleep(POLL_SECONDS)
                 continue
             loading = window and is_loading(window, self.package)
-            handled = window and not loading and self.service_dialog(window, ads=ads)
+            handled = (window and ((loading and ads and self.service_missing_ad_close(window))
+                       or (not loading and self.service_dialog(window, ads=ads))))
             self.check_target_crash()
             blocked = (not window or loading or is_crash_dialog(window) or is_terms(window) or is_notification(window)
                        or window.get("package") == VPN_PACKAGE or (ads and is_blocking_ad(window, self.package)))
@@ -595,7 +867,8 @@ class Cycle:
             else:
                 quiet_since = None
             time.sleep(POLL_SECONDS)
-        raise RuntimeError("App did not return to an unobstructed foreground window")
+        raise self.ad_failure("App did not return to an unobstructed foreground window")
+
 
     def connect(self, window=None):
         deadline = time.monotonic() + CONNECT_READY_SECONDS if CONNECT_READY_SECONDS else None
@@ -627,7 +900,7 @@ class Cycle:
                 break
             time.sleep(min(POLL_SECONDS, remaining) if remaining is not None else POLL_SECONDS)
             window = None
-        raise RuntimeError("No unique Connect control was found; set CONNECT_SELECTORS or CONNECT_POSITION")
+        raise self.ad_failure("No unique Connect control was found; set CONNECT_SELECTORS or CONNECT_POSITION")
 
     def vpn_allowed(self):
         try:
@@ -653,7 +926,8 @@ class Cycle:
                 if last_loading and not loading_logged:
                     self.log("Waiting for app server list loading to finish")
                     loading_logged = True
-                handled = not last_loading and self.service_dialog(window, vpn=True, ads=True)
+                handled = ((last_loading and self.service_missing_ad_close(window))
+                           or (not last_loading and self.service_dialog(window, vpn=True, ads=True)))
                 self.check_target_crash()
                 # After any click, obtain a fresh hierarchy before declaring authorization.
                 unobstructed = (not last_loading and window.get("package") == self.package and not is_crash_dialog(window)
@@ -688,6 +962,9 @@ class Cycle:
         self.device.configure_run(package=self.package)
         failure = None
         try:
+            if COLD_START_APP:
+                self.device.app_close()
+                self.log("Existing app instance closed before launch; app data preserved")
             self.device.app_open()
             self.log("App opened: " + self.package)
             initial_wait = random.randint(*START_WAIT_SECONDS)
@@ -734,6 +1011,7 @@ class Cycle:
                        "timeout": GOOGLE_CACHE_TIMEOUT} if cache_packages else None)
         while True:
             try:
+                self.invalidate_idle_monitor()
                 result = self.device.regenerate(timeout=REGENERATE_TIMEOUT, operation_key=operation_key,
                                                 post_cache=post_cache)
                 required = ("ok", "native_ready", "profile_ready", "container_id_preserved",
@@ -775,6 +1053,7 @@ class Cycle:
                 self.log("Waiting to restore display after regeneration: " + str(error))
                 time.sleep(REGENERATE_RETRY_SECONDS)
         self.log("Official Xenoid regeneration committed; Android reload and display settings verified")
+        self.invalidate_idle_monitor()
         return True
 
 

@@ -31,7 +31,7 @@ class FakeDevice:
     def set_frame_rate(self,fps,timeout=None):self.trace.append(('fps',self.clock.now,fps,timeout));return {'fps':fps,'changed':False}
     def clear_data(self,package,user):self.trace.append(('clear',self.clock.now,package,user));return 'Success'
     def back(self):self.trace.append(('back',self.clock.now));self.state='notification'
-    def inspect_window(self, *, priority=None):
+    def inspect_window(self, *, priority=None, windows=False):
         self.trace.append(('inspect',self.clock.now,priority))
         if self.state=='startup':
             return window('AdActivity',[control('Advertisement',box=(0,0,1000,1000)),control('Close',box=(900,10,940,50))])
@@ -75,11 +75,12 @@ class Tests(unittest.TestCase):
         self.regeneration.start()
         self.addCleanup(self.regeneration.stop)
 
-    def test_adb_tap_remains_source_selectable(self):
+    def test_scenario_rejects_adb_tap_backend_without_injection(self):
         clock=Clock();d=FakeDevice(clock);c=m.Cycle(d,'qa.vpn')
         with patch.object(m,'time',clock),patch.object(m,'TAP_BACKEND','adb'):
-            c.tap(control('Close',box=(10,60,28,90)),'close')
-        self.assertIn(('adb',0,['shell','input','tap','19','75']),d.trace)
+            with self.assertRaisesRegex(ValueError,'official Xenoid'):
+                c.tap(control('Close',box=(10,60,28,90)),'close')
+        self.assertFalse(any(row[0] in {'adb','tap'} for row in d.trace))
     def test_default_tap_uses_official_native_input(self):
         clock=Clock();d=FakeDevice(clock);c=m.Cycle(d,'qa.vpn')
         with patch.object(m,'time',clock):
@@ -99,7 +100,7 @@ class Tests(unittest.TestCase):
     def test_none_ui_priority_uses_legacy_no_keyword_call(self):
         d=FakeDevice(Clock());c=m.Cycle(d,'qa.vpn')
         d.inspect_window=lambda:window('MainActivity',[])
-        with patch.object(m,'UI_INSPECTION_PRIORITY',None):
+        with patch.object(m,'UI_INSPECTION_PRIORITY',None),patch.object(m,'UI_ALL_WINDOWS',False):
             self.assertIsNotNone(c.observe())
     def test_exact_complete_order_timing_and_reset(self):
         clock=Clock();d=FakeDevice(clock)
@@ -109,10 +110,33 @@ class Tests(unittest.TestCase):
         self.assertEqual(taps[0][1],97)
         self.assertGreaterEqual(taps[1][1]-taps[0][1],5)
         closes=[row for row in d.trace if row[0]=='close'];clears=[row for row in d.trace if row[0]=='clear']
-        self.assertEqual(len(closes),1);self.assertEqual(len(clears),1)
+        self.assertEqual(len(closes),2);self.assertEqual(len(clears),1)
+        self.assertLess(d.trace.index(closes[0]), next(i for i,row in enumerate(d.trace) if row[0]=='open'))
         approval_log=next(row for row in d.trace if row[0]=='log' and str(row[2]).startswith('Android VPN permission confirmed'))
-        self.assertEqual(closes[0][1]-approval_log[1],100)
+        self.assertEqual(closes[-1][1]-approval_log[1],100)
         self.assertEqual(clears[0][2:],('qa.vpn','0'))
+
+    def test_surviving_connecting_app_is_closed_before_launch_without_initial_data_clear(self):
+        clock=Clock();d=FakeDevice(clock);d.state='connected'
+        opened=[]
+        def open_existing():
+            opened.append(d.state)
+            d.trace.append(('open',clock.now))
+            if d.state=='closed':d.state='startup'
+        d.app_open=open_existing
+        with patch.object(m,'time',clock),patch.object(m.random,'randint',return_value=97):
+            m.Cycle(d,'qa.vpn').run()
+        self.assertEqual(opened,['closed'])
+        clear_index=next(i for i,row in enumerate(d.trace) if row[0]=='clear')
+        tap_indices=[i for i,row in enumerate(d.trace) if row[0]=='tap']
+        self.assertGreater(clear_index,max(tap_indices))
+
+    def test_script_can_preserve_existing_app_instance_explicitly(self):
+        clock=Clock();d=FakeDevice(clock)
+        with patch.object(m,'time',clock),patch.object(m,'COLD_START_APP',False),patch.object(m.random,'randint',return_value=97):
+            m.Cycle(d,'qa.vpn').run()
+        opened=next(i for i,row in enumerate(d.trace) if row[0]=='open')
+        self.assertFalse(any(row[0] in {'close','clear'} for row in d.trace[:opened]))
     def test_assignment_missing_fails_before_open_or_clear(self):
         clock=Clock();d=FakeDevice(clock);d.package=''
         with patch.object(m,'Device',return_value=d),patch.object(m,'time',clock):

@@ -7,7 +7,7 @@ Install Xenoid on an ARM64 Ubuntu server and manage headless Android 13 instance
 Use an **ARM64 (aarch64) server running Ubuntu 24.04**, such as a Hetzner CAX server. The installer requires root access, outbound HTTPS, and free disk space for the build toolchain, container images, and Android data. Install and management commands use the same operator account and Xenoid registry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.23/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.24/install.sh | sudo -H bash -s -- --accept-android-licenses
 ```
 
 The `--accept-android-licenses` flag accepts the Android SDK licenses for the pinned build tools from Google. The installer prepares the host and starts device `1`. Allow tens of minutes for the first build on a small server. The CLI is installed as `/usr/local/bin/xenoid-fleet` and the managed checkout lives under `/opt/xenoid-fleet/upstream`. Rerunning the installer reuses the toolchain and converges device `1` with its existing data.
@@ -25,7 +25,7 @@ sudo -H xenoid-fleet run 1 -- adb shell getprop sys.boot_completed
 Use `--install-only` to prepare the host before creating the first device or upgrade an existing installation without issuing a device start. Upgrades also refresh enabled proxies on already-running devices when their native control/process revision has not been verified.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.23/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.24/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
 ```
 
 ## Devices
@@ -120,7 +120,7 @@ still fail ownership checks.
 
 ### Panel-controlled QA defaults
 
-Version v0.1.23 installs the QA SDK/backend, the native logical-to-raw input
+Version v0.1.24 installs the QA SDK/backend, the native logical-to-raw input
 coordinate correction, and configurable resource defaults for all instances,
 including devices with no APK or shared script assignment. The stock pinned
 Redroid image, each native instance identity, persistent data, and saved proxy
@@ -152,6 +152,34 @@ unambiguous focused window on the selected display (display 0 by default)
 and retains the before/after focus checks around UI inspection and official native input. System dialogs therefore
 remain visible to the script after an earlier ANR.
 
+`Device.inspect_window(windows=True)` reads Android's stock all-window tree,
+including real close buttons exposed outside the main WebView and separate
+SystemUI navigation controls. The v17 scenario uses these semantic controls;
+it does not guess an X coordinate. Its bounded store-return recovery applies
+only to a recently observed ad-close redirect and uses a freshly observed
+SystemUI Back button through `Device.tap`. The SDK's native touch route is
+unchanged. A successful close still requires a fresh unobstructed app view.
+
+`qa_ui_reader.py` keeps one private stock-UIAutomator JVM per script iteration,
+so repeated observations do not repeatedly start ART and compile the command.
+Every request still invokes Android's stock DumpCommand. The helper accepts
+requests only over its private ADB pipe and implements no input actions or
+network listener. The broker closes it at iteration completion and before
+regeneration. PID, process start time, namespace, UID and private-path checks
+fence cleanup to that helper and its compiler children. Existing positional
+`inspect_window` calls remain supported; `reader="legacy"` explicitly selects
+the old one-shot reader for diagnosis. A failed persistent read is reported,
+without silently substituting another reader or input path.
+
+For a confirmed full-screen AdActivity with no individually recognized Close, the v17 scenario can use a freshly observed SystemUI Back after the editable 15-second grace. It permits one attempt per semantic ad state and still requires a fresh unobstructed app view. MainActivity, terms, permission and VPN windows do not use this path.
+
+The v17 scenario closes any surviving app process before launch (`COLD_START_APP=True`), preserving app data until the scheduled end-of-cycle clear. This lets a stopped or replaced run start from a fresh app process instead of a surviving Connecting/Disconnect screen. Set the script option to False to preserve the existing process. Ad retry identity uses semantic control/content fields; transient accessibility window IDs are diagnostic metadata only.
+
+The v17 scenario's idle monitor checks focus every five seconds and takes a
+full fresh UI observation when focus changes or at most ten seconds after the
+last full observation. Timings are editable in the script. Controls and touch
+coordinates are never reused from a cached observation after an action.
+
 The default profile is `/etc/xenoid-fleet/qa-resources.json`:
 
 ```json
@@ -177,8 +205,8 @@ devices, so changing ad selectors or timing does not require a Fleet upgrade.
 `qa/vpn-cycle.py` is the release-time reference protected by the installer
 manifest. The current panel workflow is also mirrored in
 [`examples/current-vpn-cycle.py`](examples/current-vpn-cycle.py) and exported as
-the [`vpn-cycle-v15.py` release asset](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.23/vpn-cycle-v15.py)
-with a [SHA-256 sidecar](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.23/vpn-cycle-v15.py.sha256).
+the [`vpn-cycle-v17.py` release asset](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.24/vpn-cycle-v17.py)
+with a [SHA-256 sidecar](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.24/vpn-cycle-v17.py.sha256).
 The historical v0.1.17 `vpn-cycle-v14.py`, v0.1.16 `vpn-cycle-v14.py`, v0.1.15 `vpn-cycle-v13.py`, v0.1.14 `vpn-cycle-v13.py`, v0.1.13 `vpn-cycle-v12.py` and v0.1.12 `vpn-cycle-v11.py` assets remain unchanged. Updating the
 editable workflow never rewrites an existing release tag or its installer pins.
 

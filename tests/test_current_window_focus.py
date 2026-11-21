@@ -74,18 +74,18 @@ class CurrentWindowTests(unittest.TestCase):
   for seconds,priority in ((0,None),(30,None),(30,-10)):
    with self.subTest(seconds=seconds,priority=priority):
     b=self.broker(command_timeout=seconds);b.adb=MagicMock(return_value=XML+'\nXENOID_UI_FOCUS_AFTER\n'+CURRENT)
-    b.ui_hierarchy(None,priority);command=b.adb.call_args.args[0][1]
+    b.ui_hierarchy(None,priority,reader='legacy');command=b.adb.call_args.args[0][1]
     self.assertIn('dumpsys window displays',command);self.assertEqual(b._hierarchy_focus,EXPECTED)
  def test_inspector_stays_stable_on_actual_anr_and_exposes_real_close_control(self):
   b=self.broker();b.adb=MagicMock(side_effect=[CURRENT,XML+'\nXENOID_UI_FOCUS_AFTER\n'+CURRENT])
-  result=b.inspect_window();self.assertTrue(result['stable']);self.assertEqual(result['component'],'Application Not Responding: system')
+  result=b.inspect_window(reader='legacy');self.assertTrue(result['stable']);self.assertEqual(result['component'],'Application Not Responding: system')
   self.assertEqual(result['controls'][0]['resource_id'],'android:id/aerr_close');self.assertEqual(b.adb.call_count,2)
  def test_inspector_fallback_focus_queries_both_use_current_only(self):
   b=self.broker();b.adb=MagicMock(return_value=CURRENT);b.ui_hierarchy=lambda *_args:XML
   self.assertTrue(b.inspect_window()['stable']);self.assertEqual([call.args[0] for call in b.adb.call_args_list],[b.focus_command()]*2)
  def test_inspector_uses_last_proven_native_display(self):
   b=self.broker();b._native_display_id=1;b.adb=MagicMock(side_effect=[CURRENT+OTHER,XML+'\nXENOID_UI_FOCUS_AFTER\n'+CURRENT+OTHER])
-  result=b.inspect_window();self.assertTrue(result['stable']);self.assertEqual(result['package'],'other.app')
+  result=b.inspect_window(reader='legacy');self.assertTrue(result['stable']);self.assertEqual(result['package'],'other.app')
  def test_legacy_foreground_package_resolution_queries_current_only(self):
   b=self.broker();b.adb=MagicMock(return_value=CURRENT.replace('Window{d765dcd u0 Application Not Responding: system}','Window{d765dcd u0 target.app/.Main}'))
   self.assertEqual(b.verify_test_app(),'target.app');b.adb.assert_called_once_with(['shell','dumpsys','window','displays'])

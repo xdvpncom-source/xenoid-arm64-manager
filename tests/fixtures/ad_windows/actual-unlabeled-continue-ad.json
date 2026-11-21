@@ -1,0 +1,5090 @@
+{
+  "capture": "Stopped-worker stock all-windows capture; visible Continue is an unlabeled Button, not a Close. Marketing copy and tracking strings redacted.",
+  "window": {
+    "package": "v2.vpn.fast",
+    "component": "v2.vpn.fast/com.google.android.gms.ads.AdActivity",
+    "stable": true,
+    "controls": [
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.LinearLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "android:id/content",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.RelativeLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.webkit.WebView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.webkit.WebView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          335
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          335
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          335
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          335
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          335
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          335
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          335
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          335
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          335
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          9
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          232,
+          40,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          143,
+          119,
+          200,
+          231
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          9,
+          139,
+          190,
+          335
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          19,
+          19,
+          180,
+          305
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          56,
+          148,
+          143,
+          297
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          59,
+          150,
+          141,
+          295
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          59,
+          171,
+          149,
+          203
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          131,
+          257,
+          155,
+          281
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          138,
+          264,
+          148,
+          274
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          126,
+          146,
+          157,
+          175
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          198,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          198,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          1,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          1,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          144
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "[redacted advertisement copy]",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          52,
+          200,
+          91
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          144
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "[redacted advertisement copy]",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          52,
+          200,
+          91
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          144
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "[redacted advertisement copy]",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          52,
+          200,
+          91
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          141
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          141
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "[redacted advertisement copy]",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          31,
+          200,
+          88
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          198,
+          0,
+          200,
+          141
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "[redacted advertisement copy]",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          198,
+          31,
+          200,
+          70
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          1,
+          141
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "[redacted advertisement copy]",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          31,
+          1,
+          70
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          92,
+          200,
+          144
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          62,
+          110,
+          72,
+          126
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          127,
+          110,
+          137,
+          126
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          9,
+          9,
+          64,
+          64
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "[redacted advertisement copy]",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          303,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.Image",
+        "text": "[redacted ad tracking]",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          1,
+          1
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.Image",
+        "text": "B37143528",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          5,
+          1,
+          7
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.Image",
+        "text": "[redacted ad tracking]",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          5,
+          2,
+          7
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          4
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          194,
+          3
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          193,
+          3
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          193,
+          0,
+          199,
+          3
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          178,
+          0,
+          200,
+          22
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          168,
+          0,
+          200,
+          32
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          153,
+          2,
+          198,
+          18
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          138,
+          0,
+          200,
+          33
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          153,
+          2,
+          198,
+          18
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "Continue",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          160,
+          4,
+          184,
+          17
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          178,
+          0,
+          200,
+          22
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.Button",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          183,
+          4,
+          196,
+          17
+        ],
+        "enabled": true,
+        "clickable": true
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "resource_id": "",
+        "class_name": "android.widget.TextView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          335
+        ],
+        "enabled": true,
+        "clickable": false
+      }
+    ],
+    "truncated": false,
+    "display_id": 0,
+    "navigation_controls": [
+      {
+        "display_id": 0,
+        "window_id": 1177,
+        "window_layer": 1,
+        "window_type": "TYPE_SYSTEM",
+        "window_title": "Navigation bar",
+        "window_bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "window_active": false,
+        "window_focused": false,
+        "resource_id": "com.android.systemui:id/navigation_bar_frame",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.systemui",
+        "bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1177,
+        "window_layer": 1,
+        "window_type": "TYPE_SYSTEM",
+        "window_title": "Navigation bar",
+        "window_bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "window_active": false,
+        "window_focused": false,
+        "resource_id": "com.android.systemui:id/navigation_bar_view",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.systemui",
+        "bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1177,
+        "window_layer": 1,
+        "window_type": "TYPE_SYSTEM",
+        "window_title": "Navigation bar",
+        "window_bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "window_active": false,
+        "window_focused": false,
+        "resource_id": "com.android.systemui:id/navigation_inflater",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.systemui",
+        "bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1177,
+        "window_layer": 1,
+        "window_type": "TYPE_SYSTEM",
+        "window_title": "Navigation bar",
+        "window_bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "window_active": false,
+        "window_focused": false,
+        "resource_id": "com.android.systemui:id/horizontal",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.systemui",
+        "bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1177,
+        "window_layer": 1,
+        "window_type": "TYPE_SYSTEM",
+        "window_title": "Navigation bar",
+        "window_bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "window_active": false,
+        "window_focused": false,
+        "resource_id": "com.android.systemui:id/nav_buttons",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.systemui",
+        "bounds": [
+          4,
+          334,
+          196,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1177,
+        "window_layer": 1,
+        "window_type": "TYPE_SYSTEM",
+        "window_title": "Navigation bar",
+        "window_bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "window_active": false,
+        "window_focused": false,
+        "resource_id": "com.android.systemui:id/ends_group",
+        "class_name": "android.widget.LinearLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.systemui",
+        "bounds": [
+          4,
+          334,
+          196,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1177,
+        "window_layer": 1,
+        "window_type": "TYPE_SYSTEM",
+        "window_title": "Navigation bar",
+        "window_bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "window_active": false,
+        "window_focused": false,
+        "resource_id": "",
+        "class_name": "android.widget.RelativeLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.systemui",
+        "bounds": [
+          4,
+          334,
+          23,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1177,
+        "window_layer": 1,
+        "window_type": "TYPE_SYSTEM",
+        "window_title": "Navigation bar",
+        "window_bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "window_active": false,
+        "window_focused": false,
+        "resource_id": "",
+        "class_name": "android.widget.RelativeLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.systemui",
+        "bounds": [
+          23,
+          334,
+          61,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1177,
+        "window_layer": 1,
+        "window_type": "TYPE_SYSTEM",
+        "window_title": "Navigation bar",
+        "window_bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "window_active": false,
+        "window_focused": false,
+        "resource_id": "com.android.systemui:id/back",
+        "class_name": "android.widget.ImageView",
+        "text": "",
+        "content_desc": "Back",
+        "package": "com.android.systemui",
+        "bounds": [
+          24,
+          334,
+          60,
+          356
+        ],
+        "enabled": true,
+        "clickable": true
+      },
+      {
+        "display_id": 0,
+        "window_id": 1177,
+        "window_layer": 1,
+        "window_type": "TYPE_SYSTEM",
+        "window_title": "Navigation bar",
+        "window_bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "window_active": false,
+        "window_focused": false,
+        "resource_id": "",
+        "class_name": "android.widget.RelativeLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.systemui",
+        "bounds": [
+          138,
+          334,
+          176,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1177,
+        "window_layer": 1,
+        "window_type": "TYPE_SYSTEM",
+        "window_title": "Navigation bar",
+        "window_bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "window_active": false,
+        "window_focused": false,
+        "resource_id": "com.android.systemui:id/recent_apps",
+        "class_name": "android.widget.ImageView",
+        "text": "",
+        "content_desc": "Overview",
+        "package": "com.android.systemui",
+        "bounds": [
+          139,
+          334,
+          175,
+          356
+        ],
+        "enabled": true,
+        "clickable": true
+      },
+      {
+        "display_id": 0,
+        "window_id": 1177,
+        "window_layer": 1,
+        "window_type": "TYPE_SYSTEM",
+        "window_title": "Navigation bar",
+        "window_bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "window_active": false,
+        "window_focused": false,
+        "resource_id": "",
+        "class_name": "android.widget.RelativeLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.systemui",
+        "bounds": [
+          176,
+          334,
+          196,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1177,
+        "window_layer": 1,
+        "window_type": "TYPE_SYSTEM",
+        "window_title": "Navigation bar",
+        "window_bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "window_active": false,
+        "window_focused": false,
+        "resource_id": "com.android.systemui:id/center_group",
+        "class_name": "android.widget.LinearLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "com.android.systemui",
+        "bounds": [
+          82,
+          334,
+          118,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "display_id": 0,
+        "window_id": 1177,
+        "window_layer": 1,
+        "window_type": "TYPE_SYSTEM",
+        "window_title": "Navigation bar",
+        "window_bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "window_active": false,
+        "window_focused": false,
+        "resource_id": "com.android.systemui:id/home",
+        "class_name": "android.widget.ImageView",
+        "text": "",
+        "content_desc": "Home",
+        "package": "com.android.systemui",
+        "bounds": [
+          82,
+          334,
+          118,
+          356
+        ],
+        "enabled": true,
+        "clickable": true
+      }
+    ],
+    "windows": [
+      {
+        "display_id": 0,
+        "window_id": 1177,
+        "window_layer": 1,
+        "window_type": "TYPE_SYSTEM",
+        "window_title": "Navigation bar",
+        "window_bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "window_active": false,
+        "window_focused": false,
+        "controls": [
+          {
+            "display_id": 0,
+            "window_id": 1177,
+            "window_layer": 1,
+            "window_type": "TYPE_SYSTEM",
+            "window_title": "Navigation bar",
+            "window_bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "window_active": false,
+            "window_focused": false,
+            "resource_id": "com.android.systemui:id/navigation_bar_frame",
+            "class_name": "android.widget.FrameLayout",
+            "text": "",
+            "content_desc": "",
+            "package": "com.android.systemui",
+            "bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1177,
+            "window_layer": 1,
+            "window_type": "TYPE_SYSTEM",
+            "window_title": "Navigation bar",
+            "window_bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "window_active": false,
+            "window_focused": false,
+            "resource_id": "com.android.systemui:id/navigation_bar_view",
+            "class_name": "android.widget.FrameLayout",
+            "text": "",
+            "content_desc": "",
+            "package": "com.android.systemui",
+            "bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1177,
+            "window_layer": 1,
+            "window_type": "TYPE_SYSTEM",
+            "window_title": "Navigation bar",
+            "window_bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "window_active": false,
+            "window_focused": false,
+            "resource_id": "com.android.systemui:id/navigation_inflater",
+            "class_name": "android.widget.FrameLayout",
+            "text": "",
+            "content_desc": "",
+            "package": "com.android.systemui",
+            "bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1177,
+            "window_layer": 1,
+            "window_type": "TYPE_SYSTEM",
+            "window_title": "Navigation bar",
+            "window_bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "window_active": false,
+            "window_focused": false,
+            "resource_id": "com.android.systemui:id/horizontal",
+            "class_name": "android.widget.FrameLayout",
+            "text": "",
+            "content_desc": "",
+            "package": "com.android.systemui",
+            "bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1177,
+            "window_layer": 1,
+            "window_type": "TYPE_SYSTEM",
+            "window_title": "Navigation bar",
+            "window_bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "window_active": false,
+            "window_focused": false,
+            "resource_id": "com.android.systemui:id/nav_buttons",
+            "class_name": "android.widget.FrameLayout",
+            "text": "",
+            "content_desc": "",
+            "package": "com.android.systemui",
+            "bounds": [
+              4,
+              334,
+              196,
+              356
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1177,
+            "window_layer": 1,
+            "window_type": "TYPE_SYSTEM",
+            "window_title": "Navigation bar",
+            "window_bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "window_active": false,
+            "window_focused": false,
+            "resource_id": "com.android.systemui:id/ends_group",
+            "class_name": "android.widget.LinearLayout",
+            "text": "",
+            "content_desc": "",
+            "package": "com.android.systemui",
+            "bounds": [
+              4,
+              334,
+              196,
+              356
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1177,
+            "window_layer": 1,
+            "window_type": "TYPE_SYSTEM",
+            "window_title": "Navigation bar",
+            "window_bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "window_active": false,
+            "window_focused": false,
+            "resource_id": "",
+            "class_name": "android.widget.RelativeLayout",
+            "text": "",
+            "content_desc": "",
+            "package": "com.android.systemui",
+            "bounds": [
+              4,
+              334,
+              23,
+              356
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1177,
+            "window_layer": 1,
+            "window_type": "TYPE_SYSTEM",
+            "window_title": "Navigation bar",
+            "window_bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "window_active": false,
+            "window_focused": false,
+            "resource_id": "",
+            "class_name": "android.widget.RelativeLayout",
+            "text": "",
+            "content_desc": "",
+            "package": "com.android.systemui",
+            "bounds": [
+              23,
+              334,
+              61,
+              356
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1177,
+            "window_layer": 1,
+            "window_type": "TYPE_SYSTEM",
+            "window_title": "Navigation bar",
+            "window_bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "window_active": false,
+            "window_focused": false,
+            "resource_id": "com.android.systemui:id/back",
+            "class_name": "android.widget.ImageView",
+            "text": "",
+            "content_desc": "Back",
+            "package": "com.android.systemui",
+            "bounds": [
+              24,
+              334,
+              60,
+              356
+            ],
+            "enabled": true,
+            "clickable": true
+          },
+          {
+            "display_id": 0,
+            "window_id": 1177,
+            "window_layer": 1,
+            "window_type": "TYPE_SYSTEM",
+            "window_title": "Navigation bar",
+            "window_bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "window_active": false,
+            "window_focused": false,
+            "resource_id": "",
+            "class_name": "android.widget.RelativeLayout",
+            "text": "",
+            "content_desc": "",
+            "package": "com.android.systemui",
+            "bounds": [
+              138,
+              334,
+              176,
+              356
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1177,
+            "window_layer": 1,
+            "window_type": "TYPE_SYSTEM",
+            "window_title": "Navigation bar",
+            "window_bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "window_active": false,
+            "window_focused": false,
+            "resource_id": "com.android.systemui:id/recent_apps",
+            "class_name": "android.widget.ImageView",
+            "text": "",
+            "content_desc": "Overview",
+            "package": "com.android.systemui",
+            "bounds": [
+              139,
+              334,
+              175,
+              356
+            ],
+            "enabled": true,
+            "clickable": true
+          },
+          {
+            "display_id": 0,
+            "window_id": 1177,
+            "window_layer": 1,
+            "window_type": "TYPE_SYSTEM",
+            "window_title": "Navigation bar",
+            "window_bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "window_active": false,
+            "window_focused": false,
+            "resource_id": "",
+            "class_name": "android.widget.RelativeLayout",
+            "text": "",
+            "content_desc": "",
+            "package": "com.android.systemui",
+            "bounds": [
+              176,
+              334,
+              196,
+              356
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1177,
+            "window_layer": 1,
+            "window_type": "TYPE_SYSTEM",
+            "window_title": "Navigation bar",
+            "window_bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "window_active": false,
+            "window_focused": false,
+            "resource_id": "com.android.systemui:id/center_group",
+            "class_name": "android.widget.LinearLayout",
+            "text": "",
+            "content_desc": "",
+            "package": "com.android.systemui",
+            "bounds": [
+              82,
+              334,
+              118,
+              356
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1177,
+            "window_layer": 1,
+            "window_type": "TYPE_SYSTEM",
+            "window_title": "Navigation bar",
+            "window_bounds": [
+              0,
+              334,
+              200,
+              356
+            ],
+            "window_active": false,
+            "window_focused": false,
+            "resource_id": "com.android.systemui:id/home",
+            "class_name": "android.widget.ImageView",
+            "text": "",
+            "content_desc": "Home",
+            "package": "com.android.systemui",
+            "bounds": [
+              82,
+              334,
+              118,
+              356
+            ],
+            "enabled": true,
+            "clickable": true
+          }
+        ]
+      },
+      {
+        "display_id": 0,
+        "window_id": 1181,
+        "window_layer": 0,
+        "window_type": "TYPE_APPLICATION",
+        "window_title": "V2 VPN",
+        "window_bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "window_active": true,
+        "window_focused": true,
+        "controls": [
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.FrameLayout",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.LinearLayout",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "android:id/content",
+            "class_name": "android.widget.FrameLayout",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.RelativeLayout",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.FrameLayout",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.webkit.WebView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.webkit.WebView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              335
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              335
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              335
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              335
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              335
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              335
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              335
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              335
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              335
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              9
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              232,
+              40,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              143,
+              119,
+              200,
+              231
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              9,
+              139,
+              190,
+              335
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              19,
+              19,
+              180,
+              305
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              56,
+              148,
+              143,
+              297
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              59,
+              150,
+              141,
+              295
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              59,
+              171,
+              149,
+              203
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              131,
+              257,
+              155,
+              281
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              138,
+              264,
+              148,
+              274
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              126,
+              146,
+              157,
+              175
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              198,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              198,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              1,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              1,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              144
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "[redacted advertisement copy]",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              52,
+              200,
+              91
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              144
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "[redacted advertisement copy]",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              52,
+              200,
+              91
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              144
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "[redacted advertisement copy]",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              52,
+              200,
+              91
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              141
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              141
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "[redacted advertisement copy]",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              31,
+              200,
+              88
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              198,
+              0,
+              200,
+              141
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "[redacted advertisement copy]",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              198,
+              31,
+              200,
+              70
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              1,
+              141
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "[redacted advertisement copy]",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              31,
+              1,
+              70
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              92,
+              200,
+              144
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              62,
+              110,
+              72,
+              126
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              127,
+              110,
+              137,
+              126
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              9,
+              9,
+              64,
+              64
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "[redacted advertisement copy]",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              303,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              334
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.Image",
+            "text": "[redacted ad tracking]",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.Image",
+            "text": "B37143528",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              5,
+              1,
+              7
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.Image",
+            "text": "[redacted ad tracking]",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              5,
+              2,
+              7
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              4
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              194,
+              3
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              193,
+              3
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              193,
+              0,
+              199,
+              3
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              178,
+              0,
+              200,
+              22
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              168,
+              0,
+              200,
+              32
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              153,
+              2,
+              198,
+              18
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              138,
+              0,
+              200,
+              33
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              153,
+              2,
+              198,
+              18
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "Continue",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              160,
+              4,
+              184,
+              17
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.view.View",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              178,
+              0,
+              200,
+              22
+            ],
+            "enabled": true,
+            "clickable": false
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.Button",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              183,
+              4,
+              196,
+              17
+            ],
+            "enabled": true,
+            "clickable": true
+          },
+          {
+            "display_id": 0,
+            "window_id": 1181,
+            "window_layer": 0,
+            "window_type": "TYPE_APPLICATION",
+            "window_title": "V2 VPN",
+            "window_bounds": [
+              0,
+              0,
+              200,
+              356
+            ],
+            "window_active": true,
+            "window_focused": true,
+            "resource_id": "",
+            "class_name": "android.widget.TextView",
+            "text": "",
+            "content_desc": "",
+            "package": "v2.vpn.fast",
+            "bounds": [
+              0,
+              0,
+              200,
+              335
+            ],
+            "enabled": true,
+            "clickable": false
+          }
+        ]
+      }
+    ]
+  }
+}

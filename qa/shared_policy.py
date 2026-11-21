@@ -25,6 +25,66 @@ APP_ACTIONS = {
 ANDROID_BOUNDS = re.compile(r"\[(-?[0-9]+),(-?[0-9]+)\]\[(-?[0-9]+),(-?[0-9]+)\]")
 
 
+def window_snapshot(hierarchy, display_id=0):
+    """Decode the platform's --windows dump without confusing background roots.
+
+    All windows remain available to the administrator's script. ``controls``
+    describes the active/focused windows, while navigation is separate so a
+    script can deliberately select an observed SystemUI control.
+    """
+    if type(display_id) is not int or display_id < 0:
+        raise ValueError("Supply a nonnegative display ID")
+    root = ElementTree.fromstring(hierarchy)
+    if root.tag == "hierarchy":
+        controls, truncated = shared_policy("visible_controls", hierarchy=hierarchy)
+        return {"controls": controls, "navigation_controls": [], "windows": [],
+                "display_id": display_id, "truncated": truncated}
+    if root.tag != "displays":
+        raise ValueError("Invalid Android window hierarchy")
+    displays = [d for d in root if d.tag == "display" and d.get("id") == str(display_id)]
+    if len(displays) != 1:
+        raise ValueError("Expected one hierarchy for the selected Android display")
+    windows, active, navigation = [], [], []
+    for window in displays[0].iter("window"):
+        box = ANDROID_BOUNDS.fullmatch(window.get("bounds", ""))
+        metadata = {"display_id": display_id,
+                    "window_id": int(window.get("id")) if window.get("id") is not None else None,
+                    "window_layer": int(window.get("layer", "0")),
+                    "window_type": window.get("type", ""),
+                    "window_title": window.get("title", ""),
+                    "window_bounds": list(map(int, box.groups())) if box else None,
+                    "window_active": window.get("active") == "true",
+                    "window_focused": window.get("focused") == "true"}
+        controls = []
+        stack = list(reversed(list(window)))
+        while stack:
+            node = stack.pop()
+            if node.tag == "window":
+                continue  # Child windows are enumerated separately, never duplicated.
+            stack.extend(reversed(list(node)))
+            if node.tag != "node" or node.get("visible-to-user") == "false":
+                continue
+            bounds = ANDROID_BOUNDS.fullmatch(node.get("bounds", ""))
+            if not bounds:
+                continue
+            left, top, right, bottom = map(int, bounds.groups())
+            if right <= left or bottom <= top:
+                continue
+            controls.append({**metadata, "resource_id": node.get("resource-id", ""),
+                             "class_name": node.get("class", ""), "text": node.get("text", ""),
+                             "content_desc": node.get("content-desc", ""),
+                             "package": node.get("package", ""), "bounds": [left, top, right, bottom],
+                             "enabled": node.get("enabled") == "true", "clickable": node.get("clickable") == "true"})
+        is_navigation = metadata["window_type"] == "TYPE_SYSTEM" and metadata["window_title"] == "Navigation bar"
+        windows.append({**metadata, "controls": controls})
+        if is_navigation:
+            navigation.extend(controls)
+        elif metadata["window_active"] or metadata["window_focused"]:
+            active.extend(controls)
+    return {"display_id": display_id, "controls": active, "navigation_controls": navigation,
+            "windows": windows, "truncated": False}
+
+
 def shared_policy(stage, **facts):
     """Check trusted inventory, launch data and broker observations. Never perform device I/O."""
     if stage == "runtime":
@@ -63,7 +123,7 @@ def shared_policy(stage, **facts):
         return {"shared_app": True, "expected_container_id": container, "assigned_apk_size": size}
     elif stage == "request":
         action, args = facts["action"], facts["args"]
-        if action == "inspect-window" and len(args) <= 1:
+        if action == "inspect-window" and len(args) <= 4:
             return "inspect"
         if action in APP_ACTIONS:
             shared_policy("app_action", action=action, args=args)
@@ -144,6 +204,8 @@ def shared_policy(stage, **facts):
             "clickable": node.get("clickable") == "true",
         } for node, bounds in nodes]
         return controls, False
+    elif stage == "window_snapshot":
+        return window_snapshot(facts["hierarchy"], facts.get("display_id", 0))
     elif stage == "unique_control":
         matches = [bounds for node, bounds in shared_policy("control_nodes", root=facts["root"])
                    if node.get("resource-id") == facts["selector"]]

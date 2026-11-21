@@ -1,0 +1,154 @@
+{
+  "source_capture": "work/ad-rootfix/early-ad-h1-d4-i40.json",
+  "window": {
+    "package": "v2.vpn.fast",
+    "component": "v2.vpn.fast/com.google.android.gms.ads.AdActivity",
+    "stable": true,
+    "controls": [
+      {
+        "resource_id": "",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "",
+        "class_name": "android.widget.LinearLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "android:id/content",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "",
+        "class_name": "android.widget.RelativeLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "",
+        "class_name": "android.widget.FrameLayout",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": false
+      },
+      {
+        "resource_id": "",
+        "class_name": "android.webkit.WebView",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          0,
+          200,
+          334
+        ],
+        "enabled": true,
+        "clickable": true
+      },
+      {
+        "resource_id": "android:id/navigationBarBackground",
+        "class_name": "android.view.View",
+        "text": "",
+        "content_desc": "",
+        "package": "v2.vpn.fast",
+        "bounds": [
+          0,
+          334,
+          200,
+          356
+        ],
+        "enabled": true,
+        "clickable": false
+      }
+    ],
+    "truncated": false
+  },
+  "events": [
+    {
+      "seq": 3851,
+      "time": "2026-11-21T16:20:42.170+00:00",
+      "iteration": 40,
+      "level": "output",
+      "message": "Waiting 104s before ad dismissal"
+    },
+    {
+      "seq": 3850,
+      "time": "2026-11-21T16:20:42.159+00:00",
+      "iteration": 40,
+      "level": "output",
+      "message": "App opened: v2.vpn.fast"
+    },
+    {
+      "seq": 3849,
+      "time": "2026-11-21T16:20:38.381+00:00",
+      "iteration": 40,
+      "level": "output",
+      "message": "Display scale minimum: 720x1280@560 -> 200x356@72 (already applied)"
+    },
+    {
+      "seq": 3848,
+      "time": "2026-11-21T16:20:38.155+00:00",
+      "iteration": 40,
+      "level": "output",
+      "message": "Display frame rate configured: 20 FPS"
+    },
+    {
+      "seq": 3847,
+      "time": "2026-11-21T16:20:30.972+00:00",
+      "iteration": 40,
+      "level": "info",
+      "message": "Iteration 40 started"
+    }
+  ],
+  "source_note": "Actual fenced device observation; no synthetic controls added."
+}

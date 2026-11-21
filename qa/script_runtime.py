@@ -108,10 +108,18 @@ class Device:
         """Clear the configured app data."""
         return request("app-reset", [])
 
-    def inspect_window(self, package=None, priority=None):
-        """Read focus/UI; optional -20..19 niceness applies only to this inspection."""
+    def inspect_window(self, package=None, priority=None, windows=False, reader=None):
+        """Read UI; reader='legacy' explicitly uses the per-call stock launcher."""
         if package is not None and not isinstance(package, str):
             raise ValueError("Supply an Android package name")
+        if type(windows) is not bool:
+            raise ValueError("windows must be Boolean")
+        if reader not in (None, "persistent", "legacy"):
+            raise ValueError("reader must be persistent or legacy")
+        if reader is not None:
+            return request("inspect-window", [package, priority, windows, reader])
+        if windows:
+            return request("inspect-window", [package, priority, True])
         if priority is not None:
             return request("inspect-window", [package, priority])
         return request("inspect-window", [] if package is None else [package])
