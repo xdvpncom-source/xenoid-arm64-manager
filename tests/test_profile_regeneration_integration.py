@@ -53,6 +53,21 @@ class ProfileRegenerationIntegrationTest(unittest.TestCase):
         self.assertEqual(self.manager.rotations, 0)
         self.assertEqual(self.manager.commands, 0)
 
+    def test_real_oversized_policy_preflight_prevents_native_gen(self):
+        import json
+        import qa_profile_runtime as runtime
+        from test_qa_profile_runtime import RuntimeTest
+        preflight = RuntimeTest(); preflight.setUp(); self.addCleanup(preflight.doCleanups)
+        fingerprint = preflight.base["build"]["fingerprint"]
+        preflight.policy["fields"]["build.fingerprint"]["values"] = [fingerprint + "x" * (80-len(fingerprint))]
+        preflight.policy_file.write_text(json.dumps(preflight.policy))
+        self.broker.capture_regeneration_profile.side_effect = lambda *_args: runtime.capture_plan(
+            preflight.broker, preflight.manager, preflight.manager.binding, None,
+            config_path=preflight.policy_file, resource_path=preflight.resource_file)
+        with self.assertRaises(h.RegenerationPending) as raised: self.broker.regenerate(0, "oversized-profile")
+        self.assertEqual(raised.exception.code, "profile_property_capacity_exceeded")
+        self.assertEqual(self.manager.rotations, 0); self.assertEqual(self.manager.commands, 0)
+
     def test_existing_pending_receipt_does_not_adopt_new_profile_policy(self):
         self.broker.capture_regeneration_profile.return_value = None
         self.manager.failure = "prepared"
