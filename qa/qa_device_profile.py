@@ -21,13 +21,19 @@ MAX_PROFILE_BYTES = 256 * 1024  # Native stageEffectiveProfile contract.
 _MISSING = object()
 _NATIVE_IDS = {"android_id", "serial", "imei", "imeisv", "boot_id"}
 _BUILD_KEYS = set("brand manufacturer model device product board platform hardware soc_manufacturer soc_model release sdk id incremental description fingerprint bootloader security_patch first_api_level sku tags type kernel_build_suffix abi abilist abilist32 abilist64 bionic_arch dalvik_isa_arm64 dalvik_isa_arm".split())
-_BUILD_RUNTIME = set("brand manufacturer model device product board platform hardware soc_manufacturer soc_model release sdk first_api_level sku tags type bootloader security_patch id incremental fingerprint description abi abilist abilist32 abilist64 bionic_arch dalvik_isa_arm64 dalvik_isa_arm".split())
+_BUILD_RUNTIME = set("brand manufacturer platform hardware soc_manufacturer soc_model release sdk first_api_level sku tags type bootloader security_patch abi abilist abilist32 abilist64 bionic_arch dalvik_isa_arm64 dalvik_isa_arm".split())
 _BUILD_LINKED = ("brand", "product", "device", "release", "id", "incremental", "type", "tags", "description", "fingerprint")
 _DISPLAY_KEYS = {"width", "height", "densityDpi", "physicalPpi", "defaultRefreshRateHz", "peakRefreshRateHz"}
 _BATTERY_KEYS = set("level scale voltage temperature status plugged health present technology capacityMah minimumCapacityMah chargeFullDesignUah chargeFullUah chargeCounterUah".split())
 _INPUT_KEYS = {"name", "busType", "vendorId", "productId", "version"}
 _FINGERPRINT = re.compile(r"^(?P<brand>[^/\s]+)/(?P<product>[^/\s]+)/(?P<device>[^:\s]+):(?P<release>[^/\s]+)/(?P<id>[^/\s]+)/(?P<incremental>[^:\s]+):(?P<type>[^/\s]+)/(?P<tags>[^\s]+)$")
 _TOKENS = re.compile(r"\{([^{}]+)\}")
+# ARM/Qualcomm part mappings: Linux arch/arm64/include/asm/cputype.h and
+# util-linux sys-utils/lscpu-arm.c. These are virtual reported 4+2+2 bundles.
+_CPU_REPORTS = (
+    ("0x41", (("0xd05", "Cortex-A55"), ("0xd0b", "Cortex-A76"), ("0xd44", "Cortex-X1"))),
+    ("0x51", (("0x805", "Kryo-4XX-Silver"), ("0x804", "Kryo-4XX-Gold"), ("0x804", "Kryo-4XX-Gold"))),
+)
 
 
 def canonical_bytes(value):
@@ -95,10 +101,8 @@ def _descriptor(path, value=None):
     elif path.startswith("build.") and path.split(".", 1)[1] in _BUILD_KEYS:
         key = path.split(".", 1)[1]
         mutable = key not in _BUILD_RUNTIME and key != "kernel_build_suffix"
-        reason = "A different hardware/OS family requires a matching native image." if not mutable else "Build identity choices are applied as one coherent bundle; QA labels are not OEM certification."
+        reason = "A different hardware/OS family requires a matching native image." if not mutable else "Reported JSON identity; per-surface observations show what actually changed. Fingerprint components remain linked."
         if key == "kernel_build_suffix": reason = "Kernel build suffix is compiled into the native runtime, not applied by this JSON setter."
-        if key in {"id", "incremental", "fingerprint", "description"}:
-            reason = "The current native app runtime fixes this Build field; a JSON-only change is not applied consistently."
     elif path.startswith("display.") and path.split(".", 1)[1] in _DISPLAY_KEYS:
         mutable, reason = path != "display.physicalPpi", "Dimensions and input coordinate limits stay synchronized. Refresh still uses the verified display adapter."
         if not mutable: reason = "The hardware PPI belongs to the fixed native display contract."
@@ -111,9 +115,9 @@ def _descriptor(path, value=None):
         mutable = path.endswith(".temp")
         reason = "Virtual thermal profile temperature." if mutable else "Thermal zone types identify fixed hardware roles."
     elif path in {"memory.totalBytes", "memory.totalKiB", "memory.swapBytes"}:
-        reason = "The native sysinfo contract fixes RAM/swap; a JSON-only override would disagree with the kernel view."
+        mutable, reason = True, "Reported RAM/swap through native JSON and /proc; physical allocation and sysinfo may differ. Bytes/KiB and alignment remain linked."
     elif path == "cpu.implementer" or re.fullmatch(r"cpu\.cores\.[0-7]\.(part|model)", path):
-        reason = "The current eight-core hardware family is retained."
+        mutable, reason = True, "Reported CPU identity through native JSON and /proc; physical CPU remains unchanged. Eight cores and 4+2+2 cluster agreement are required."
     elif re.fullmatch(r"cpu\.cores\.[0-7]\.(minimumFrequencyKhz|maximumFrequencyKhz)", path):
         mutable, reason = True, "Reported CPU frequency; all members of a native cluster must agree."
     elif path in {"input." + key for key in _INPUT_KEYS}:
@@ -252,6 +256,38 @@ def normalize_resources(profile, resource_config=None):
 
 def _default_choices(profile):
     choices = {d["path"]: [_get(profile, d["path"])] for d in field_catalog(profile)}
+    build = profile["build"]
+    def variant(value):
+        # Equal-length alternatives fit the native short/long property slots.
+        # Replace a six-digit run with the existing per-operation template;
+        # other identifiers retain their punctuation and character classes.
+        match = re.search(r"\d{6}", value)
+        if match:
+            return value[:match.start()] + "{digits}" + value[match.end():]
+        for index in range(len(value)-1, -1, -1):
+            char = value[index]
+            if char.isdigit(): replacement = str((int(char)+1) % 10)
+            elif "a" <= char <= "z": replacement = chr((ord(char)-97+1) % 26+97)
+            elif "A" <= char <= "Z": replacement = chr((ord(char)-65+1) % 26+65)
+            else: continue
+            return value[:index] + replacement + value[index+1:]
+        return value
+    choices["build.model"] += ["Xenoid QA A", "Xenoid QA B"]
+    def virtual_name(original, number):
+        # Preserve fingerprint length and the native property's available room.
+        prefix = "qa"[:max(0, len(original)-1)]
+        return prefix + str(number).zfill(len(original)-len(prefix))
+    choices["build.board"] += [virtual_name(build["board"], number) for number in (1, 2)]
+    # Include both build-only and product/device variants so disabled product
+    # checkboxes do not prevent an otherwise coherent build-only rotation.
+    for identity_change in (0, 1, 2):
+        candidate = dict(build, id=variant(build["id"]), incremental=variant(build["incremental"]))
+        if identity_change:
+            candidate.update(product=virtual_name(build["product"], identity_change), device=virtual_name(build["device"], identity_change))
+        candidate["fingerprint"] = "{brand}/{product}/{device}:{release}/{id}/{incremental}:{type}/{tags}".format(**candidate)
+        candidate["description"] = "{product}-{type} {release} {id} {incremental} {tags}".format(**candidate)
+        for key in ("id", "incremental", "fingerprint", "description", "product", "device"):
+            choices["build." + key] += [candidate[key]]
     display = profile["display"]
     width, height = int(display["width"]), int(display["height"])
     next_width = width + 2
@@ -278,6 +314,12 @@ def _default_choices(profile):
             choices[path] += [int(value[0]) + 1000]
         elif path == "usb.product":
             choices[path] += [str(value[0]) + " QA {digits}"]
+    for implementer, clusters in _CPU_REPORTS:
+        choices["cpu.implementer"].append(implementer)
+        for index in range(8):
+            part, model = clusters[0 if index < 4 else 1 if index < 6 else 2]
+            choices["cpu.cores.%d.part" % index].append(part)
+            choices["cpu.cores.%d.model" % index].append(model)
     return {path: _unique(values) for path, values in choices.items()}
 
 
@@ -294,6 +336,21 @@ def default_policy(base_profiles=None, resource_config=None):
             row = result["fields"].setdefault(path, {"enabled": True, "values": []})
             row["values"] = _unique(row["values"] + choices[path]) if desc["mutable"] else []
     return result
+
+
+def migrate_policy(policy, base_profiles, resource_config=None):
+    """Explicit new revision; retain every existing administrator choice."""
+    result = validate_policy(copy.deepcopy(policy), base_profiles)
+    defaults = default_policy(base_profiles, resource_config)
+    for path, row in defaults["fields"].items():
+        reported = (path in {"build." + name for name in ("model", "device", "product", "board", "id", "incremental", "fingerprint", "description")}
+                    or path in {"memory.totalBytes", "memory.totalKiB", "memory.swapBytes", "cpu.implementer"}
+                    or re.fullmatch(r"cpu\.cores\.[0-7]\.(part|model)", path))
+        current = result["fields"].get(path)
+        if reported and row["values"] and (current is None or current["enabled"] and not current["values"]):
+            result["fields"][path] = copy.deepcopy(row)
+    result["revision"] += 1
+    return validate_policy(result, base_profiles)
 
 
 def _validate_choice(path, value, sample):
@@ -316,13 +373,20 @@ def _validate_choice(path, value, sample):
     if path == "display.physicalPpi" and (type(value) not in (int, float) or not math.isfinite(value) or value <= 0):
         raise ValueError("Display values must be positive finite numbers: " + path)
     if path.startswith("memory."):
-        _number(value, path, 0 if path.endswith("swapBytes") else 4, 1 << 50)
-        if value % (4 if path.endswith("totalKiB") else 1024):
+        minimum = 0 if path.endswith("swapBytes") else 1048576 if path.endswith("totalKiB") else 1073741824
+        _number(value, path, minimum, 1 << 50)
+        if value % (4 if path.endswith("totalKiB") else 4096 if path.endswith("totalBytes") else 1024):
             raise ValueError("Memory choice has invalid alignment: " + path)
     if re.fullmatch(r"cpu\.cores\.[0-7]\.(minimumFrequencyKhz|maximumFrequencyKhz)", path):
         _number(value, path, 1, 10000000)
+    if path == "cpu.implementer" or re.fullmatch(r"cpu\.cores\.[0-7]\.part", path):
+        if not isinstance(value, str) or not re.fullmatch(r"0x[0-9A-Fa-f]{1,8}", value):
+            raise ValueError("Invalid native CPU identifier: " + path)
+    if re.fullmatch(r"cpu\.cores\.[0-7]\.model", path):
+        if not isinstance(value, str) or not value.strip() or len(value.encode("utf-8")) > 64 or "\n" in value or "\r" in value:
+            raise ValueError("CPU model must be a nonempty native label of at most 64 characters")
     if path.startswith("build.") and isinstance(value, str):
-        if not value.strip(): raise ValueError("Build choice cannot be empty: " + path)
+        if not value.strip() or "\n" in value or "\r" in value: raise ValueError("Build choice must be a nonempty single line: " + path)
         if path == "build.fingerprint":
             materialized = value.replace("{token}", "a" * 24).replace("{digits}", "1" * 12)
             if not _FINGERPRINT.fullmatch(materialized): raise ValueError("Invalid build fingerprint candidate")
@@ -373,7 +437,7 @@ def validate_policy(value, base_profiles=None, previous=None):
     return result
 
 
-def generate_profile(base, policy, operation_key, previous=None, native_ids=None, resource_config=None):
+def generate_profile(base, policy, operation_key, previous=None, native_ids=None, resource_config=None, property_capacities=None):
     if not isinstance(operation_key, str) or not operation_key or len(operation_key) > 4096:
         raise ValueError("A durable operation key is required")
     base = validate_profile(base)
@@ -406,16 +470,25 @@ def generate_profile(base, policy, operation_key, previous=None, native_ids=None
         return sorted(candidates, key=lambda item: (item == old, hashlib.sha256(seed + path.encode() + canonical_bytes(item)).digest()))
 
     def allowed(path, value):
+        if path.startswith("build.") and isinstance(value, str):
+            old = _get(current, path, "")
+            capacity = (property_capacities or {}).get(path, min(91, max(63, len(str(old).encode("utf-8")))))
+            if type(capacity) is not int or capacity < 0 or len(value.encode("utf-8")) > capacity:
+                reasons[path] = "Candidate exceeds the observed native property slot capacity"
+                return False
         return value == _get(current, path) or enabled(path) and value in values(path)
 
     def apply_group(proposals, paths, name):
         handled.update(paths)
-        for proposal in proposals:
-            if all(allowed(path, value) for path, value in proposal.items()):
-                for path, value in proposal.items(): _set(result, path, value)
-                return
+        valid = [proposal for proposal in proposals if all(allowed(path, value) for path, value in proposal.items())]
+        if valid:
+            proposal = max(valid, key=lambda item: (
+                sum(enabled(path) and value != _get(current, path) for path, value in item.items()),
+                hashlib.sha256(seed + canonical_bytes(item)).digest()))
+            for path, value in proposal.items(): _set(result, path, value)
+            return
         for path in paths:
-            if enabled(path): reasons[path] = name + ": no candidate preserves disabled/linked fields"
+            if enabled(path): reasons.setdefault(path, name + ": no candidate preserves disabled/linked fields")
 
     # Parse one complete fingerprint; never randomly combine incompatible pieces.
     paths = ["build." + k for k in _BUILD_LINKED]
@@ -452,6 +525,28 @@ def generate_profile(base, policy, operation_key, previous=None, native_ids=None
     paths = ["memory.totalBytes", "memory.totalKiB"]
     apply_group(({paths[0]: value, paths[1]: value // 1024} for value in values(paths[0]) if type(value) is int and value > 0 and value % 4096 == 0), paths, "memory bytes/KiB")
 
+    # The default reports are complete virtual CPU descriptions; they do not
+    # change the host processor or claim a real device with this 4+2+2 topology.
+    identity_paths = ["cpu.implementer"] + ["cpu.cores.%d.%s" % (i, key) for i in range(8) for key in ("part", "model")]
+    reports = [(current["cpu"]["implementer"], tuple((current["cpu"]["cores"][i]["part"], current["cpu"]["cores"][i]["model"]) for i in (0, 4, 6))), *_CPU_REPORTS]
+    proposals = []
+    for implementer, clusters in reports:
+        proposal = {"cpu.implementer": implementer}
+        for index in range(8):
+            part, model = clusters[0 if index < 4 else 1 if index < 6 else 2]
+            proposal.update({"cpu.cores.%d.part" % index: part, "cpu.cores.%d.model" % index: model})
+        proposals.append(proposal)
+    # Explicit custom fields retain cluster agreement, including when the
+    # implementer or part checkbox is off. These remain reported metadata.
+    for implementer in values("cpu.implementer"):
+        proposal = {"cpu.implementer": implementer}
+        for leader, members in ((0, range(4)), (4, range(4, 6)), (6, range(6, 8))):
+            for key in ("part", "model"):
+                value = next(candidate for candidate in values("cpu.cores.%d.%s" % (leader, key))
+                             if all(allowed("cpu.cores.%d.%s" % (index, key), candidate) for index in members))
+                proposal.update({"cpu.cores.%d.%s" % (index, key): value for index in members})
+        proposals.append(proposal)
+    apply_group(proposals, identity_paths, "reported CPU identity bundle")
     for members in (range(4), range(4, 6), range(6, 8)):
         low_paths = ["cpu.cores." + str(i) + ".minimumFrequencyKhz" for i in members]
         high_paths = ["cpu.cores." + str(i) + ".maximumFrequencyKhz" for i in members]
@@ -473,7 +568,7 @@ def generate_profile(base, policy, operation_key, previous=None, native_ids=None
 
     for path, desc in catalog.items():
         if path in handled or not enabled(path): continue
-        pool = values(path)
+        pool = [value for value in values(path) if allowed(path, value)]
         if pool: _set(result, path, pool[0])
     result = validate_profile(result)
     changed = [path for path, value in _leaves(result) if value != _get(current, path)]
@@ -481,4 +576,4 @@ def generate_profile(base, policy, operation_key, previous=None, native_ids=None
     for path, desc in catalog.items():
         if enabled(path) and _get(result, path) == _get(current, path):
             unchanged.append({"path": path, "reason": reasons.get(path, "No distinct compatible configured candidate")})
-    return {"profile": result, "sha256": profile_sha256(result), "changed_fields": changed, "unchanged_enabled_fields": unchanged, "managed_fields": [path for path, desc in catalog.items() if desc["native_managed"]], "policy_revision": policy["revision"], "seed_sha256": seed.hex(), "qa_build_metadata": False, "unique_profile": bool(changed), "enabled": policy["enabled"]}
+    return {"profile": result, "sha256": profile_sha256(result), "changed_fields": changed, "unchanged_enabled_fields": unchanged, "managed_fields": [path for path, desc in catalog.items() if desc["native_managed"]], "policy_revision": policy["revision"], "seed_sha256": seed.hex(), "qa_build_metadata": any(path.startswith("build.") for path in changed), "unique_profile": bool(changed), "enabled": policy["enabled"]}

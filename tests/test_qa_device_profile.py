@@ -30,7 +30,7 @@ class ProfilePolicyTest(unittest.TestCase):
 
     def test_every_editable_default_has_alternatives_and_changes(self):
         mutable = [d["path"] for d in q.field_catalog(self.base) if d["mutable"]]
-        self.assertEqual(len(mutable), 39)
+        self.assertEqual(len(mutable), 67)
         for path in mutable:
             self.assertGreaterEqual(len(self.policy["fields"][path]["values"]), 2, path)
         previous = q.normalize_resources(self.base, self.resources)
@@ -46,16 +46,16 @@ class ProfilePolicyTest(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(q.canonical_bytes(first["profile"]), q.canonical_bytes(second["profile"]))
 
-    def test_different_operation_changes_supported_profile_but_keeps_build(self):
+    def test_different_operation_changes_supported_profile_and_reported_build(self):
         first, second = self.generate(), self.generate("another-device-or-operation")
         self.assertNotEqual(first["sha256"], second["sha256"])
-        self.assertEqual(first["profile"]["build"], self.base["build"])
-        self.assertEqual(second["profile"]["build"], self.base["build"])
-        self.assertFalse(first["qa_build_metadata"])
+        self.assertNotEqual(first["profile"]["build"], self.base["build"])
+        self.assertNotEqual(second["profile"]["build"], self.base["build"])
+        self.assertTrue(first["qa_build_metadata"])
 
     def test_profile_hardware_family_and_os_abi_are_retained(self):
         got = self.generate()["profile"]
-        for name in ("brand", "manufacturer", "model", "device", "product", "release", "sdk", "abi", "abilist", "board", "soc_model"):
+        for name in ("brand", "manufacturer", "release", "sdk", "abi", "abilist", "soc_model"):
             self.assertEqual(got["build"][name], self.base["build"][name])
         self.assertEqual(got["storage"], self.base["storage"])
 
@@ -115,10 +115,85 @@ class ProfilePolicyTest(unittest.TestCase):
         self.assertFalse(catalog["build.kernel_build_suffix"]["mutable"])
         self.assertFalse(catalog["sensors.0.name"]["mutable"])
 
-    def test_json_unsupported_build_fields_are_readonly(self):
+    def test_reported_build_fields_are_mutable(self):
         for path in ("build.id", "build.incremental", "build.fingerprint", "build.description"):
-            self.assertFalse(next(d for d in q.field_catalog(self.base) if d["path"] == path)["mutable"])
-            self.assertEqual(self.policy["fields"][path]["values"], [])
+            self.assertTrue(next(d for d in q.field_catalog(self.base) if d["path"] == path)["mutable"])
+            self.assertGreaterEqual(len(self.policy["fields"][path]["values"]), 2)
+
+    def test_default_build_candidates_keep_native_byte_lengths(self):
+        for index in range(10):
+            build = self.generate("native-slot-" + str(index))["profile"]["build"]
+            for key in ("id", "incremental", "fingerprint", "description", "device", "product"):
+                self.assertEqual(len(build[key].encode()), len(self.base["build"][key].encode()), key)
+
+    def test_observed_property_capacity_excludes_longer_candidate(self):
+        limit = len(self.base["build"]["fingerprint"].encode()) - 1
+        got = self.generate(property_capacities={"build.fingerprint": limit})
+        self.assertEqual(got["profile"]["build"]["fingerprint"], self.base["build"]["fingerprint"])
+        self.assertTrue(any(row["path"] == "build.fingerprint" and "capacity" in row["reason"]
+                            for row in got["unchanged_enabled_fields"]))
+
+    def test_unchecked_fingerprint_blocks_incoherent_device_and_product(self):
+        self.policy["fields"]["build.fingerprint"]["enabled"] = False
+        got = self.generate()["profile"]
+        for key in ("id", "incremental", "fingerprint", "description", "device", "product"):
+            self.assertEqual(got["build"][key], self.base["build"][key])
+
+    def test_old_empty_policy_choices_are_not_implicitly_enabled(self):
+        for path, row in self.policy["fields"].items():
+            if path.startswith(("build.", "memory.")) or path == "cpu.implementer" or path.endswith((".part", ".model")):
+                row["values"] = []
+        got = self.generate()["profile"]
+        self.assertEqual(got["build"], self.base["build"])
+        self.assertEqual(got["memory"], self.base["memory"])
+        for index in range(8):
+            self.assertEqual(got["cpu"]["cores"][index]["part"], self.base["cpu"]["cores"][index]["part"])
+
+    def test_reported_cpu_default_vendor_parts_and_models_are_one_bundle(self):
+        got = self.generate()["profile"]["cpu"]
+        self.assertEqual(got["implementer"], "0x51")
+        for index, core in enumerate(got["cores"]):
+            self.assertEqual(core["part"], "0x805" if index < 4 else "0x804")
+            self.assertEqual(core["model"], "Kryo-4XX-Silver" if index < 4 else "Kryo-4XX-Gold")
+
+    def test_equally_distinct_custom_cpu_bundles_use_deterministic_seed(self):
+        self.policy["fields"]["cpu.implementer"]["values"].append("0x43")
+        for index in range(8):
+            self.policy["fields"]["cpu.cores.%d.part" % index]["values"].append("0x902")
+            self.policy["fields"]["cpu.cores.%d.model" % index]["values"].append("QA custom CPU")
+        choices = {self.generate("cpu-choice-" + str(index))["profile"]["cpu"]["implementer"] for index in range(12)}
+        self.assertEqual(choices, {"0x51", "0x43"})
+
+    def test_cluster_model_edit_does_not_require_enabling_implementer_or_part(self):
+        for path, row in self.policy["fields"].items():
+            if next(d for d in q.field_catalog(self.base) if d["path"] == path)["mutable"]:
+                row["enabled"] = False
+        for index in range(4):
+            self.policy["fields"]["cpu.cores.%d.model" % index] = {"enabled": True, "values": ["QA custom label"]}
+        got = self.generate()["profile"]["cpu"]
+        self.assertEqual(got["implementer"], self.base["cpu"]["implementer"])
+        for index in range(4):
+            self.assertEqual(got["cores"][index]["model"], "QA custom label")
+            self.assertEqual(got["cores"][index]["part"], self.base["cpu"]["cores"][index]["part"])
+
+    def test_cpu_model_native_byte_limit_and_overlay_ram_minimum(self):
+        for path, value in (("cpu.cores.0.model", "ژ" * 33), ("memory.totalBytes", 4096), ("memory.totalKiB", 4)):
+            candidate = copy.deepcopy(self.policy); candidate["fields"][path]["values"] = [value]
+            with self.subTest(path=path), self.assertRaises(ValueError): q.validate_policy(candidate, [self.base])
+
+    def test_explicit_policy_upgrade_preserves_custom_and_disabled_choices(self):
+        previous = copy.deepcopy(self.policy); previous["revision"] = 2
+        for path in ("build.id", "build.incremental", "build.fingerprint", "build.description"):
+            previous["fields"][path]["values"] = []
+        previous["fields"]["build.model"] = {"enabled": False, "values": []}
+        previous["fields"]["battery.temperature"]["values"] = [299]
+        before = copy.deepcopy(previous)
+        upgraded = q.migrate_policy(previous, [self.base], self.resources)
+        self.assertEqual(previous, before)
+        self.assertEqual(upgraded["revision"], 3)
+        self.assertEqual(upgraded["fields"]["build.model"], before["fields"]["build.model"])
+        self.assertEqual(upgraded["fields"]["battery.temperature"]["values"], [299])
+        self.assertGreaterEqual(len(upgraded["fields"]["build.fingerprint"]["values"]), 2)
 
     def test_disabled_input_limit_blocks_incompatible_dimension(self):
         self.policy["fields"]["input.x.maximum"]["enabled"] = False

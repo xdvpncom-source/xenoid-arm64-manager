@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import stat
 import tempfile
 import time
@@ -28,6 +29,9 @@ STATE_SCHEMA = "dev.xenoid.applied-profile/v1"
 PENDING_SCHEMA = "dev.xenoid.pending-profile/v1"
 EFFECTIVE_PROFILE = "/data/local/tmp/xenoid-profile/effective.json"
 _INSTANCE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+BUILD_PROPERTIES = {"model": "ro.product.model", "device": "ro.product.device", "product": "ro.product.name",
+                    "board": "ro.product.board", "id": "ro.build.id", "incremental": "ro.build.version.incremental",
+                    "fingerprint": "ro.build.fingerprint", "description": "ro.build.description"}
 
 
 class ProfilePending(RuntimeError):
@@ -115,6 +119,179 @@ def _display_period(broker, manager, deadline):
     return int(first)
 
 
+def _properties(text):
+    return dict(re.findall(r"(?m)^\[([^\]\n]+)\]: \[([^\n]*)\]$", text))
+
+
+def _property_capacities(properties):
+    """Conservative capacity inferred read-only, never run the property patcher."""
+    result = {}
+    for name, primary in BUILD_PROPERTIES.items():
+        aliases = [value for key, value in properties.items() if _property_alias(name, key, primary)]
+        if aliases:
+            result["build." + name] = min(min(91, max(63, len(value.encode("utf-8")))) for value in aliases)
+    return result
+
+
+def _property_alias(name, key, primary):
+    return (key == primary
+            or name == "product" and key == "ro.build.product"
+            or name in {"id", "incremental", "fingerprint"} and key.startswith("ro.") and key.endswith(primary[2:])
+            or name in {"model", "device", "product"} and key.startswith("ro.product.")
+            and key.endswith("." + primary.rsplit(".", 1)[-1]))
+
+
+def observe_consumers(broker, manager, target, selected, deadline):
+    """Read actual consumers, not staged desired-value files; absent views stay absent."""
+    epoch = manager._userspace_runtime_epoch(deadline=deadline)
+    if not epoch: raise ProfilePending("profile_consumer_epoch_unavailable")
+    commands = {"props": ["getprop"], "cpuinfo": ["cat", "/proc/cpuinfo"],
+                "meminfo": ["cat", "/proc/meminfo"], "battery": ["dumpsys", "battery"]}
+    if any(path.startswith("input.") for path in selected): commands["input"] = ["dumpsys", "input"]
+    sources = {}
+    def source(path, label, filename, divisor=1):
+        key = "f" + str(len(sources))
+        sources[key] = (path, label, divisor)
+        commands[key] = ["cat", filename]
+    for path in selected:
+        match = re.fullmatch(r"cpu\.cores\.([0-7])\.(minimumFrequencyKhz|maximumFrequencyKhz)", path)
+        if match:
+            kind = "min" if match[2].startswith("minimum") else "max"
+            source(path, "sysfs", "/sys/devices/system/cpu/cpu%s/cpufreq/cpuinfo_%s_freq" % (match[1], kind))
+        match = re.fullmatch(r"thermal\.(zone[0-9])\.temp", path)
+        if match: source(path, "sysfs", "/sys/class/thermal/thermal_%s/temp" % match[1])
+        if path == "usb.product":
+            source(path, "usb_gadget", "/config/usb_gadget/g1/strings/0x409/product")
+            source(path, "android_usb", "/sys/class/android_usb/android0/iProduct")
+        battery_files = {"capacityMah": ("charge_full_design", 1000), "chargeFullDesignUah": ("charge_full_design", 1),
+                         "chargeFullUah": ("charge_full", 1), "chargeCounterUah": ("charge_counter", 1)}
+        if path.startswith("battery.") and path[8:] in battery_files:
+            filename, divisor = battery_files[path[8:]]
+            source(path, "sysfs", "/sys/class/power_supply/battery/" + filename, divisor)
+    lines = ["# XENOID_PROFILE_CONSUMERS", "emit() { key=$1; shift; value=$(\"$@\" 2>/dev/null); code=$?; printf '%s:%s:' \"$key\" \"$code\"; printf '%s' \"$value\" | base64 | tr -d '\\r\\n'; printf '\\n'; }"]
+    lines += ["emit " + shlex.quote(key) + " " + shlex.join(command) for key, command in commands.items()]
+    raw = _execute(broker, manager, ["sh", "-c", "\n".join(lines)], deadline)
+    data, errors = {}, {}
+    for line in raw.splitlines():
+        parts = line.split(":", 2)
+        if len(parts) != 3: raise ProfilePending("profile_consumer_response_invalid")
+        key, code, encoded = parts
+        if key not in commands or key in data or key in errors:
+            raise ProfilePending("profile_consumer_response_invalid")
+        if code != "0": errors[key] = "unavailable"; continue
+        try: data[key] = base64.b64decode(encoded, validate=True).decode("utf-8")
+        except (ValueError, UnicodeError): raise ProfilePending("profile_consumer_response_invalid")
+    if set(data) | set(errors) != set(commands):
+        raise ProfilePending("profile_consumer_response_incomplete")
+    values = {path: {} for path in selected}
+    props = _properties(data.get("props", ""))
+    for name, prop in BUILD_PROPERTIES.items():
+        path = "build." + name
+        if path in values:
+            for key, value in props.items():
+                if _property_alias(name, key, prop):
+                    values[path]["root_getprop" if key == prop else "getprop:" + key] = value
+    if "build.id" in values and "ro.build.display.id" in props:
+        values["build.id"]["root_display_id"] = props["ro.build.display.id"]
+    cores = {}
+    for block in re.split(r"\n\s*\n", data.get("cpuinfo", "")):
+        fields = dict(re.findall(r"(?m)^([^:\n]+?)\s*:\s*([^\n]*)$", block))
+        fields = {key.strip(): value.strip() for key, value in fields.items()}
+        if fields.get("processor", "").isdigit(): cores[int(fields["processor"])] = fields
+    if "cpu.implementer" in values:
+        for index, fields in cores.items():
+            if "CPU implementer" in fields: values["cpu.implementer"]["procfs_cpu%d" % index] = fields["CPU implementer"]
+    for index, fields in cores.items():
+        for key, label in (("part", "CPU part"), ("model", "model name")):
+            path = "cpu.cores.%d.%s" % (index, key)
+            if path in values and label in fields: values[path]["procfs"] = fields[label]
+    touch = list(re.finditer(r"^  Device -?\d+: " + re.escape(target["input"]["name"]) + r"\n(.*?)(?=^  Device |^  Configuration:|\Z)", data.get("input", ""), re.M | re.S))
+    if len(touch) == 1:
+        axes = re.search(r"Raw Touch Axes:\n(.*?)^      Calibration:", touch[0][1], re.M | re.S)
+        for axis in ("x", "y"):
+            match = re.search(r"^        " + axis.upper() + r": min=(-?\d+), max=(-?\d+),", axes[1], re.M) if axes else None
+            if match:
+                for key, number in zip(("minimum", "maximum"), match.groups()):
+                    path = "input." + axis + "." + key
+                    if path in values: values[path]["input_reader"] = int(number)
+    mem = dict(re.findall(r"(?m)^(MemTotal|SwapTotal):\s*(\d+)\s+kB\s*$", data.get("meminfo", "")))
+    for path, name, factor in (("memory.totalBytes", "MemTotal", 1024), ("memory.totalKiB", "MemTotal", 1), ("memory.swapBytes", "SwapTotal", 1024)):
+        if path in values and name in mem: values[path]["procfs_meminfo"] = int(mem[name]) * factor
+    battery = {key.strip(): value.strip() for key, value in re.findall(r"(?m)^\s*([^:\n]+):\s*([^\n]+)$", data.get("battery", ""))}
+    for key in ("level", "voltage", "temperature", "status", "health", "scale"):
+        path = "battery." + key
+        if path in values and battery.get(key, "").lstrip("-").isdigit(): values[path]["dumpsys_battery"] = int(battery[key])
+    if "battery.plugged" in values and any(key in battery for key in ("AC powered", "USB powered", "Wireless powered")):
+        values["battery.plugged"]["dumpsys_battery"] = sum(number for key, number in (("AC powered", 1), ("USB powered", 2), ("Wireless powered", 4)) if battery.get(key) == "true")
+    for key, (path, label, divisor) in sources.items():
+        if key not in data: continue
+        value = data[key].strip()
+        if isinstance(_profile_value(target, path), int):
+            if not value.lstrip("-").isdigit() or int(value) % divisor: continue
+            value = int(value) // divisor
+        values[path][label] = value
+    display = _display(broker, manager, deadline)
+    for path, value in (("display.width", display["size"][0]), ("display.height", display["size"][1]), ("display.densityDpi", display["density"])):
+        if path in values: values[path]["window_manager"] = value
+    if "display.defaultRefreshRateHz" in values:
+        values["display.defaultRefreshRateHz"]["surfaceflinger"] = int(round(1000000000 / _display_period(broker, manager, deadline)))
+    if manager._userspace_runtime_epoch(deadline=deadline) != epoch:
+        raise ProfilePending("profile_consumer_epoch_changed")
+    return {"schema": "dev.xenoid.profile-consumers/v1", "observed_at": _now(), "values": values, "errors": errors,
+            "userspace_epoch": epoch,
+            "scope": "root/shell consumers; app-process cached values and physical allocation are not inferred"}
+
+
+def audit_consumers(before, after, target, selected):
+    fields, effective = {}, []
+    for path in selected:
+        old, observed = before.get("values", {}).get(path, {}), after.get("values", {}).get(path, {})
+        wanted = _profile_value(target, path)
+        def matches(value):
+            if path == "cpu.implementer" or path.endswith(".part") and path.startswith("cpu."):
+                try: return int(str(value), 16) == int(str(wanted), 16)
+                except ValueError: return False
+            return value == wanted or str(value) == str(wanted)
+        matched = [source for source, value in observed.items() if matches(value)]
+        changed = [source for source in matched if source in old and observed[source] != old[source]]
+        if not observed: status = "unobservable"
+        elif len(matched) != len(observed): status = "partial" if matched else "unchanged" if observed == old else "mismatch"
+        elif changed: status = "applied"
+        else: status = "unchanged" if old else "verified_without_before"
+        if changed: effective.append(path)
+        fields[path] = {"selected": True, "requested": wanted, "before": old, "observed": observed,
+                        "status": status, "changed_consumers": changed}
+    return {"schema": "dev.xenoid.profile-observation/v1", "observed_at": after["observed_at"],
+            "fields": fields, "effective_changes": effective, "scope": after["scope"],
+            "counts": {status: sum(row["status"] == status for row in fields.values()) for status in
+                       ("applied", "partial", "unchanged", "mismatch", "unobservable", "verified_without_before")}}
+
+
+def _preflight_profile(policy, actual, previous, resource, capacities):
+    """Reject known-impossible choices before committing native GEN.
+
+    Placeholder widths are fixed by generate_profile; no random function or
+    persisted operation key is consulted by this validation-only preview.
+    """
+    for name in BUILD_PROPERTIES:
+        path = "build." + name
+        row = policy["fields"].get(path, {})
+        if row.get("enabled") is not True:
+            continue
+        capacity = capacities.get(path, min(91, max(63, len(str(actual["build"][name]).encode("utf-8")))))
+        for candidate in row.get("values", []):
+            materialized = candidate.replace("{token}", "0" * 16).replace("{digits}", "0" * 6)
+            if len(materialized.encode("utf-8")) > capacity:
+                raise ProfilePending("profile_property_capacity_exceeded")
+    preview = generate_profile(actual, policy, "profile-feasibility-validation-only",
+                               previous=previous, resource_config=resource, property_capacities=capacities)
+    selected = {row["path"] for row in field_catalog(previous) if row["mutable"]
+                and policy["fields"].get(row["path"], {}).get("enabled") is True}
+    if selected and not (selected - {"display.peakRefreshRateHz"}) & set(preview["changed_fields"]):
+        raise ProfilePending("profile_policy_has_no_feasible_change")
+    return {"capacity_checked": True, "feasible": True, "validation_only": True}
+
+
 def capture_plan(broker, manager, binding, deadline, *, config_path=CONFIG, resource_path=RESOURCE_CONFIG):
     """Pin settings and the device's current effective JSON before GEN starts."""
     if not Path(config_path).exists():
@@ -125,6 +302,7 @@ def capture_plan(broker, manager, binding, deadline, *, config_path=CONFIG, reso
     if raw.get("enabled") is False:
         return None
     actual = _effective(broker, manager, deadline)
+    capacity_properties = _properties(_execute(broker, manager, ["getprop"], deadline))
     policy = validate_policy(raw, [actual])
     if not policy["enabled"]:
         return None
@@ -140,9 +318,13 @@ def capture_plan(broker, manager, binding, deadline, *, config_path=CONFIG, reso
     for axis, value in (("x", display["size"][0]), ("y", display["size"][1])):
         previous["input"][axis] = {"minimum": 0, "maximum": value - 1}
     validate_profile(previous)
+    capacities = _property_capacities(capacity_properties)
+    preflight = _preflight_profile(policy, actual, previous, resource, capacities)
     return {"schema": PLAN_SCHEMA, "enabled": True, "binding": copy.deepcopy(binding), "policy": policy,
             "policy_sha256": profile_sha256(policy), "base_profile": actual, "base_sha256": profile_sha256(actual),
             "previous_profile": previous, "previous_sha256": profile_sha256(previous),
+            "property_capacities": capacities, "preflight": preflight,
+            "property_capacity_source": "inferred_from_live_property_utf8_lengths",
             "resource_config": resource, "display_before": display, "captured_at": _now()}
 
 
@@ -249,6 +431,8 @@ def _verify_applied_fields(broker, manager, target, deadline, *, check_build=Tru
                   "bootloader": "ro.bootloader"}
     if check_build:
         for name, prop in properties.items():
+            if name in BUILD_PROPERTIES:
+                continue  # Mutable reported properties receive per-consumer audit below.
             if _execute(broker, manager, ["getprop", prop], deadline) != str(target["build"][name]):
                 raise ProfilePending("profile_build_readback_mismatch")
     display = _display(broker, manager, deadline)
@@ -273,15 +457,37 @@ def _verify_readback(broker, manager, target, deadline):
     return count
 
 
-def _failed_action(value):
+def _failed_action(value, *, allow_reported_property=False):
     if isinstance(value, dict):
         if value.get("required") is False:
             return False
-        if "ok" in value and value["ok"] is not True or isinstance(value.get("exitCode"), int) and value["exitCode"] != 0:
+        if allow_reported_property and str(value.get("field", "")).startswith("ro."):
+            return False
+        if ("ok" in value and value["ok"] is not True
+                or any(type(value.get(key)) is int and value[key] != 0 for key in ("exit", "exitCode"))):
             return True
-        return any(_failed_action(child) for child in value.values())
-    if isinstance(value, list): return any(_failed_action(child) for child in value)
+        return any(_failed_action(child, allow_reported_property=allow_reported_property) for child in value.values())
+    if isinstance(value, list): return any(_failed_action(child, allow_reported_property=allow_reported_property) for child in value)
     return False
+
+
+def _reported_property_failures(value):
+    def command_failures(node):
+        if isinstance(node, dict):
+            own = int(any(type(node.get(key)) is int and node[key] != 0 for key in ("exit", "exitCode")))
+            return own + sum(command_failures(child) for child in node.values())
+        if isinstance(node, list): return sum(command_failures(child) for child in node)
+        return 0
+    found = []
+    if isinstance(value, dict):
+        failures = command_failures(value) if str(value.get("field", "")).startswith("ro.") else 0
+        if str(value.get("field", "")).startswith("ro.") and ("ok" in value and value["ok"] is not True or failures):
+            found.append({"property": value["field"], "status": "failed", "failed_command_count": failures})
+        else:
+            for child in value.values(): found.extend(_reported_property_failures(child))
+    elif isinstance(value, list):
+        for child in value: found.extend(_reported_property_failures(child))
+    return found
 
 
 def load_applied(instance_id, resource_tag=None, container_id=None, *, state_dir=STATE):
@@ -306,6 +512,11 @@ def load_applied(instance_id, resource_tag=None, container_id=None, *, state_dir
                 or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("container_id", "")))):
             return None
         validate_profile(value["profile"])
+        if "field_audit" in value:
+            if (not isinstance(value["field_audit"], dict)
+                    or value["field_audit"].get("schema") != "dev.xenoid.profile-observation/v1"
+                    or value.get("audit_sha256") != profile_sha256(value["field_audit"])):
+                return None
         return value
     except (OSError, ValueError, ProfilePending):
         return None
@@ -314,8 +525,12 @@ def load_applied(instance_id, resource_tag=None, container_id=None, *, state_dir
 def status_for_binding(instance_id, resource_tag=None, container_id=None, *, state_dir=STATE):
     value = load_applied(instance_id, resource_tag, container_id, state_dir=state_dir)
     if value is None: return None
-    return {"state": "applied", "sha256": value["profile_sha256"], "policy_revision": value["policy_revision"],
-            "policy_sha256": value["policy_sha256"], "operation_key": value["operation_key"], "updated_at": value["applied_at"]}
+    result = {"state": "applied", "sha256": value["profile_sha256"], "policy_revision": value["policy_revision"],
+              "policy_sha256": value["policy_sha256"], "operation_key": value["operation_key"], "updated_at": value["applied_at"],
+              "application_status": value.get("application_status", "applied")}
+    if isinstance(value.get("field_audit"), dict):
+        result.update(audit_sha256=profile_sha256(value["field_audit"]), audit_counts=value["field_audit"].get("counts", {}))
+    return result
 
 
 def pending_for_binding(instance_id, resource_tag=None, container_id=None, *, state_dir=STATE):
@@ -474,7 +689,7 @@ def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=S
     if "target_profile" not in progress:
         generated = generate_profile(plan["base_profile"], plan["policy"], key,
                                      previous=plan["previous_profile"], native_ids=native,
-                                     resource_config=plan["resource_config"])
+                                     resource_config=plan["resource_config"], property_capacities=plan.get("property_capacities"))
         progress.update(target_profile=generated["profile"], target_sha256=generated["sha256"],
                         generated=generated, created_at=_now())
         store.save(key, receipt)  # A random choice is durable before any apply.
@@ -510,6 +725,18 @@ def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=S
     if pending is None:
         _atomic_json(pending_path, {"schema": PENDING_SCHEMA, **receipt["binding"], "operation_key": key,
                                     "target_sha256": progress["target_sha256"], "created_at": progress["created_at"]})
+    if "consumer_before" not in progress:
+        published = load_applied(instance, receipt["binding"]["resource_tag"], receipt["binding"]["container_id"], state_dir=state_dir)
+        legacy_completed = bool(progress.get("completed") and published
+            and published["profile_sha256"] == progress["target_sha256"] and published["operation_key"] == key)
+        progress["consumer_before"] = (observe_consumers(broker, manager, target, selected, deadline)
+                                       if not progress.get("apply_started") else
+                                       {"values": {}, "legacy_completed": legacy_completed,
+                                        "scope": "Earlier profile apply has no proven before observation"})
+        progress["consumer_before_sha256"] = profile_sha256(progress["consumer_before"])
+        store.save(key, receipt)
+    if profile_sha256(progress["consumer_before"]) != progress.get("consumer_before_sha256"):
+        raise ProfilePending("profile_consumer_baseline_changed")
     if not progress.get("apply_verified") or not progress.get("hide_verified"):
         if not progress.get("apply_started") or not _matches_applied_fields(broker, manager, target, deadline):
             progress["apply_started"] = True
@@ -526,7 +753,9 @@ def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=S
             finally:
                 cli.runtime, cli.print_json = old_runtime, old_print
             answer = captured[-1] if captured else {}
-            if result or not isinstance(answer, dict) or answer.get("ok") is not True or answer.get("rotated") is not False or _failed_action(answer):
+            progress["official_apply_result"] = answer
+            store.save(key, receipt)
+            if result or not isinstance(answer, dict) or answer.get("ok") is not True or answer.get("rotated") is not False or _failed_action(answer, allow_reported_property=True):
                 raise ProfilePending("profile_official_apply_pending")
         _verify_applied_fields(broker, manager, target, deadline, check_build=False)
         if not progress.get("hide_verified"):
@@ -595,12 +824,40 @@ def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=S
         raise ProfilePending("profile_frame_rate_readback_mismatch")
     stage_count = _verify_readback(broker, manager, target, deadline)
     _verify_core(broker, manager, cli, receipt, deadline)
-    progress["effective_changes_verified"] = meaningful
+    audit_epoch = manager._userspace_runtime_epoch(deadline=deadline)
+    if progress.get("completed") and progress.get("field_audit") and progress.get("audit_epoch") == audit_epoch:
+        audit = progress["field_audit"]
+    else:
+        observed = observe_consumers(broker, manager, target, selected, deadline)
+        audit = audit_consumers(progress["consumer_before"], observed, target, selected)
+        audit["official_property_failures"] = _reported_property_failures(progress.get("official_apply_result", {}))
+        audit["official_failure_counts"] = {"properties": len(audit["official_property_failures"]),
+            "commands": sum(row["failed_command_count"] for row in audit["official_property_failures"])}
+        for failure in audit["official_property_failures"]:
+            for name, prop in BUILD_PROPERTIES.items():
+                field_path = "build." + name
+                if field_path in audit["fields"] and _property_alias(name, failure["property"], prop):
+                    audit["fields"][field_path].setdefault("reported_failures", []).append(failure["property"])
+                    if audit["fields"][field_path]["status"] == "applied": audit["fields"][field_path]["status"] = "partial"
+        audit["counts"] = {status: sum(row["status"] == status for row in audit["fields"].values()) for status in audit["counts"]}
+        progress["audit_epoch"] = audit_epoch
+    effective = [path for path in audit["effective_changes"] if path in meaningful]
+    progress["field_audit"] = audit
+    progress["effective_changes_verified"] = effective
+    legacy_observation = progress["consumer_before"].get("legacy_completed") is True
+    audit["legacy_before_unavailable"] = legacy_observation
+    store.save(key, receipt)
+    if selected and not effective and not legacy_observation:
+        raise ProfilePending("profile_no_effect")
+    _verify_core(broker, manager, cli, receipt, deadline)
+    application_status = "partial" if (audit.get("official_property_failures")
+        or any(audit["fields"][path]["status"] != "applied" for path in meaningful)) else "applied"
     progress.setdefault("completed_at", _now())
     _atomic_json(Path(state_dir) / (instance + ".json"), {
         "schema": STATE_SCHEMA, **receipt["binding"], "profile": target,
         "profile_sha256": progress["target_sha256"], "policy_revision": plan["policy"]["revision"],
-        "policy_sha256": plan["policy_sha256"], "operation_key": key, "applied_at": progress["completed_at"]})
+        "policy_sha256": plan["policy_sha256"], "operation_key": key, "applied_at": progress["completed_at"],
+        "field_audit": audit, "audit_sha256": profile_sha256(audit), "application_status": application_status})
     progress["completed"] = True; store.save(key, receipt)
     pending = pending_for_binding(instance, receipt["binding"]["resource_tag"], receipt["binding"]["container_id"], state_dir=state_dir)
     if pending is None or pending["operation_key"] != key or pending["target_sha256"] != progress["target_sha256"]:
@@ -618,5 +875,6 @@ def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=S
             "official_apply": True, "native_ids_preserved": True, "input_ready": True,
             "profile_reload_observed": True, "staged_fields_verified": stage_count,
             "fps": fps, "period_ns": period, "temporary_target_removed": progress["target_file_removed"],
-            "effective_changes_verified": meaningful,
+            "effective_changes_verified": effective, "field_audit": audit, "application_status": application_status,
+            "legacy_observation_unavailable": legacy_observation,
             "randomization_skipped": "no_enabled_fields" if not selected else None}

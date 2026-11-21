@@ -530,7 +530,15 @@ fields, with deterministic `{token}` / `{digits}` placeholders for supported tex
 metadata. Coupled values are validated together. Original hardware/OS fields
 that this runtime compiles into native components are read-only with an explicit
 reason; native-managed IDs continue to rotate through official regeneration.
-Compiled Build strings such as the app-visible fingerprint remain read-only in this
-release; the panel does not install a native shim to change unsupported fields.
+The profile editor exposes 67 reported-value fields, including Build, CPU and
+RAM/swap values with native JSON consumers. Build candidates preserve property
+storage capacity. After the official reload, each selected field has a live
+consumer audit: applied, partial, unchanged, mismatched or unobservable. A
+successful native command alone does not prove that a getter changed. The
+worker requires a real observed change when randomization is selected and
+retains native property warnings. Root/shell observations do not establish what
+every cached app API reports. No additional native shim is installed.
+Reported CPU/RAM values do not alter the host's physical resources; the existing
+display/FPS and host memory optimizations remain in place.
 A changed JSON value does not assert OEM signing, physical hardware changes, or
 hardware-backed DRM certification.
