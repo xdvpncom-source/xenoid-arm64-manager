@@ -16,12 +16,13 @@ RUN_SETTINGS = {
     "repeat_count": 0, "initial_delay": 0, "timeout": 0,
     "command_timeout": 60, "verify_apk": True,
 }
-# "minimum" uses the editable minimums below, keeping the physical aspect ratio.
-# None preserves existing overrides; 1 restores native; numeric scales use Physical values.
-DISPLAY_SCALE = "minimum"
+# With both DISPLAY values None, inherit the central panel resource/profile
+# settings. Explicit values retain the earlier per-script override behavior:
+# "minimum" uses the values below; 1 restores native; numeric scales use Physical.
+DISPLAY_SCALE = None                  # None inherits current panel/profile dimensions.
 MIN_DISPLAY_SIDE = 200
 MIN_DISPLAY_DPI = 72
-DISPLAY_FPS = 20                       # None preserves current FPS; 0 restores native FPS.
+DISPLAY_FPS = None                    # None inherits panel FPS; 0 explicitly restores native FPS.
 DISPLAY_SETUP_TIMEOUT = 180            # Initial native FPS setup may restart Android graphics.
 START_WAIT_SECONDS = (90, 120)
 COLD_START_APP = True                  # Close a surviving app/VPN session before each launch; preserve app data.
@@ -1066,9 +1067,7 @@ class Cycle:
         # A display retry must not invoke regenerate again or draw a new number.
         while True:
             try:
-                if DISPLAY_FPS is not None:
-                    self.device.set_frame_rate(DISPLAY_FPS, timeout=DISPLAY_SETUP_TIMEOUT)
-                configure_display(self.device, DISPLAY_SCALE)
+                configure_resources(self.device)
                 break
             except (RuntimeError, OSError) as error:
                 self.log("Waiting to restore display after regeneration: " + str(error))
@@ -1137,6 +1136,21 @@ def display_state(device):
     return {"physical_size": native_size, "physical_density": native_density,
             "override_size": custom_size, "override_density": custom_density,
             "size": custom_size or native_size, "density": custom_density or native_density}
+
+
+def configure_resources(device):
+    if DISPLAY_FPS is None and DISPLAY_SCALE is None:
+        result = device.apply_resource_defaults()
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            raise RuntimeError("Central device resource settings were not confirmed")
+        device.log("Display settings inherited from the panel and applied device profile")
+        return result
+    # An explicit legacy override changes only the selected settings, avoiding
+    # a temporary central FPS apply followed by another graphics restart.
+    if DISPLAY_FPS is not None:
+        device.set_frame_rate(DISPLAY_FPS, timeout=DISPLAY_SETUP_TIMEOUT)
+        device.log("Display frame rate configured: " + ("native" if DISPLAY_FPS == 0 else str(DISPLAY_FPS) + " FPS"))
+    return configure_display(device, DISPLAY_SCALE)
 
 
 def configure_display(device, scale):
@@ -1232,10 +1246,7 @@ def main():
             raise ValueError("Invalid script timing settings")
         validate_regeneration_settings()
         cycle.package = package
-        if DISPLAY_FPS is not None:
-            device.set_frame_rate(DISPLAY_FPS, timeout=DISPLAY_SETUP_TIMEOUT)
-            device.log("Display frame rate configured: " + ("native" if DISPLAY_FPS == 0 else str(DISPLAY_FPS) + " FPS"))
-        configure_display(device, DISPLAY_SCALE)
+        configure_resources(device)
         cycle.run()
     except (RuntimeError, OSError) as error:
         device.log("QA attempt failed: " + type(error).__name__ + ": " + str(error))

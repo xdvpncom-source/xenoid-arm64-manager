@@ -362,6 +362,14 @@ def snapshot(folder, number, run=None, after=None, limit=32):
         config = json.loads(row["config"])
         result = {k: config[k] for k in ("script_id", "version", "run_id", "resource_tag", "instance_id")}
         result.update(state=row["state"], device_id=number, iteration=row["iteration"], updated=row["updated"])
+        try:
+            from qa_profile_runtime import status_for_binding
+            profile_status = status_for_binding(config.get("instance_id"), config.get("resource_tag"),
+                                                config.get("expected_container_id"))
+            if profile_status is not None:
+                result["profile_status"] = profile_status
+        except (OSError, ValueError):
+            pass
         if after is not None:
             result["pruned_through"] = row["pruned_through"] if "pruned_through" in row.keys() else 0
             rows = conn.execute("SELECT * FROM events WHERE run_id=? AND seq>? ORDER BY seq LIMIT ?",
@@ -1284,6 +1292,25 @@ echo retired
             raise RegenerationPending("regeneration_native_checkpoint_invalid")
         return dict(result)
 
+    def capture_regeneration_profile(self, manager, binding, deadline):
+        from qa_profile_runtime import capture_plan
+        return capture_plan(self, manager, binding, deadline)
+
+    def complete_regeneration_profile(self, manager, cli, receipt, store, key, deadline):
+        from qa_profile_runtime import complete
+        try:
+            result = complete(self, manager, cli, receipt, store, key, deadline)
+            if result is not None and self.log:
+                self.log("action", "Pinned JSON profile applied through official Xenoid; native IDs and input verified")
+            return result
+        except RuntimeIdentityError:
+            raise
+        except Exception as error:
+            code = getattr(error, "code", "profile_apply_pending")
+            receipt["last_profile_error"] = code
+            store.save(key, receipt)
+            raise RegenerationPending(code) from None
+
     def regenerate(self, timeout=0, operation_key=None, post_cache=None, post_google=None, *, _deadline=None):
         if type(timeout) is not int or timeout < 0:
             raise ValueError("Regeneration timeout must be a nonnegative integer; zero is unlimited")
@@ -1334,7 +1361,7 @@ echo retired
                     self.ensure_native_interaction(manager, deadline, repair=True, foreground=True)
                 return {**receipt["result"], "input_ready": True, "foreground_ready": True,
                         "touch_backend": "xenoid_native", "replayed": True}
-            if post_google is not None and receipt is not None and receipt.get("native_completion") is not None:
+            if receipt is not None and receipt.get("native_completion") is not None and (post_google is not None or receipt.get("profile_plan") is not None):
                 # Google data now belongs to the explicit post stage. Its retry
                 # must not demand the pre-clear offline Google target or re-GEN.
                 cli = self.regeneration_cli()
@@ -1342,6 +1369,7 @@ echo retired
                 self.invalidate_regeneration_caches()
                 with self.display_raw_docker(manager, deadline):
                     result = self.verify_regeneration_native_completion(manager, cli, receipt, deadline)
+                    result["profile_apply"] = self.complete_regeneration_profile(manager, cli, receipt, store, operation_key, deadline)
                     progress = receipt.get("post_google_progress") or {}
                     if progress.get("registration_started") and post_cache is not None:
                         if set(receipt.get("post_cache_completed", {})) != set(post_cache["packages"]):
@@ -1373,6 +1401,13 @@ echo retired
                 receipt = {"status": "pending", "binding": binding, "timeout": timeout,
                            "before_digest": digest, "created_at": now(), "post_cache": post_cache, "post_google": post_google,
                            "post_cache_command_timeout": self.config.get("command_timeout", 0)}
+                # Existing native transactions retain their original contract;
+                # only a new GEN pins the current administrator profile policy.
+                if live_state is None:
+                    with self.display_raw_docker(manager, deadline):
+                        profile_plan = self.capture_regeneration_profile(manager, binding, deadline)
+                    if profile_plan is not None:
+                        receipt["profile_plan"] = profile_plan
                 if google_prepared:
                     receipt["google_reset_preparation"] = {"completed": True, "before_native_journal": True}
                 store.save(operation_key, receipt)
@@ -1474,9 +1509,10 @@ echo retired
                               "runtime_epoch_changed": True, "operation_key": operation_key, "replayed": False}
                     if not result["identities_changed"] or not result["boot_id_changed"]:
                         raise RegenerationPending("native_regeneration_identity_unchanged")
-                    if post_google is not None:
+                    if post_google is not None or receipt.get("profile_plan") is not None:
                         receipt["native_completion"] = self.regeneration_native_completion(refreshed, cli, state, result, deadline)
                         store.save(operation_key, receipt)
+                    result["profile_apply"] = self.complete_regeneration_profile(refreshed, cli, receipt, store, operation_key, deadline)
                     result["cache_cleanup"] = self.complete_regeneration_post_cache(
                         refreshed, receipt, store, operation_key, deadline)
                     if post_google is not None:
@@ -2593,6 +2629,9 @@ done
             return self.clear_cache(*args)
         if action == "set-frame-rate" and 1 <= len(args) <= 2:
             return self.set_frame_rate(*args)
+        if action in {"apply-resource-defaults", "apply_resource_defaults"} and len(args) <= 1:
+            from qa_resource_runtime import apply_for_broker
+            return apply_for_broker(self, *args)
         if action == "settings" and not args:
             return {key: self.config.get(key) for key in (
                 "repeat_count", "initial_delay", "interval", "timeout", "command_timeout", "verify_apk", "package", "android_user")}

@@ -29,6 +29,11 @@ class FakeDevice:
     def app_open(self):self.trace.append(('open',self.clock.now));self.state='startup'
     def app_close(self):self.trace.append(('close',self.clock.now));self.state='closed'
     def set_frame_rate(self,fps,timeout=None):self.trace.append(('fps',self.clock.now,fps,timeout));return {'fps':fps,'changed':False}
+    def apply_resource_defaults(self,timeout=None):
+        self.trace.append(('resources',self.clock.now,timeout))
+        self.set_frame_rate(20,timeout=180 if timeout is None else timeout)
+        m.configure_display(self,'minimum')
+        return {'ok':True}
     def clear_data(self,package,user):self.trace.append(('clear',self.clock.now,package,user));return 'Success'
     def back(self):self.trace.append(('back',self.clock.now));self.state='notification'
     def inspect_window(self, *, priority=None, windows=False):

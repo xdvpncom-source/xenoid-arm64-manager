@@ -54,6 +54,7 @@ class Device:
         self.taps.append((self.clock.now, x, y))
         self.on_tap()
     def set_frame_rate(self, *args, **kwargs): return {'changed': False}
+    def apply_resource_defaults(self, timeout=None): return {'ok': True}
 
 
 class IdlePollingTests(unittest.TestCase):

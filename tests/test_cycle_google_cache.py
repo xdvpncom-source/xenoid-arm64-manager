@@ -200,7 +200,7 @@ class GoogleCacheWorkflowTests(unittest.TestCase):
                 self.assertEqual(len([r for r in device.trace if r[0]=='cache']),2)
 
     def test_bundled_production_source_matches_reviewed_unseeded_workflow(self):
-        self.assertEqual(hashlib.sha256(SOURCE.read_bytes()).hexdigest(),'69483eeb701f78072bdbde34d9abd8864ea067c63ae130d9ff49dcb382296f0d')
+        self.assertEqual(hashlib.sha256(SOURCE.read_bytes()).hexdigest(),'84fdc1282781cf39177813ac535e6e40b0dbd42a77241aa1360bbf7b3780d4c5')
         self.assertNotIn('random.seed(',SOURCE.read_text())
 
 

@@ -86,6 +86,14 @@ class Device:
             return request("set-frame-rate", [fps, timeout])
         return request("set-frame-rate", [fps])
 
+    def apply_resource_defaults(self, timeout=None):
+        """Apply the panel's current resource policy and generated profile size.
+
+        With no explicit timeout the panel's setup budget is used. Zero waits
+        without a deadline. This does not inject touch input or regenerate IDs.
+        """
+        return request("apply-resource-defaults", [] if timeout is None else [timeout])
+
     def app_package(self):
         """Return the configured/assigned package, or the current foreground package."""
         return request("app-package", [])
@@ -282,6 +290,8 @@ def cli(program, args):
     if action == "set-frame-rate" and 1 <= len(args) <= 2:
         return Device().set_frame_rate(None if args[0] == "none" else int(args[0]),
                                        timeout=int(args[1]) if len(args) == 2 else None)
+    if action == "apply-resource-defaults" and len(args) <= 1:
+        return Device().apply_resource_defaults(int(args[0]) if args else None)
     return request(action, args)
 
 

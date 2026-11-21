@@ -1,0 +1,467 @@
+"""Durable profile phase after native GEN, before Google/cache post-processing.
+
+The official native CLI handler is called in-process under its existing lock.
+This module owns no identity-reset operation and never creates a second GEN.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import copy
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import tempfile
+import time
+
+from qa_device_profile import canonical_bytes, generate_profile, profile_sha256, validate_policy, validate_profile
+
+CONFIG = Path("/etc/xenoid-fleet/device-profile-policy.json")
+RESOURCE_CONFIG = Path("/etc/xenoid-fleet/qa-resources.json")
+STATE = Path("/var/lib/xenoid-fleet/device-profiles")
+PLAN_SCHEMA = "dev.xenoid.profile-rotation-plan/v1"
+STATE_SCHEMA = "dev.xenoid.applied-profile/v1"
+PENDING_SCHEMA = "dev.xenoid.pending-profile/v1"
+EFFECTIVE_PROFILE = "/data/local/tmp/xenoid-profile/effective.json"
+_INSTANCE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+class ProfilePending(RuntimeError):
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code)
+
+
+def _now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _read_json(path):
+    path = Path(path)
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022 or info.st_size > 1024 * 1024:
+        raise ProfilePending("profile_file_identity_invalid")
+    with path.open("rb") as stream:
+        return json.load(stream)
+
+
+def _atomic_json(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    parent = path.parent.lstat()
+    if not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.geteuid() or parent.st_mode & 0o022:
+        raise ProfilePending("profile_state_directory_invalid")
+    data = canonical_bytes(value) + b"\n"
+    fd, temporary = tempfile.mkstemp(prefix=".profile-", dir=str(path.parent))
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data); stream.flush(); os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try: os.fsync(directory)
+        finally: os.close(directory)
+    finally:
+        try: os.unlink(temporary)
+        except FileNotFoundError: pass
+
+
+def _budget(broker, deadline):
+    if broker.stopping.is_set():
+        raise ProfilePending("script_stopping")
+    if deadline is not None and time.monotonic() >= deadline:
+        raise ProfilePending("profile_operation_timeout")
+
+
+def _execute(broker, manager, args, deadline):
+    _budget(broker, deadline)
+    result = broker.native_display_exec(manager, args, deadline=deadline, check=False)
+    if result.returncode:
+        raise ProfilePending("profile_readback_unavailable")
+    return result.stdout.decode(errors="strict").strip()
+
+
+def _effective(broker, manager, deadline):
+    return validate_profile(json.loads(_execute(broker, manager, ["cat", EFFECTIVE_PROFILE], deadline)))
+
+
+def _display(broker, manager, deadline):
+    size = _execute(broker, manager, ["wm", "size"], deadline)
+    density = _execute(broker, manager, ["wm", "density"], deadline)
+    def selected(text, kind, override=False):
+        label = "Override" if override else "Physical"
+        pattern = label + (r" size:\s*(\d+)x(\d+)" if kind == "size" else r" density:\s*(\d+)")
+        match = re.search(pattern, text)
+        if not match:
+            if override: return None
+            raise ProfilePending("profile_display_unavailable")
+        values = tuple(map(int, match.groups()))
+        return values if kind == "size" else values[0]
+    physical_size, physical_density = selected(size, "size"), selected(density, "density")
+    return {"physical_size": list(physical_size), "physical_density": physical_density,
+            "size": list(selected(size, "size", True) or physical_size),
+            "density": selected(density, "density", True) or physical_density}
+
+
+def _display_period(broker, manager, deadline):
+    text = _execute(broker, manager, ["dumpsys", "SurfaceFlinger", "--latency"], deadline)
+    first = text.splitlines()[0] if text else ""
+    if not first.isdigit() or int(first) <= 0:
+        raise ProfilePending("profile_display_period_unavailable")
+    return int(first)
+
+
+def capture_plan(broker, manager, binding, deadline, *, config_path=CONFIG, resource_path=RESOURCE_CONFIG):
+    """Pin settings and the device's current effective JSON before GEN starts."""
+    if not Path(config_path).exists():
+        return None  # Backwards-compatible workers with no profile policy.
+    raw = _read_json(config_path)
+    if not isinstance(raw, dict):
+        raise ProfilePending("profile_policy_invalid")
+    if raw.get("enabled") is False:
+        return None
+    actual = _effective(broker, manager, deadline)
+    policy = validate_policy(raw, [actual])
+    if not policy["enabled"]:
+        return None
+    display = _display(broker, manager, deadline)
+    display["period_ns"] = _display_period(broker, manager, deadline)
+    display["fps"] = int(round(1000000000 / display["period_ns"]))
+    resource = _read_json(resource_path) if Path(resource_path).exists() else {}
+    resource = {**resource, "physical_size": display["physical_size"], "physical_density": display["physical_density"]}
+    previous = copy.deepcopy(actual)
+    previous["display"].update(width=display["size"][0], height=display["size"][1], densityDpi=display["density"])
+    previous["display"]["defaultRefreshRateHz"] = display["fps"]
+    previous["display"]["peakRefreshRateHz"] = max(display["fps"], previous["display"]["peakRefreshRateHz"])
+    for axis, value in (("x", display["size"][0]), ("y", display["size"][1])):
+        previous["input"][axis] = {"minimum": 0, "maximum": value - 1}
+    validate_profile(previous)
+    return {"schema": PLAN_SCHEMA, "enabled": True, "binding": copy.deepcopy(binding), "policy": policy,
+            "policy_sha256": profile_sha256(policy), "base_profile": actual, "base_sha256": profile_sha256(actual),
+            "previous_profile": previous, "previous_sha256": profile_sha256(previous),
+            "resource_config": resource, "display_before": display, "captured_at": _now()}
+
+
+def _plan(receipt):
+    plan = receipt.get("profile_plan")
+    if plan is None:
+        return None
+    if not isinstance(plan, dict) or plan.get("schema") != PLAN_SCHEMA or plan.get("enabled") is not True or plan.get("binding") != receipt.get("binding"):
+        raise ProfilePending("profile_plan_invalid")
+    for field, digest in (("base_profile", "base_sha256"), ("previous_profile", "previous_sha256"), ("policy", "policy_sha256")):
+        if profile_sha256(plan.get(field)) != plan.get(digest):
+            raise ProfilePending("profile_plan_digest_mismatch")
+    validate_profile(plan["base_profile"]); validate_profile(plan["previous_profile"])
+    validate_policy(plan["policy"], [plan["base_profile"], plan["previous_profile"]])
+    return plan
+
+
+def _native_ids(manager, cli):
+    identity = cli.DeviceIdentityStore(manager.context).load()
+    if not identity or identity.get("pending") or identity.get("pendingStable") or not identity.get("active"):
+        raise ProfilePending("profile_native_identity_unavailable")
+    stable = identity["stable"]
+    return {"android_id": stable["androidId"], "serial": stable["serial"], "imei": stable["imei"],
+            "imeisv": stable["imeisv"], "boot_id": identity["active"]["bootId"]}
+
+
+def _verify_core(broker, manager, cli, receipt, deadline):
+    broker.verify_regeneration_native_completion(manager, cli, receipt, deadline)
+    if broker.regeneration_binding(manager) != receipt["binding"]:
+        raise ProfilePending("profile_container_binding_changed")
+    target = receipt["native_journal"]["target"]
+    commands = {"android_id": ["settings", "get", "secure", "android_id"], "serial": ["getprop", "ro.serialno"],
+                "imei": ["getprop", "persist.xenoid.radio.imei"], "imeisv": ["getprop", "persist.xenoid.radio.imeisv"],
+                "boot_id": ["cat", "/proc/sys/kernel/random/boot_id"],
+                "drm": ["cat", "/data/local/tmp/xenoid-profile/drm_device_unique_id"],
+                "fsid": ["cat", "/data/local/tmp/xenoid-profile/statfs_fsid"]}
+    native = _native_ids(manager, cli)
+    expected = {**native, "drm": target["drmDeviceUniqueId"], "fsid": target["statfsFsid"]}
+    for key, command in commands.items():
+        if _execute(broker, manager, command, deadline) != expected[key]:
+            raise ProfilePending("profile_changed_native_" + key)
+    return native
+
+
+def _matches_profile(broker, manager, target, deadline):
+    try: return profile_sha256(_effective(broker, manager, deadline)) == profile_sha256(target)
+    except (ValueError, ProfilePending): return False
+
+
+def _staged_fields(target):
+    fields = {"cpu_count": len(target["cpu"]["cores"]), "cpu_implementer": target["cpu"]["implementer"]}
+    for index, core in enumerate(target["cpu"]["cores"]):
+        for key, value in core.items():
+            if key in {"processor", "part", "model", "minimumFrequencyKhz", "maximumFrequencyKhz"}:
+                fields["cpu_" + str(index) + "_" + key] = value
+    for key in ("totalBytes", "totalKiB", "swapBytes"):
+        fields["memory_" + key] = target["memory"][key]
+    for key in ("capacityBytes", "blockDevice", "mountSource", "sectorSizeBytes", "sectorCount", "technology", "filesystem"):
+        fields["storage_" + key] = target["storage"][key]
+    for key, value in target["battery"].items(): fields["battery_" + key] = value
+    for key in ("manufacturer", "product", "vendor_id", "product_id"):
+        if key in target.get("usb", {}): fields["usb_" + key] = target["usb"][key]
+    for zone, values in target.get("thermal", {}).items():
+        if re.fullmatch(r"zone[0-9]", zone):
+            for key in ("type", "temp"):
+                if key in values: fields["thermal_" + zone + "_" + key] = values[key]
+    display = target["display"]
+    fields.update(display_width=display["width"], display_height=display["height"], display_density_dpi=display["densityDpi"],
+                  display_physicalPpi=display["physicalPpi"], display_defaultRefreshRateHz=display["defaultRefreshRateHz"], display_peakRefreshRateHz=display["peakRefreshRateHz"],
+                  input_width=display["width"], input_height=display["height"])
+    for key in ("name", "busType", "vendorId", "productId", "version"):
+        fields["input_" + key] = target["input"][key]
+    for axis in ("x", "y", "pressure", "trackingId"):
+        for key in ("minimum", "maximum"):
+            fields["input_" + axis + "_" + key] = target["input"][axis][key]
+    return {key: str(value) for key, value in fields.items()}
+
+
+def _verify_staged(broker, manager, target, deadline):
+    expected = _staged_fields(target)
+    if any(not re.fullmatch(r"[A-Za-z0-9_]+", key) for key in expected):
+        raise ProfilePending("profile_staged_field_invalid")
+    script = "# XENOID_PROFILE_STAGES\nset -eu; for key in " + " ".join(sorted(expected)) + "; do printf '%s=' \"$key\"; base64 <\"/data/local/tmp/xenoid-profile/$key\" | tr -d '\\r\\n'; printf '\\n'; done"
+    output = _execute(broker, manager, ["sh", "-c", script], deadline)
+    observed = {}
+    for line in output.splitlines():
+        key, sep, encoded = line.partition("=")
+        if not sep or key in observed: raise ProfilePending("profile_staged_readback_invalid")
+        try:
+            value = base64.b64decode(encoded, validate=True).decode()
+            observed[key] = value[:-1] if value.endswith("\n") else value
+        except (ValueError, UnicodeDecodeError): raise ProfilePending("profile_staged_readback_invalid")
+    if observed != expected:
+        raise ProfilePending("profile_staged_fields_mismatch")
+    return len(expected)
+
+
+def _verify_applied_fields(broker, manager, target, deadline):
+    if not _matches_profile(broker, manager, target, deadline):
+        raise ProfilePending("profile_effective_json_mismatch")
+    properties = {"model": "ro.product.model", "fingerprint": "ro.build.fingerprint", "id": "ro.build.id",
+                  "incremental": "ro.build.version.incremental", "release": "ro.build.version.release",
+                  "sdk": "ro.build.version.sdk", "security_patch": "ro.build.version.security_patch",
+                  "bootloader": "ro.bootloader"}
+    for name, prop in properties.items():
+        if _execute(broker, manager, ["getprop", prop], deadline) != str(target["build"][name]):
+            raise ProfilePending("profile_build_readback_mismatch")
+    display = _display(broker, manager, deadline)
+    if display["size"] != [target["display"]["width"], target["display"]["height"]] or display["density"] != target["display"]["densityDpi"]:
+        raise ProfilePending("profile_display_readback_mismatch")
+    return _verify_staged(broker, manager, target, deadline)
+
+
+def _matches_applied_fields(broker, manager, target, deadline):
+    try:
+        _verify_applied_fields(broker, manager, target, deadline)
+        return True
+    except (ValueError, ProfilePending):
+        return False
+
+
+def _verify_readback(broker, manager, target, deadline):
+    count = _verify_applied_fields(broker, manager, target, deadline)
+    broker.ensure_native_interaction(manager, deadline, repair=True, foreground=True)
+    return count
+
+
+def _failed_action(value):
+    if isinstance(value, dict):
+        if "ok" in value and value["ok"] is not True or isinstance(value.get("exitCode"), int) and value["exitCode"] != 0:
+            return True
+        return any(_failed_action(child) for child in value.values())
+    if isinstance(value, list): return any(_failed_action(child) for child in value)
+    return False
+
+
+def load_applied(instance_id, resource_tag=None, container_id=None, *, state_dir=STATE):
+    if not isinstance(instance_id, str) or not _INSTANCE.fullmatch(instance_id):
+        return None
+    path = Path(state_dir) / (instance_id + ".json")
+    try:
+        value = _read_json(path)
+        if not isinstance(value, dict) or value.get("schema") != STATE_SCHEMA or value.get("instance_id") != instance_id:
+            return None
+        if resource_tag is not None and value.get("resource_tag") != resource_tag or container_id is not None and value.get("container_id") != container_id:
+            return None
+        if profile_sha256(value.get("profile")) != value.get("profile_sha256"):
+            return None
+        if (not re.fullmatch(r"[0-9a-f]{64}", str(value.get("profile_sha256", "")))
+                or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("policy_sha256", "")))
+                or type(value.get("policy_revision")) is not int or value["policy_revision"] < 1
+                or not isinstance(value.get("operation_key"), str) or not 1 <= len(value["operation_key"]) <= 200
+                or not isinstance(value.get("applied_at"), str)
+                or datetime.fromisoformat(value["applied_at"]).tzinfo is None
+                or not re.fullmatch(r"[0-9a-f]{12}", str(value.get("resource_tag", "")))
+                or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("container_id", "")))):
+            return None
+        validate_profile(value["profile"])
+        return value
+    except (OSError, ValueError, ProfilePending):
+        return None
+
+
+def status_for_binding(instance_id, resource_tag=None, container_id=None, *, state_dir=STATE):
+    value = load_applied(instance_id, resource_tag, container_id, state_dir=state_dir)
+    if value is None: return None
+    return {"state": "applied", "sha256": value["profile_sha256"], "policy_revision": value["policy_revision"],
+            "policy_sha256": value["policy_sha256"], "operation_key": value["operation_key"], "updated_at": value["applied_at"]}
+
+
+def pending_for_binding(instance_id, resource_tag=None, container_id=None, *, state_dir=STATE):
+    """Let background resource reconciliation defer to a recorded profile phase."""
+    if not isinstance(instance_id, str) or not _INSTANCE.fullmatch(instance_id):
+        return None
+    try:
+        value = _read_json(Path(state_dir) / (instance_id + ".pending.json"))
+    except FileNotFoundError:
+        return None
+    if not isinstance(value, dict) or value.get("schema") != PENDING_SCHEMA or value.get("instance_id") != instance_id or not isinstance(value.get("operation_key"), str) or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("target_sha256", ""))):
+        raise ProfilePending("pending_profile_marker_invalid")
+    if resource_tag is not None and value.get("resource_tag") != resource_tag or container_id is not None and value.get("container_id") != container_id:
+        return None
+    return value
+
+
+def _remove_target(path, expected_sha256):
+    """Remove only this operation's verified scratch file, never its siblings."""
+    try:
+        if not path.exists(): return True
+        if profile_sha256(_read_json(path)) != expected_sha256: return False
+        path.unlink()
+        directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try: os.fsync(directory)
+        finally: os.close(directory)
+        try:
+            path.parent.rmdir()
+            parent = os.open(path.parent.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try: os.fsync(parent)
+            finally: os.close(parent)
+        except OSError: pass  # Another operation's target can share the folder.
+        return True
+    except (OSError, ValueError, ProfilePending):
+        return False
+
+
+def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=STATE):
+    """Resume the pinned profile operation; all retries reuse the same JSON."""
+    plan = _plan(receipt)
+    if plan is None:
+        return None
+    _budget(broker, deadline)
+    native = _verify_core(broker, manager, cli, receipt, deadline)
+    progress = receipt.setdefault("profile_progress", {})
+    if not isinstance(progress, dict): raise ProfilePending("profile_progress_invalid")
+    if "target_profile" not in progress:
+        generated = generate_profile(plan["base_profile"], plan["policy"], key,
+                                     previous=plan["previous_profile"], native_ids=native,
+                                     resource_config=plan["resource_config"])
+        progress.update(target_profile=generated["profile"], target_sha256=generated["sha256"],
+                        generated=generated, created_at=_now())
+        store.save(key, receipt)  # A random choice is durable before any apply.
+    target = validate_profile(progress["target_profile"])
+    if profile_sha256(target) != progress.get("target_sha256") or target["ids"] != native:
+        raise ProfilePending("profile_target_digest_or_identity_mismatch")
+    instance = receipt["binding"]["instance_id"]
+    if not _INSTANCE.fullmatch(instance): raise ProfilePending("profile_instance_invalid")
+    path = Path(state_dir) / "pending" / instance / (hashlib.sha256(key.encode()).hexdigest() + ".json")
+    if path.exists():
+        if profile_sha256(_read_json(path)) != progress["target_sha256"]:
+            raise ProfilePending("profile_target_file_changed")
+    else:
+        _atomic_json(path, target)
+    pending_path = Path(state_dir) / (instance + ".pending.json")
+    pending = pending_for_binding(instance, receipt["binding"]["resource_tag"], receipt["binding"]["container_id"], state_dir=state_dir)
+    if pending is not None and (pending["operation_key"] != key or pending["target_sha256"] != progress["target_sha256"]):
+        raise ProfilePending("another_profile_operation_pending")
+    if pending is None:
+        _atomic_json(pending_path, {"schema": PENDING_SCHEMA, **receipt["binding"], "operation_key": key,
+                                    "target_sha256": progress["target_sha256"], "created_at": progress["created_at"]})
+    if not progress.get("apply_verified"):
+        if not progress.get("apply_started") or not _matches_applied_fields(broker, manager, target, deadline):
+            progress["apply_started"] = True
+            store.save(key, receipt)
+            captured = []
+            old_runtime, old_print = cli.runtime, cli.print_json
+            cli.runtime = lambda _args: manager
+            cli.print_json = lambda value: captured.append(value)
+            args = argparse.Namespace(context=manager.context, config=manager.cfg, lease=manager.lease,
+                                      profile=path, instance_identity=True, keep_unique=False,
+                                      generate_frida=False, _operation_lock_held=True)
+            try:
+                result = cli.cmd_device_apply(args)
+            finally:
+                cli.runtime, cli.print_json = old_runtime, old_print
+            answer = captured[-1] if captured else {}
+            if result or not isinstance(answer, dict) or answer.get("ok") is not True or answer.get("rotated") is not False or _failed_action(answer):
+                raise ProfilePending("profile_official_apply_pending")
+        _verify_applied_fields(broker, manager, target, deadline)
+        _verify_core(broker, manager, cli, receipt, deadline)
+        progress["apply_verified"] = True
+        store.save(key, receipt)
+
+    # Build.* is cached in Zygote. A second userspace reload refreshes the new
+    # profile, but explicitly preserves the native GEN IDs and SSAID store.
+    reload = progress.get("reload")
+    if reload is None:
+        epoch = manager._userspace_runtime_epoch(deadline=deadline)
+        if not epoch: raise ProfilePending("profile_userspace_epoch_unavailable")
+        reload = {"before_epoch": epoch, "token": hashlib.sha256(("profile-reload:" + key).encode()).hexdigest()[:32], "requested": False}
+        progress["reload"] = reload; store.save(key, receipt)
+    if not reload.get("completed"):
+        epoch = manager._userspace_runtime_epoch(deadline=deadline)
+        if reload.get("requested") and not epoch:
+            raise ProfilePending("profile_reload_waiting_epoch")
+        observed = bool(epoch and epoch != reload["before_epoch"])
+        if observed and manager.regeneration_restart_receipt(reload["token"]).get("ok") is not True:
+            raise ProfilePending("profile_reload_receipt_missing")
+        reload["requested"] = True
+        store.save(key, receipt)
+        remaining = 180 if deadline is None else max(.1, min(180, deadline - time.monotonic()))
+        result = manager.soft_reboot(timeout=remaining, require_health=False, reset_ssaid=False,
+                                     userspace_restart_observed=observed, restart_receipt=reload["token"])
+        after = manager._userspace_runtime_epoch(deadline=deadline)
+        if after and after != reload["before_epoch"] and manager.regeneration_restart_receipt(reload["token"]).get("ok") is True:
+            reload["after_epoch"] = after
+            store.save(key, receipt)
+        if result.get("ok") is not True:
+            raise ProfilePending("profile_reload_pending")
+        if not after or after == reload["before_epoch"]:
+            raise ProfilePending("profile_reload_not_observed")
+        reload["completed"] = True; store.save(key, receipt)
+    _verify_core(broker, manager, cli, receipt, deadline)
+    fps = int(target["display"]["defaultRefreshRateHz"])
+    timeout = 0 if deadline is None else max(1, int(deadline - time.monotonic()))
+    broker.set_frame_rate(fps, timeout=timeout)
+    period = _display_period(broker, manager, deadline)
+    if abs(period - 1000000000 // fps) > 1:
+        raise ProfilePending("profile_frame_rate_readback_mismatch")
+    stage_count = _verify_readback(broker, manager, target, deadline)
+    _verify_core(broker, manager, cli, receipt, deadline)
+    progress.setdefault("completed_at", _now())
+    _atomic_json(Path(state_dir) / (instance + ".json"), {
+        "schema": STATE_SCHEMA, **receipt["binding"], "profile": target,
+        "profile_sha256": progress["target_sha256"], "policy_revision": plan["policy"]["revision"],
+        "policy_sha256": plan["policy_sha256"], "operation_key": key, "applied_at": progress["completed_at"]})
+    progress["completed"] = True; store.save(key, receipt)
+    pending = pending_for_binding(instance, receipt["binding"]["resource_tag"], receipt["binding"]["container_id"], state_dir=state_dir)
+    if pending is None or pending["operation_key"] != key or pending["target_sha256"] != progress["target_sha256"]:
+        raise ProfilePending("pending_profile_marker_changed")
+    pending_path.unlink()
+    directory = os.open(pending_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try: os.fsync(directory)
+    finally: os.close(directory)
+    progress["target_file_removed"] = _remove_target(path, progress["target_sha256"])
+    store.save(key, receipt)
+    manager.clear_regeneration_restart_receipt(reload["token"])
+    return {"ok": True, "profile_sha256": progress["target_sha256"], "policy_revision": plan["policy"]["revision"],
+            "changed_fields": progress["generated"]["changed_fields"],
+            "unchanged_enabled_fields": progress["generated"]["unchanged_enabled_fields"],
+            "official_apply": True, "native_ids_preserved": True, "input_ready": True,
+            "profile_reload_observed": True, "staged_fields_verified": stage_count,
+            "fps": fps, "period_ns": period, "temporary_target_removed": progress["target_file_removed"]}
