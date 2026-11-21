@@ -1,0 +1,43 @@
+--- a/src/xenoid/backend.py
++++ b/src/xenoid/backend.py
+@@ -5379,6 +5379,29 @@
+             },
+         }
+ 
++    def _qa_host_vm_isolation(self, expected_container_id: str) -> dict[str, Any]:
++        """Keep optional Fleet QA's guest VM producer isolated before Android boot."""
++        import importlib.util
++        path = Path("/opt/xenoid-fleet/panel-scripts/qa_host_memory.py")
++        if not path.exists():
++            return {"ok": True, "skipped": "qa_host_vm_addon_not_installed"}
++        try:
++            info = path.lstat()
++            if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
++                    or info.st_nlink != 1 or info.st_mode & 0o022):
++                return {"ok": False, "error": "qa_host_vm_helper_invalid"}
++            spec = importlib.util.spec_from_file_location("xenoid_qa_host_vm", path)
++            if spec is None or spec.loader is None:
++                return {"ok": False, "error": "qa_host_vm_helper_unavailable"}
++            module = importlib.util.module_from_spec(spec)
++            spec.loader.exec_module(module)
++            with self.instance_operation_lock(timeout_seconds=30):
++                return module.ensure_guest_guard(self, expected_container_id)
++        except Exception as exc:
++            code = str(exc)
++            return {"ok": False, "error": code if re.fullmatch(r"[a-z][a-z0-9_]{0,100}", code)
++                    else "qa_host_vm_isolation_failed"}
++
+     def start_owned_container(
+         self,
+         expected_container_id: Optional[str] = None,
+@@ -5490,6 +5513,10 @@
+             "containerId": container_id,
+             "alreadyRunning": running,
+         }
++        isolation = self._qa_host_vm_isolation(container_id)
++        result["hostMemoryIsolation"] = isolation
++        if isolation.get("ok") is not True:
++            return {**result, "ok": False, "error": isolation.get("error", "qa_host_vm_isolation_failed")}
+         if not running:
+             quarantine = self.proxy_bootstrap_quarantine()
+             result["proxyQuarantine"] = quarantine

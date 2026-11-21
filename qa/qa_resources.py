@@ -201,6 +201,18 @@ def prepare_identity(marker, backup, previous, identity):
     return previous
 
 
+def ensure_host_vm_guard(manager, owned):
+    # This runs under the same Native instance lock as the display transaction.
+    # Even an already-applied display marker must not conceal a lost per-boot
+    # producer bind after an out-of-band Docker restart. No host sysctl reset is
+    # performed by the timer; only the known Android producer is isolated.
+    from qa_host_memory import ensure_guest_guard
+    result = ensure_guest_guard(manager, owned["Id"])
+    if result.get("ok") is not True:
+        raise RuntimeError("Host VM producer isolation did not complete")
+    return result
+
+
 def reconcile(name, config, *, force=False):
     # Timer only handles already-running registered runtimes. It never starts a
     # stopped device and never imports/changes an APK or the desired proxy source.
@@ -210,13 +222,6 @@ def reconcile(name, config, *, force=False):
         return {"instance": name, "skipped": "no_owned_runtime"}
     if (owned.get("State") or {}).get("Running") is not True:
         return {"instance": name, "skipped": "stopped"}
-    identity = resource_identity(manager)
-    key = resource_key(owned, config, identity)
-    marker = STATE / (name + ".json")
-    previous = read_marker(marker)
-    same_boot = previous.get("key") == key
-    if not force and same_boot and not previous.get("proxy_pending"):
-        return {"instance": name, "skipped": "already_applied"}
     # This is a root QA resource transaction, with an administrator-selected
     # wait budget. Hold the native lock across FPS, profile replay, proxy recovery
     # and WM writes. Its ContextVar makes Broker's inner lock reentrant. The
@@ -233,6 +238,7 @@ def reconcile_owned(name, config, manager, *, force=False):
         return {"instance": name, "skipped": "no_owned_runtime"}
     if (owned.get("State") or {}).get("Running") is not True:
         return {"instance": name, "skipped": "stopped"}
+    host_vm = ensure_host_vm_guard(manager, owned)
     identity = resource_identity(manager)
     key = resource_key(owned, config, identity)
     marker = STATE / (name + ".json")
@@ -240,7 +246,7 @@ def reconcile_owned(name, config, manager, *, force=False):
     previous = prepare_identity(marker, backup, read_marker(marker), identity)
     same_boot = previous.get("key") == key
     if not force and same_boot and not previous.get("proxy_pending"):
-        return {"instance": name, "skipped": "already_applied"}
+        return {"instance": name, "skipped": "already_applied", "host_vm": host_vm}
     from script_host import Broker
     broker = Broker(manager, lambda *_args: None, config={"expected_container_id": owned["Id"],
                                                        "command_timeout": config["timeout"]})

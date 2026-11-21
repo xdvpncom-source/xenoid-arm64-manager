@@ -183,11 +183,22 @@ class NativeLockIntegrationTest(unittest.TestCase):
                 actions.append("metrics_under_native_lock")
             return {"changed": False}
 
+        def producer_guard(manager, expected_container_id):
+            # Isolate privileged host mounts at their boundary while keeping the
+            # actual timer wrapper and real Native lock/ContextVar behavior.
+            self.assertIs(manager, self.manager)
+            self.assertEqual(expected_container_id, self.manager.owned["Id"])
+            self.assertTrue(NATIVE.operation_lock_is_held(manager.context.instance_id))
+            actions.append("guard_under_native_lock")
+            return {"ok": True, "changed": False}
+
         self.patch_globals = patch.dict(GLOBALS, {"STATE": self.root / "qa-state",
             "native_manager": lambda _name: self.manager, "apply_metrics": metrics})
         self.patch_globals.start()
         self.addCleanup(self.patch_globals.stop)
-        self.patch_broker = patch.dict(sys.modules, {"script_host": types.SimpleNamespace(Broker=Broker)})
+        self.patch_broker = patch.dict(sys.modules, {
+            "script_host": types.SimpleNamespace(Broker=Broker),
+            "qa_host_memory": types.SimpleNamespace(ensure_guest_guard=producer_guard)})
         self.patch_broker.start()
         self.addCleanup(self.patch_broker.stop)
 
@@ -228,7 +239,7 @@ class NativeLockIntegrationTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertTrue(results[0]["ok"])
         self.assertEqual(self.manager.requests, [expected_native_timeout, 6, 6])
-        self.assertEqual(self.actions, ["fps_entered", "fps_under_native_lock", "metrics_entered", "metrics_under_native_lock"])
+        self.assertEqual(self.actions, ["guard_under_native_lock", "fps_entered", "fps_under_native_lock", "metrics_entered", "metrics_under_native_lock"])
         self.assertFalse(NATIVE.operation_lock_is_held(self.manager.context.instance_id))
 
     def test_admin_180_seconds_waits_then_reenters_real_broker_inner_lock(self):

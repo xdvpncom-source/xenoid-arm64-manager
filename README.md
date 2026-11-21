@@ -7,7 +7,7 @@ Install Xenoid on an ARM64 Ubuntu server and manage headless Android 13 instance
 Use an **ARM64 (aarch64) server running Ubuntu 24.04**, such as a Hetzner CAX server. The installer requires root access, outbound HTTPS, and free disk space for the build toolchain, container images, and Android data. Install and management commands use the same operator account and Xenoid registry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.20/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.21/install.sh | sudo -H bash -s -- --accept-android-licenses
 ```
 
 The `--accept-android-licenses` flag accepts the Android SDK licenses for the pinned build tools from Google. The installer prepares the host and starts device `1`. Allow tens of minutes for the first build on a small server. The CLI is installed as `/usr/local/bin/xenoid-fleet` and the managed checkout lives under `/opt/xenoid-fleet/upstream`. Rerunning the installer reuses the toolchain and converges device `1` with its existing data.
@@ -25,7 +25,7 @@ sudo -H xenoid-fleet run 1 -- adb shell getprop sys.boot_completed
 Use `--install-only` to prepare the host before creating the first device or upgrade an existing installation without issuing a device start. Upgrades also refresh enabled proxies on already-running devices when their native control/process revision has not been verified.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.20/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.21/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
 ```
 
 ## Devices
@@ -120,7 +120,7 @@ still fail ownership checks.
 
 ### Panel-controlled QA defaults
 
-Version v0.1.20 installs the QA SDK/backend, the native logical-to-raw input
+Version v0.1.21 installs the QA SDK/backend, the native logical-to-raw input
 coordinate correction, and configurable resource defaults for all instances,
 including devices with no APK or shared script assignment. The stock pinned
 Redroid image, each native instance identity, persistent data, and saved proxy
@@ -177,8 +177,8 @@ devices, so changing ad selectors or timing does not require a Fleet upgrade.
 `qa/vpn-cycle.py` is the release-time reference protected by the installer
 manifest. The current panel workflow is also mirrored in
 [`examples/current-vpn-cycle.py`](examples/current-vpn-cycle.py) and exported as
-the [`vpn-cycle-v15.py` release asset](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.20/vpn-cycle-v15.py)
-with a [SHA-256 sidecar](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.20/vpn-cycle-v15.py.sha256).
+the [`vpn-cycle-v15.py` release asset](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.21/vpn-cycle-v15.py)
+with a [SHA-256 sidecar](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.21/vpn-cycle-v15.py.sha256).
 The historical v0.1.17 `vpn-cycle-v14.py`, v0.1.16 `vpn-cycle-v14.py`, v0.1.15 `vpn-cycle-v13.py`, v0.1.14 `vpn-cycle-v13.py`, v0.1.13 `vpn-cycle-v12.py` and v0.1.12 `vpn-cycle-v11.py` assets remain unchanged. Updating the
 editable workflow never rewrites an existing release tag or its installer pins.
 
@@ -381,3 +381,82 @@ sudo -H xenoid-fleet run 1 -- up
 ## Upstream
 
 This repository provides the host installer and fleet CLI. The upstream [Xenoid project](https://github.com/Umiade/xenoid) provides the Android runtime and per-instance commands.
+
+
+### Domain exceptions in the management panel
+
+The Proxy page has an editable domain-exception list. Each row chooses an exact
+DNS name or that name plus every subdomain. Save retains the policy for future
+provisioning; Save and apply queues its native reconciliation across installed
+hosts. Job failures remain visible and do not imply a successful apply. An empty
+saved list disables exceptions and survives installer reruns.
+
+The initial exceptions are `us.xdvpn.com`, `xdvpn.com`, `ir.xdgram.com`,
+`xdgram.com`, and `github.com`, all with subdomains enabled. Redundant children
+remain visible in the editor, while compilation reduces them to the three
+parent suffix rules. Label boundaries are respected: `github.com.example.org`
+and `notgithub.com` are not exceptions. `raw.githubusercontent.com` is a
+separate domain and remains on the selected proxy unless explicitly added.
+
+Fleet stores the root-owned policy at `/etc/xenoid/qa-proxy-routing.json`.
+The native agent compiles the matching DIRECT rules ahead of `MATCH,GLOBAL`
+and adds direct DNS resolution only for those exceptions. Existing encrypted
+proxy sources, selected nodes and UDP/IPv6 policy flags are preserved. Direct
+connections use the individual host's outbound address. An application's own
+VPN can encapsulate its destinations inside a tunnel; host domain routing does
+not independently select destinations hidden within that encrypted tunnel.
+
+```sh
+sudo -H xenoid-fleet proxy-routing show
+sudo -H xenoid-fleet proxy-routing configure --json-stdin < routing.json
+sudo -H xenoid-fleet proxy-routing reconcile all --timeout 180
+```
+
+The policy JSON uses schema `dev.xenoid.qa.proxy-routing/v1` and an `exceptions`
+array of objects with `domain` and Boolean `include_subdomains`. Panel
+provisioning stages its saved policy before create/start/recreate or enabling a
+proxy. The policy lives outside Android data and is read again after native
+regeneration. Installer defaults do not overwrite an existing custom policy.
+
+### Shared-host memory tuning isolation
+
+The stock Android display-memory producer repeatedly adds its requested reserve
+to the current Linux `vm.watermark_scale_factor`. Privileged Android containers
+share this host setting, so display/profile replay across devices can accumulate
+large reservations and unnecessary reclaim/swap pressure.
+
+The QA addon isolates only this verified producer. Existing guests receive a
+read-only bind in Android init's mount namespace; stopped and newly created
+instances receive the same producer patch inside their owned, committed ext4
+root filesystem before Android starts. These are per-instance filesystem or
+mount changes. They do not build a new Docker image or replace a current
+container, data volume, APK, device identity or native touch driver.
+
+An explicit migration restores the host's administrator-configured watermark,
+or the Linux default when no override exists, only after every running registered
+producer is verified guarded. No timer repeatedly resets the host value. The
+original producer and pre-migration value are recorded privately for review.
+The supplied host-memory rollback requires all managed containers and QA workers
+to be stopped, verifies committed filesystem identities, and never recursively
+removes a failed mount. The existing display/FPS rollback remains separate.
+
+The SDK also reads the live native proxy engine/agent state before accepting an
+Android cached success report. A dead host process triggers official saved-state
+reconciliation; a successful return is checked against the actual generation and
+runtime epoch. Display readiness and proxy network readiness remain separate.
+
+### Temporary proxy and control-channel failures
+
+Provider connection limits and temporary transport failures leave Android and
+the QA scenario's saved progress intact. The native proxy agent retains its
+authenticated session and retries recoverable connection, timeout and local
+port/file-descriptor exhaustion errors with interruptible backoff. A pending
+failure stays visible until a fresh Android network probe succeeds, including
+when the desired configuration and check ID have not changed. The agent never
+reports an old successful probe as current recovery.
+
+Malformed responses, authentication/ownership failures and missing structural
+control files still fail explicitly. Recovery does not reboot or regenerate a
+device, alter the selected proxy source, or replace official Xenoid touch.
+While a provider remains unavailable, network-dependent actions can remain
+pending; the panel cannot remove an upstream provider's connection quota.

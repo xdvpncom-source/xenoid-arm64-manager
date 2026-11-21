@@ -1666,6 +1666,35 @@ class Broker:
                     return True
             return False
 
+        def host_needs_reconcile(status):
+            # Android can retain a successful report after its host agent dies.
+            # Read the actual native process/engine state before reusing it.
+            if not isinstance(status, dict) or status.get("enabled") is not True:
+                return False
+            if (status.get("stateReadable") is not True or status.get("configured") is not True
+                    or type(status.get("generation")) is not int or status["generation"] < 0
+                    or not isinstance(status.get("runtimeEpoch"), str) or not status["runtimeEpoch"]):
+                summary.update(live_host_checked=False, live_host_ready=False)
+                return True
+            verify()
+            value = remaining()
+            if value is None:
+                budget = nullcontext()
+            else:
+                from xenoid.util import command_timeout
+                budget = command_timeout(value)
+            with self.display_raw_docker(manager, deadline, stopping=stopping), budget:
+                live = manager.proxy_engine_status()
+            verify()
+            ready = (isinstance(live, dict) and live.get("ok") is True
+                     and live.get("phase") == "active" and live.get("structuralApplied") is True
+                     and live.get("quarantined") is not True)
+            if ready:
+                ready = (type(live.get("generation")) is int
+                         and all(live.get(key) == status[key] for key in ("generation", "runtimeEpoch")))
+            summary.update(live_host_checked=True, live_host_ready=ready)
+            return not ready
+
         try:
             if stopping and self.stopping.is_set():
                 raise RuntimeError("device_stopping")
@@ -1679,7 +1708,7 @@ class Broker:
                 raise
             except Exception:
                 status = {}
-            required = force or needs_reconcile(status)
+            required = force or needs_reconcile(status) or host_needs_reconcile(status)
             if required:
                 value = remaining()
                 # The official API has no timeout argument. Its native context
@@ -1701,7 +1730,8 @@ class Broker:
                     summary["code"] = (result.get("code") or result.get("error")) if isinstance(result, dict) else None
             else:
                 success = True
-            ready = success and isinstance(status, dict) and status.get("ok") is True and not needs_reconcile(status)
+            ready = (success and isinstance(status, dict) and status.get("ok") is True
+                     and not needs_reconcile(status) and not host_needs_reconcile(status))
             summary.update(ok=ready, ready=ready, reconciled=reconciled)
             if isinstance(status, dict):
                 for key in ("enabled", "configured", "quarantined", "mustBlock"):

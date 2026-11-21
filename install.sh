@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-release=v0.1.20
+release=v0.1.21
 fleet_repository=https://github.com/xdvpncom-source/xenoid-arm64-manager.git
-fleet_sha256=fda74775983bf7a989c8144d8ce5becb701649006fce34d327e6639984fe4c78
+fleet_sha256=cf01fcb48bd7376c3e6e522c4daa92956d0e6abc95ae067d66fe8a563405b15a
 toolchain_sha256=f657aba4c546b5c6c3a9c37b513db9ceca4fb31f26b33bf3106a5852052cf9c8
 daemon_patch_sha256=a76a728fea8ebee104fc5e7230eb02ec69d11db5d24f51eff0f9edfa4f9ae467
 keymint_patch_sha256=5fd4a5fe25479ebe8fa068bd8cf55fe72ddf3245787e19feaf4a06f67859fa16
 protection_patch_sha256=1e57b90e7008a26a7f4a04a926ddcc82e9b79d78c367bba3562e41f4a19c26a3
 proxy_acceptance_patch_sha256=680d7186162c9e48d5e27d251b4a1739337ffc2f3affcb1579ebf7a7339ef716
-qa_manifest_sha256=e6d27e6ecbac1d77341bc40451cb82b841e0f27ad6c66ac632483bad0c9ac606
-qa_installer_sha256=dcb29dd76e6a22f4061775a330242ac4e7fc680651c3507ca3379c020e916fa4
+proxy_routing_patch_sha256=b677e1374cf00d3363df88102bbe25a6ec8241b273a526ec820506e7de85a904
+host_vm_patch_sha256=5671789f1561944b2952eadf132f006d18780f22ed89b2b51f15fd56db499556
+qa_manifest_sha256=20d4d9bbd8826f3d611b5943148cc295efcb9512548e0e8d6e5be56bdaaba233
+qa_installer_sha256=b304fc4d02f996c4d3cc5a32d6c00076e4ac3791908519e0d3ee3be202b1c571
 proxy_upgrader_sha256=9994aab4e2aa074a35aac44c2a3da9e11d9aa320d89aba8c4fcace6639a3c444
 v011_daemon_blob=ef4394904d9798a529fb8cf609989cf8526b4a89
 v012_live_observe_blob=86fd6204beb0446e7eb35e6ef9cd3ffbd159ecc3
@@ -18,6 +20,8 @@ v013_backend_blob=d570f5aa45e33f8dece813d2a5b06fdb6acbd303
 v016_backend_blob=de60c7bff3cc8c78facd787192b3ee3f8bc24e6a
 v017_backend_blob=f2e2fc5245ffc04ee6a9ed44555107c4e5054297
 v019_backend_blob=f888926c1a1436d4064b371e5621d39a112e353c
+v020_backend_blob=5cdd1088c8db4af95534c374f1e4a617ffffe45f
+v020_proxy_engine_blob=4807c73f1dd3ab92b1523ef00ec62994b0e85b21
 upstream_repository=https://github.com/Umiade/xenoid.git
 upstream_revision=c07e56b4aef8cd7e4d56eed11c84781369d29997
 base_repository=redroid/redroid
@@ -161,7 +165,8 @@ if [[ -e $upstream || -L $upstream ]]; then
         ':(exclude)scripts/build-daemon-standalone.sh' ':(exclude)scripts/build-keymint.sh' \
         ':(exclude)src/xenoid/protection.py' ':(exclude)src/xenoid/live_observe.py' \
         ':(exclude)src/xenoid/backend.py' \
-        ':(exclude)scripts/xenoid-proxy-engine.py' || \
+        ':(exclude)scripts/xenoid-proxy-engine.py' ':(exclude)scripts/xenoid-proxy-agent.py' \
+        ':(exclude)src/xenoid/proxy_source.py' || \
         fail 'The installed Xenoid tracked sources have local changes.'
 else
     git init -q "$stage/upstream"
@@ -196,18 +201,22 @@ fi
         "$daemon_patch_sha256" patches/standalone-manifest.patch "$keymint_patch_sha256" patches/keymint-paths.patch \
         "$protection_patch_sha256" patches/shared-protection-inspect.patch \
         "$proxy_acceptance_patch_sha256" patches/proxy-live-acceptance.patch \
+        "$proxy_routing_patch_sha256" patches/proxy-domain-routing.patch \
+        "$host_vm_patch_sha256" patches/host-vm-isolation.patch \
         "$qa_manifest_sha256" qa/manifest.sha256 "$qa_installer_sha256" install-qa-addon.sh \
         "$proxy_upgrader_sha256" scripts/upgrade-proxy-control.py | \
         sha256sum --check --status
 ) || fail "The CLI, toolchain installer, or source patches did not match release $release."
 
 printf 'Preparing the pinned Xenoid source patches\n'
-patched_sources=(scripts/build-daemon-standalone.sh scripts/build-keymint.sh src/xenoid/protection.py src/xenoid/live_observe.py src/xenoid/backend.py scripts/xenoid-proxy-engine.py)
+patched_sources=(scripts/build-daemon-standalone.sh scripts/build-keymint.sh src/xenoid/protection.py src/xenoid/live_observe.py src/xenoid/backend.py scripts/xenoid-proxy-engine.py scripts/xenoid-proxy-agent.py src/xenoid/proxy_source.py)
 mkdir "$stage/reference"
 git -C "$upstream" archive HEAD -- "${patched_sources[@]}" | tar -x --no-same-permissions -C "$stage/reference"
 git -C "$stage/reference" apply "$source_tree/patches/standalone-manifest.patch" "$source_tree/patches/keymint-paths.patch" \
     "$source_tree/patches/shared-protection-inspect.patch"
 git -C "$stage/reference" apply --include=src/xenoid/live_observe.py --include=src/xenoid/backend.py --include=scripts/xenoid-proxy-engine.py "$source_tree/patches/proxy-live-acceptance.patch"
+git -C "$stage/reference" apply "$source_tree/patches/proxy-domain-routing.patch"
+git -C "$stage/reference" apply "$source_tree/patches/host-vm-isolation.patch"
 for source_file in "${patched_sources[@]}"; do
     installed_source=$upstream/$source_file
     expected_mode=755
@@ -223,7 +232,9 @@ for source_file in "${patched_sources[@]}"; do
             ( $source_file == src/xenoid/backend.py && $installed_blob == "$v013_backend_blob" ) ||
             ( $source_file == src/xenoid/backend.py && $installed_blob == "$v016_backend_blob" ) ||
             ( $source_file == src/xenoid/backend.py && $installed_blob == "$v017_backend_blob" ) ||
-            ( $source_file == src/xenoid/backend.py && $installed_blob == "$v019_backend_blob" ) ]] || \
+            ( $source_file == src/xenoid/backend.py && $installed_blob == "$v019_backend_blob" ) || \
+            ( $source_file == src/xenoid/backend.py && $installed_blob == "$v020_backend_blob" ) || \
+            ( $source_file == scripts/xenoid-proxy-engine.py && $installed_blob == "$v020_proxy_engine_blob" ) ]] || \
             fail "The installed Xenoid source $source_file has local changes."
     fi
 done

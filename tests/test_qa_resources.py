@@ -261,10 +261,12 @@ class ResourceBootIdentityTest(unittest.TestCase):
         self.broker = Mock()
         self.broker.set_frame_rate.return_value = {"changed": False, "proxy": {"ready": True}}
         self.broker_factory = Mock(return_value=self.broker)
+        self.host_vm_guard = Mock(return_value={"ok": True, "changed": False})
         fake_host = types.ModuleType("script_host")
         fake_host.Broker = self.broker_factory
         for context in (
-                patch.dict(GLOBALS, {"STATE": self.root, "native_manager": lambda _: self.manager}),
+                patch.dict(GLOBALS, {"STATE": self.root, "native_manager": lambda _: self.manager,
+                                     "ensure_host_vm_guard": self.host_vm_guard}),
                 patch.dict("sys.modules", {"script_host": fake_host}),
                 patch.dict(GLOBALS, {"apply_metrics": Mock(return_value={"changed": False})})):
             context.start()
@@ -281,7 +283,29 @@ class ResourceBootIdentityTest(unittest.TestCase):
         result = reconcile("phone-1", self.config)
         self.assertEqual(result["skipped"], "already_applied")
         self.broker_factory.assert_not_called()
-        self.manager.instance_operation_lock.assert_not_called()
+        self.manager.instance_operation_lock.assert_called_once_with(timeout_seconds=180)
+        self.host_vm_guard.assert_called_once_with(self.manager, self.owned)
+
+    def test_same_boot_display_marker_still_repairs_lost_vm_guard(self):
+        self.write_marker()
+        before = (self.root / "phone-1.json").read_bytes()
+        self.host_vm_guard.return_value = {"ok": True, "changed": True}
+        result = reconcile("phone-1", self.config)
+        self.assertEqual(result["skipped"], "already_applied")
+        self.assertTrue(result["host_vm"]["changed"])
+        self.broker_factory.assert_not_called()
+        GLOBALS["apply_metrics"].assert_not_called()
+        self.assertEqual((self.root / "phone-1.json").read_bytes(), before)
+
+    def test_failed_vm_guard_prevents_display_and_does_not_replace_marker(self):
+        self.write_marker()
+        before = (self.root / "phone-1.json").read_bytes()
+        self.host_vm_guard.side_effect = RuntimeError("host_vm_unknown_producer")
+        with self.assertRaisesRegex(RuntimeError, "unknown_producer"):
+            reconcile("phone-1", self.config)
+        self.broker_factory.assert_not_called()
+        GLOBALS["apply_metrics"].assert_not_called()
+        self.assertEqual((self.root / "phone-1.json").read_bytes(), before)
 
     def test_timer_rereads_disable_under_device_lock_before_applying(self):
         apply = Mock()

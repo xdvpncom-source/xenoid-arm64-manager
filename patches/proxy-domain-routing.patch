@@ -1,0 +1,898 @@
+diff --git a/scripts/xenoid-proxy-engine.py b/scripts/xenoid-proxy-engine.py
+--- a/scripts/xenoid-proxy-engine.py
++++ b/scripts/xenoid-proxy-engine.py
+@@ -8,6 +8,15 @@
+ import select, signal, socket, stat, struct, subprocess, sys, tempfile, time, uuid, zlib
+ from pathlib import Path
+ from typing import Any, Mapping, Sequence
++
++def routing_module():
++ # install-control must run before the installed companion library is updated.
++ # Resolve routing only for config actions, after control publication completes.
++ import importlib
++ module_root=Path("/usr/lib/xenoid-proxy/python")
++ if not module_root.is_dir():module_root=Path(__file__).resolve().parents[1]/"src"
++ sys.path.insert(0,str(module_root))
++ return importlib.import_module("xenoid.proxy_source")
+ 
+ SCHEMA="dev.xenoid.proxy-engine/v1"; IPC_SCHEMA="dev.xenoid.proxy-engine.ipc/v1"
+ OWNER_SCHEMA="dev.xenoid.proxy-engine.ownership/v1"; CONTROL_SCHEMA="dev.xenoid.proxy-engine.control/v1"
+@@ -645,11 +654,13 @@
+ def validate_config(m,c):
+  if not isinstance(c,dict):raise Error("config_invalid")
+  top={"mode","log-level","allow-lan","bind-address","find-process-mode","ipv6","hosts","listeners","external-controller","tun","iptables","profile","geo-auto-update","sniffer","dns","proxies","proxy-groups","rules","secret"}
+- if set(c)!=top or c["mode"]!="global" or c["log-level"]!="info" or c["allow-lan"] is not True or c["bind-address"]!="*" or c["find-process-mode"]!="off" or not isinstance(c["ipv6"],bool) or c["geo-auto-update"] is not False:raise Error("config_invalid")
++ if set(c)!=top or c["mode"] not in ("global","rule") or c["log-level"]!="info" or c["allow-lan"] is not True or c["bind-address"]!="*" or c["find-process-mode"]!="off" or not isinstance(c["ipv6"],bool) or c["geo-auto-update"] is not False:raise Error("config_invalid")
+  ipv6_allowed=c["ipv6"]
+- if c["tun"]!={"enable":False} or c["iptables"]!={"enable":False} or c["profile"]!={"store-selected":False,"store-fake-ip":False} or c["rules"]!=["MATCH,GLOBAL"]:raise Error("config_invalid")
++ if c["tun"]!={"enable":False} or c["iptables"]!={"enable":False} or c["profile"]!={"store-selected":False,"store-fake-ip":False}:raise Error("config_invalid")
+  expected_sniffer={"enable":True,"force-dns-mapping":True,"parse-pure-ip":True,"override-destination":True,"sniff":{"HTTP":{"ports":[80,"8080-8880"]},"TLS":{"ports":[443,8443]},"QUIC":{"ports":[443,8443]}}}
+  if c["sniffer"]!=expected_sniffer:raise Error("config_invalid")
++ try:routing_policy=routing_module().validate_proxy_routing_config(c)
++ except (ValueError,KeyError,TypeError) as exc:raise Error("config_invalid") from exc
+  listeners=c["listeners"]
+  if not isinstance(listeners,list) or not all(isinstance(listener,dict) for listener in listeners):raise Error("config_invalid")
+  listener_ports=tuple(item.get("port") for item in listeners)
+@@ -673,6 +684,8 @@
+   transparent_ports=((listener_ports[0],),(listener_ports[1],))
+  dns_port,controller_port=(1053,9091) if candidate=="a" else (1054,9092);dns=c["dns"];secret=c["secret"]
+  expected_dns={"enable":True,"listen":f"[::]:{dns_port}","enhanced-mode":"redir-host","respect-rules":True,"ipv6":ipv6_allowed,"nameserver":["https://8.8.8.8/dns-query#GLOBAL","https://8.8.4.4/dns-query#GLOBAL"],"proxy-server-nameserver":["https://8.8.8.8/dns-query#DIRECT","https://8.8.4.4/dns-query#DIRECT"]}
++ routing_dns=routing_module().proxy_routing_dns_policy(routing_policy)
++ if routing_dns:expected_dns["nameserver-policy"]=routing_dns
+  if dns!=expected_dns or c["external-controller"]!=f"127.0.0.1:{controller_port}" or not isinstance(secret,str) or not SECRET.fullmatch(secret):raise Error("config_invalid")
+  proxy_keys={
+   "http":{"name","type","server","port","udp","username","password","tls","sni","skip-cert-verify","fingerprint","alpn"},
+@@ -797,6 +810,8 @@
+  generation=integer(envelope["generation"],m["generation"],(1<<63)-1)
+  if expected_generation is not None and generation!=expected_generation:raise Error("ipc_request_invalid")
+  incoming=envelope["config"];logical,*_=validate_config(m,incoming)
++ try:routing_module().validate_proxy_routing_config(incoming,routing_module().load_proxy_routing_policy())
++ except (ValueError,KeyError,TypeError) as exc:raise Error("routing_policy_invalid") from exc
+  if incoming["hosts"] or logical!="a":raise Error("config_invalid")
+  existing=o.get("candidate")
+  if isinstance(existing,dict) and existing.get("generation")==generation:
+diff --git a/scripts/xenoid-proxy-agent.py b/scripts/xenoid-proxy-agent.py
+--- a/scripts/xenoid-proxy-agent.py
++++ b/scripts/xenoid-proxy-agent.py
+@@ -5,6 +5,7 @@
+ import array
+ import base64
+ import ctypes
++import errno
+ import fcntl
+ import hashlib
+ import ipaddress
+@@ -35,6 +36,8 @@
+         raise
+     sys.path.insert(0, str(module_root))
+     from xenoid.proxy_protocol import ProxyProtocolError, derive_key, open_response, seal_request
++
++from xenoid.proxy_source import (ProxyRoutingError, apply_proxy_routing_config, load_proxy_routing_policy)
+ 
+ SCHEMA = "dev.xenoid.proxy-engine/v1"
+ IPC_SCHEMA = "dev.xenoid.proxy-engine.ipc/v1"
+@@ -81,6 +84,36 @@
+ class ChannelAuthenticationFailure(AgentFailure):
+     pass
+ 
++
++class DesiredStateAdvanced(AgentFailure):
++    """An authenticated probe observed a newer desired check/generation."""
++
++
++class TransientTransportFailure(AgentFailure):
++    """A known network/socket resource failure, never an authentication failure."""
++
++
++def _transport_failure(error: OSError) -> AgentFailure:
++    retryable = {
++        errno.EAGAIN, errno.EINTR, errno.EMFILE, errno.ENFILE,
++        errno.EADDRINUSE, errno.EADDRNOTAVAIL, errno.ECONNABORTED,
++        errno.ECONNREFUSED, errno.ECONNRESET, errno.EHOSTUNREACH,
++        errno.ENETDOWN, errno.ENETUNREACH,
++        errno.EPIPE, errno.ETIMEDOUT,
++    }
++    if isinstance(error, TimeoutError) or error.errno in retryable:
++        return TransientTransportFailure("engine_unavailable")
++    return AgentFailure("engine_unavailable")
++
++
++def _sleep_stoppable(seconds: float) -> None:
++    deadline = time.monotonic() + seconds
++    while not _STOP:
++        remaining = deadline - time.monotonic()
++        if remaining <= 0:
++            break
++        time.sleep(min(1.0, remaining))
++
+ def _strict_pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+     result: dict[str, Any] = {}
+     for key, value in items:
+@@ -382,7 +415,7 @@
+         try:
+             info = self._path.stat(follow_symlinks=False)
+         except OSError as exc:
+-            raise AgentFailure("engine_unavailable") from exc
++            raise _transport_failure(exc) from exc
+         if (
+             not stat.S_ISSOCK(info.st_mode)
+             or info.st_uid != 0
+@@ -390,17 +423,23 @@
+             or stat.S_IMODE(info.st_mode) != 0o660
+         ):
+             raise AgentFailure("engine_unavailable")
+-        connection = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC)
+-        connection.settimeout(timeout)
+-        try:
++        connection = None
++        try:
++            connection = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC)
++            connection.settimeout(timeout)
+             connection.connect(str(self._path))
+             credentials = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+             _, peer_uid, _ = struct.unpack("3i", credentials)
+             if peer_uid != 0:
+-                raise AgentFailure("engine_unavailable")
++                raise ChannelAuthenticationFailure("agent_channel_auth_failed")
+             return connection
++        except OSError as exc:
++            if connection is not None:
++                connection.close()
++            raise _transport_failure(exc) from exc
+         except BaseException:
+-            connection.close()
++            if connection is not None:
++                connection.close()
+             raise
+ 
+     def call(
+@@ -446,7 +485,11 @@
+                     values = array.array("i")
+                     values.frombytes(data[: len(data) - (len(data) % values.itemsize)])
+                     received.extend(values.tolist())
+-        except (OSError, ValueError) as exc:
++        except OSError as exc:
++            for item in received:
++                os.close(item)
++            raise _transport_failure(exc) from exc
++        except ValueError as exc:
+             for item in received:
+                 os.close(item)
+             raise AgentFailure("engine_unavailable") from exc
+@@ -485,7 +528,10 @@
+     def write_config(self, value: dict[str, Any]) -> None:
+         if not hasattr(os, "memfd_create"):
+             raise AgentFailure("engine_unavailable")
+-        descriptor = os.memfd_create("xenoid-proxy-config", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
++        try:
++            descriptor = os.memfd_create("xenoid-proxy-config", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
++        except OSError as exc:
++            raise _transport_failure(exc) from exc
+         try:
+             encoded = _canonical(value)
+             offset = 0
+@@ -507,10 +553,13 @@
+     def _sealed_memfd(name: str, payload: bytes) -> int:
+         if not hasattr(os, "memfd_create") or not payload or len(payload) > MAX_CHANNEL_BYTES:
+             raise AgentFailure("engine_unavailable")
+-        descriptor = os.memfd_create(
+-            name,
+-            os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING,
+-        )
++        try:
++            descriptor = os.memfd_create(
++                name,
++                os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING,
++            )
++        except OSError as exc:
++            raise _transport_failure(exc) from exc
+         try:
+             offset = 0
+             while offset < len(payload):
+@@ -585,7 +634,9 @@
+             if len(output) != size:
+                 raise AgentFailure("engine_unavailable")
+             return bytes(output)
+-        except (OSError, UnicodeError) as exc:
++        except OSError as exc:
++            raise _transport_failure(exc) from exc
++        except UnicodeError as exc:
+             raise AgentFailure("engine_unavailable") from exc
+         finally:
+             os.close(descriptor)
+@@ -929,6 +980,8 @@
+         except AgentFailure as exc:
+             if exc.code == "agent_channel_auth_failed":
+                 raise ChannelAuthenticationFailure("agent_channel_auth_failed") from exc
++            if exc.code == "agent_channel_unreachable":
++                raise TransientTransportFailure(exc.code) from exc
+             raise
+         try:
+             outer = _loads(payload, "agent_channel_auth_failed")
+@@ -966,7 +1019,7 @@
+                 return self._once(operation, body)
+             except ChannelAuthenticationFailure:
+                 raise
+-            except AgentFailure as exc:
++            except TransientTransportFailure as exc:
+                 failure = exc
+         raise failure or AgentFailure("agent_channel_unreachable")
+ 
+@@ -1523,6 +1576,8 @@
+         or (error_code != "" and not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error_code))
+     ):
+         raise ChannelAuthenticationFailure("agent_channel_auth_failed")
++    if error_code == "stale_probe":
++        raise DesiredStateAdvanced(error_code)
+     if error_code:
+         raise AgentFailure(error_code)
+     udp_allowed = desired["source"]["udpAllowed"]
+@@ -1606,237 +1661,278 @@
+     retry_at = 0.0
+     retry_error = ""
+     try:
++        transient_retry_count = 0
++        transient_error = ""
+         while not _STOP:
+-            desired = _desired(channel, manifest, floor)
+-            generation = desired["generation"]
+-            if verified_old:
+-                _write_health(manifest, "ready", active_generation)
+-            if generation < last_seen or desired["checkId"] < last_check:
+-                raise ChannelAuthenticationFailure("agent_stale")
+-            _engine().generation = generation
+-            now = time.monotonic()
+-            candidate_due = (
+-                generation != active_generation
+-                and (generation != retry_generation or now >= retry_at)
+-            )
+-            changed = generation != last_seen or candidate_due
+-            if retry_generation == generation and now < retry_at:
+-                _write_health(
+-                    manifest,
+-                    "error" if verified_old else "quarantined",
+-                    generation,
+-                    retry_error,
++            try:
++                desired = _desired(channel, manifest, floor)
++                generation = desired["generation"]
++                if verified_old and not retry_error and not transient_error:
++                    _write_health(manifest, "ready", active_generation)
++                if generation < last_seen or desired["checkId"] < last_check:
++                    raise ChannelAuthenticationFailure("agent_stale")
++                _engine().generation = generation
++                now = time.monotonic()
++                candidate_due = (
++                    generation != active_generation
++                    and (generation != retry_generation or now >= retry_at)
+                 )
+-            refresh_due = desired["enabled"] and now - last_refresh >= REFRESH_SECONDS
+-            check_due = desired["checkId"] > last_check
+-            last_seen = generation
+-
+-            if not desired["enabled"]:
+-                live = _live_status(manifest, manifest_path)
+-                if live["phase"] != "off" or live["generation"] < generation:
+-                    _run_root("off", manifest_path)
+-                    live = _live_status(manifest, manifest_path)
+-                if (
+-                    live["phase"] != "off"
+-                    or live["generation"] < generation
+-                    or live["structuralApplied"] is not True
+-                    or live["dataPlaneVerified"] is not True
+-                ):
+-                    raise AgentFailure("off_unverified")
+-                live.update({"generation": generation, "selectedNode": "", "nodeCount": 0, "nodes": []})
+-                _report_status(channel, desired, live)
+-                _write_health(manifest, "disabled", generation)
+-                active_generation, active_digest, active_nodes, active_selected = generation, "", [], ""
+-                verified_old = False
+-                last_check = desired["checkId"]
+-                retry_generation, retry_count, retry_at, retry_error = -1, 0, 0.0, ""
+-                time.sleep(POLL_SECONDS)
+-                continue
+-
+-            if desired["source"] is None:
+-                _quarantine(manifest_path)
+-                _report_failure(channel, desired, "source_invalid", True)
+-                _write_health(manifest, "quarantined", generation, "source_invalid")
+-                active_generation, active_digest, active_nodes, active_selected = -1, "", [], ""
+-                verified_old = False
+-                time.sleep(POLL_SECONDS)
+-                continue
+-
+-            if changed or refresh_due:
+-                _write_health(manifest, "applying", generation)
+-                candidate_staged = False
+-                had_verified_old = verified_old
+-                report_nodes: list[str] = []
+-                report_selected = ""
+-                try:
+-                    if _live_status(manifest, manifest_path)["phase"] == "off":
+-                        _run_root("prepare", manifest_path)
+-                    _validate_binary(ENGINE_BINARY, manifest["engine"]["binarySha256"])
+-                    compiled = _compile_source(manifest, desired["source"], metadata)
+-                    nodes = compiled["nodeNames"]
+-                    if (
+-                        len(nodes) > 512
+-                        or len(set(nodes)) != len(nodes)
+-                        or any(
+-                            not isinstance(name, str)
+-                            or not 1 <= len(name.encode("utf-8")) <= 128
+-                            or any(ord(character) < 32 or ord(character) == 127 for character in name)
+-                            for name in nodes
+-                        )
+-                    ):
+-                        raise AgentFailure("source_invalid")
+-                    selected = desired["source"]["selectedNode"]
+-                    if selected and selected not in nodes:
+-                        raise AgentFailure("selection_missing")
+-                    report_nodes = list(nodes)
+-                    report_selected = selected
+-                    config_digest = hashlib.sha256(_canonical(compiled["config"])).hexdigest()
+-                    if generation != active_generation or config_digest != active_digest:
+-                        candidate = {
+-                            "instanceId": manifest["instanceId"], "runtimeEpoch": manifest["runtimeEpoch"],
+-                            "generation": generation, "config": compiled["config"],
+-                        }
+-                        _run_root("write-config", manifest_path, _canonical(candidate))
+-                        if retry_generation != generation:
+-                            _report_staging(channel, desired)
+-                        candidate_staged = True
+-                        _run_root("apply", manifest_path)
+-                    elif not check_due and verified_old:
+-                        last_refresh = time.monotonic()
+-                        _write_health(manifest, "ready", generation)
+-                        continue
+-                    before = _live_status(manifest, manifest_path)
+-                    if before["generation"] != generation or not before["structuralApplied"]:
+-                        raise AgentFailure("data_plane_unverified")
+-                    before.update({"selectedNode": selected, "nodeCount": len(nodes), "nodes": nodes})
+-                    if not (check_due or candidate_staged):
+-                        raise AgentFailure("data_plane_unverified")
+-                    live = _probe_data_plane(channel, desired, manifest, manifest_path, before)
+-                    if candidate_staged:
+-                        _commit_candidate()
+-                    live.update({"selectedNode": selected, "nodeCount": len(nodes), "nodes": nodes})
+-                    _report_status(channel, desired, live)
+-                    active_generation, active_digest = generation, config_digest
+-                    active_nodes, active_selected = list(nodes), selected
+-                    verified_old = True
+-                    last_refresh = time.monotonic()
+-                    last_check = desired["checkId"]
+-                    retry_generation, retry_count, retry_at, retry_error = -1, 0, 0.0, ""
+-                    _write_health(manifest, "ready", generation)
+-                except ChannelAuthenticationFailure:
+-                    raise
+-                except AgentFailure as exc:
+-                    restored_active = False
+-                    report_failure = (
+-                        retry_generation != generation
+-                        or desired["checkId"] > last_check
+-                    )
+-                    if had_verified_old:
+-                        try:
+-                            if candidate_staged:
+-                                _rollback_previous()
+-                            restored_before = _live_status(manifest, manifest_path)
+-                            if (
+-                                restored_before["generation"] != active_generation
+-                                or not restored_before["structuralApplied"]
+-                            ):
+-                                raise AgentFailure("data_plane_unverified")
+-                            restored_before.update({
+-                                "selectedNode": active_selected,
+-                                "nodeCount": len(active_nodes),
+-                                "nodes": active_nodes,
+-                            })
+-                            restored = _probe_data_plane(
+-                                channel,
+-                                desired,
+-                                manifest,
+-                                manifest_path,
+-                                restored_before,
+-                                expected_generation=active_generation,
+-                            )
+-                            restored.update({
+-                                "selectedNode": active_selected,
+-                                "nodeCount": len(active_nodes),
+-                                "nodes": active_nodes,
+-                            })
+-                            # Bind failure to the rejected desired generation while
+-                            # proving and releasing quarantine for the restored LKG.
+-                            if report_failure:
+-                                _report_status(
+-                                    channel, desired, restored, error_code=exc.code)
+-                            restored_active = True
+-                            verified_old = True
+-                            last_check = desired["checkId"]
+-                        except ChannelAuthenticationFailure:
+-                            raise
+-                        except AgentFailure:
+-                            _quarantine(manifest_path)
+-                    else:
+-                        try:
+-                            if candidate_staged:
+-                                _rollback_previous()
+-                            else:
+-                                _quarantine(manifest_path)
+-                        except AgentFailure:
+-                            _quarantine(manifest_path)
+-                        verified_old = False
+-                    if not verified_old:
+-                        active_generation, active_digest, active_nodes, active_selected = -1, "", [], ""
+-                    if not restored_active and report_failure:
+-                        _report_failure(
+-                            channel,
+-                            desired,
+-                            exc.code,
+-                            True,
+-                            nodes=report_nodes,
+-                            selected_node=report_selected,
+-                        )
+-                    if report_failure:
+-                        last_check = desired["checkId"]
++                changed = generation != last_seen or candidate_due
++                if retry_generation == generation and now < retry_at:
+                     _write_health(
+                         manifest,
+                         "error" if verified_old else "quarantined",
+                         generation,
+-                        exc.code,
++                        retry_error,
+                     )
+-                    last_refresh = time.monotonic()
+-                    if retry_generation != generation:
+-                        retry_generation, retry_count = generation, 0
+-                    retry_error = exc.code
+-                    retry_count = min(retry_count + 1, 4)
+-                    retry_at = time.monotonic() + (5.0, 15.0, 60.0, 60.0)[retry_count - 1]
+-            elif check_due and verified_old and active_generation == generation:
+-                try:
+-                    before = _live_status(manifest, manifest_path)
+-                    if before["generation"] != generation:
+-                        raise AgentFailure("agent_stale")
+-                    if not before["structuralApplied"]:
+-                        code = {
+-                            "active": "engine_process_failed",
+-                            "applying": "apply_not_pending",
+-                            "quarantined": "engine_quarantined",
+-                            "off": "engine_unexpected_off",
+-                        }.get(before["phase"], "engine_structure_mismatch")
+-                        raise AgentFailure(code)
+-                    before.update({
+-                        "selectedNode": active_selected, "nodeCount": len(active_nodes), "nodes": active_nodes,
+-                    })
+-                    live = _probe_data_plane(channel, desired, manifest, manifest_path, before)
+-                    live.update({
+-                        "selectedNode": active_selected, "nodeCount": len(active_nodes), "nodes": active_nodes,
+-                    })
++                refresh_due = desired["enabled"] and now - last_refresh >= REFRESH_SECONDS
++                # A recovered control poll is not a fresh data-plane proof.
++                # Re-run the daemon's current check before restoring ready.
++                check_due = desired["checkId"] > last_check or bool(transient_error)
++                last_seen = generation
++
++                if not desired["enabled"]:
++                    live = _live_status(manifest, manifest_path)
++                    if live["phase"] != "off" or live["generation"] < generation:
++                        _run_root("off", manifest_path)
++                        live = _live_status(manifest, manifest_path)
++                    if (
++                        live["phase"] != "off"
++                        or live["generation"] < generation
++                        or live["structuralApplied"] is not True
++                        or live["dataPlaneVerified"] is not True
++                    ):
++                        raise AgentFailure("off_unverified")
++                    live.update({"generation": generation, "selectedNode": "", "nodeCount": 0, "nodes": []})
+                     _report_status(channel, desired, live)
+-                    verified_old = True
++                    transient_error = ""
++                    _write_health(manifest, "disabled", generation)
++                    active_generation, active_digest, active_nodes, active_selected = generation, "", [], ""
++                    verified_old = False
+                     last_check = desired["checkId"]
+-                    _write_health(manifest, "ready", generation)
+-                except ChannelAuthenticationFailure:
+-                    raise
+-                except AgentFailure as exc:
+-                    if not verified_old:
+-                        _quarantine(manifest_path)
+-                    _report_failure(channel, desired, exc.code, not verified_old)
+-                    _write_health(manifest, "error" if verified_old else "quarantined", generation, exc.code)
+-            time.sleep(POLL_SECONDS)
++                    retry_generation, retry_count, retry_at, retry_error = -1, 0, 0.0, ""
++                    time.sleep(POLL_SECONDS)
++                    continue
++
++                if desired["source"] is None:
++                    _quarantine(manifest_path)
++                    _report_failure(channel, desired, "source_invalid", True)
++                    _write_health(manifest, "quarantined", generation, "source_invalid")
++                    active_generation, active_digest, active_nodes, active_selected = -1, "", [], ""
++                    verified_old = False
++                    time.sleep(POLL_SECONDS)
++                    continue
++
++                if changed or refresh_due:
++                    _write_health(manifest, "applying", generation)
++                    candidate_staged = False
++                    had_verified_old = verified_old
++                    report_nodes: list[str] = []
++                    report_selected = ""
++                    try:
++                        if _live_status(manifest, manifest_path)["phase"] == "off":
++                            _run_root("prepare", manifest_path)
++                        _validate_binary(ENGINE_BINARY, manifest["engine"]["binarySha256"])
++                        compiled = _compile_source(manifest, desired["source"], metadata)
++                        try:
++                            compiled["config"] = apply_proxy_routing_config(compiled["config"], load_proxy_routing_policy())
++                        except ProxyRoutingError as exc:
++                            raise AgentFailure("routing_policy_invalid") from exc
++                        nodes = compiled["nodeNames"]
++                        if (
++                            len(nodes) > 512
++                            or len(set(nodes)) != len(nodes)
++                            or any(
++                                not isinstance(name, str)
++                                or not 1 <= len(name.encode("utf-8")) <= 128
++                                or any(ord(character) < 32 or ord(character) == 127 for character in name)
++                                for name in nodes
++                            )
++                        ):
++                            raise AgentFailure("source_invalid")
++                        selected = desired["source"]["selectedNode"]
++                        if selected and selected not in nodes:
++                            raise AgentFailure("selection_missing")
++                        report_nodes = list(nodes)
++                        report_selected = selected
++                        config_digest = hashlib.sha256(_canonical(compiled["config"])).hexdigest()
++                        if generation != active_generation or config_digest != active_digest:
++                            candidate = {
++                                "instanceId": manifest["instanceId"], "runtimeEpoch": manifest["runtimeEpoch"],
++                                "generation": generation, "config": compiled["config"],
++                            }
++                            _run_root("write-config", manifest_path, _canonical(candidate))
++                            if retry_generation != generation:
++                                _report_staging(channel, desired)
++                            candidate_staged = True
++                            _run_root("apply", manifest_path)
++                        elif not check_due and verified_old:
++                            last_refresh = time.monotonic()
++                            _write_health(manifest, "ready", generation)
++                            continue
++                        before = _live_status(manifest, manifest_path)
++                        if before["generation"] != generation or not before["structuralApplied"]:
++                            raise AgentFailure("data_plane_unverified")
++                        before.update({"selectedNode": selected, "nodeCount": len(nodes), "nodes": nodes})
++                        if not (check_due or candidate_staged):
++                            raise AgentFailure("data_plane_unverified")
++                        live = _probe_data_plane(channel, desired, manifest, manifest_path, before)
++                        if candidate_staged:
++                            _commit_candidate()
++                        live.update({"selectedNode": selected, "nodeCount": len(nodes), "nodes": nodes})
++                        _report_status(channel, desired, live)
++                        active_generation, active_digest = generation, config_digest
++                        active_nodes, active_selected = list(nodes), selected
++                        verified_old = True
++                        last_refresh = time.monotonic()
++                        last_check = desired["checkId"]
++                        retry_generation, retry_count, retry_at, retry_error = -1, 0, 0.0, ""
++                        transient_error = ""
++                        _write_health(manifest, "ready", generation)
++                    except (ChannelAuthenticationFailure, DesiredStateAdvanced):
++                        raise
++                    except AgentFailure as exc:
++                        restored_active = False
++                        report_failure = (
++                            retry_generation != generation
++                            or desired["checkId"] > last_check
++                        )
++                        if had_verified_old:
++                            try:
++                                if candidate_staged:
++                                    _rollback_previous()
++                                restored_before = _live_status(manifest, manifest_path)
++                                if (
++                                    restored_before["generation"] != active_generation
++                                    or not restored_before["structuralApplied"]
++                                ):
++                                    raise AgentFailure("data_plane_unverified")
++                                restored_before.update({
++                                    "selectedNode": active_selected,
++                                    "nodeCount": len(active_nodes),
++                                    "nodes": active_nodes,
++                                })
++                                restored = _probe_data_plane(
++                                    channel,
++                                    desired,
++                                    manifest,
++                                    manifest_path,
++                                    restored_before,
++                                    expected_generation=active_generation,
++                                )
++                                restored.update({
++                                    "selectedNode": active_selected,
++                                    "nodeCount": len(active_nodes),
++                                    "nodes": active_nodes,
++                                })
++                                # Bind failure to the rejected desired generation while
++                                # proving and releasing quarantine for the restored LKG.
++                                if report_failure:
++                                    _report_status(
++                                        channel, desired, restored, error_code=exc.code)
++                                restored_active = True
++                                verified_old = True
++                                last_check = desired["checkId"]
++                            except (ChannelAuthenticationFailure, DesiredStateAdvanced):
++                                raise
++                            except AgentFailure:
++                                _quarantine(manifest_path)
++                        else:
++                            try:
++                                if candidate_staged:
++                                    _rollback_previous()
++                                else:
++                                    _quarantine(manifest_path)
++                            except AgentFailure:
++                                _quarantine(manifest_path)
++                            verified_old = False
++                        if not verified_old:
++                            active_generation, active_digest, active_nodes, active_selected = -1, "", [], ""
++                        if not restored_active and report_failure:
++                            _report_failure(
++                                channel,
++                                desired,
++                                exc.code,
++                                True,
++                                nodes=report_nodes,
++                                selected_node=report_selected,
++                            )
++                        if report_failure:
++                            last_check = desired["checkId"]
++                        _write_health(
++                            manifest,
++                            "error" if verified_old else "quarantined",
++                            generation,
++                            exc.code,
++                        )
++                        last_refresh = time.monotonic()
++                        if retry_generation != generation:
++                            retry_generation, retry_count = generation, 0
++                        retry_error = exc.code
++                        retry_count = min(retry_count + 1, 4)
++                        retry_at = time.monotonic() + (5.0, 15.0, 60.0, 60.0)[retry_count - 1]
++                elif check_due and verified_old and active_generation == generation and now >= retry_at:
++                    try:
++                        before = _live_status(manifest, manifest_path)
++                        if before["generation"] != generation:
++                            raise AgentFailure("agent_stale")
++                        if not before["structuralApplied"]:
++                            code = {
++                                "active": "engine_process_failed",
++                                "applying": "apply_not_pending",
++                                "quarantined": "engine_quarantined",
++                                "off": "engine_unexpected_off",
++                            }.get(before["phase"], "engine_structure_mismatch")
++                            raise AgentFailure(code)
++                        before.update({
++                            "selectedNode": active_selected, "nodeCount": len(active_nodes), "nodes": active_nodes,
++                        })
++                        live = _probe_data_plane(channel, desired, manifest, manifest_path, before)
++                        live.update({
++                            "selectedNode": active_selected, "nodeCount": len(active_nodes), "nodes": active_nodes,
++                        })
++                        _report_status(channel, desired, live)
++                        verified_old = True
++                        last_check = desired["checkId"]
++                        retry_generation, retry_count, retry_at, retry_error = -1, 0, 0.0, ""
++                        transient_error = ""
++                        _write_health(manifest, "ready", generation)
++                    except (ChannelAuthenticationFailure, DesiredStateAdvanced):
++                        raise
++                    except AgentFailure as exc:
++                        if not verified_old:
++                            _quarantine(manifest_path)
++                        _report_failure(channel, desired, exc.code, not verified_old)
++                        _write_health(manifest, "error" if verified_old else "quarantined", generation, exc.code)
++                        if retry_generation != generation:
++                            retry_generation, retry_count = generation, 0
++                        retry_error = exc.code
++                        retry_count = min(retry_count + 1, 4)
++                        retry_at = time.monotonic() + (5.0, 15.0, 60.0, 60.0)[retry_count - 1]
++                time.sleep(POLL_SECONDS)
++                transient_retry_count = 0
++            except ChannelAuthenticationFailure:
++                raise
++            except DesiredStateAdvanced as exc:
++                if _STOP:
++                    break
++                # Only the authenticated stale_probe result reaches this path.
++                # Reload and validate monotonic desired state; never report an
++                # old check as failed after the daemon has advanced it.
++                transient_error = exc.code
++                _write_health(manifest, "error" if verified_old else "quarantined", last_seen, exc.code)
++                _sleep_stoppable(POLL_SECONDS)
++            except TransientTransportFailure as exc:
++                if _STOP:
++                    break
++                transient_error = exc.code
++                transient_retry_count = min(transient_retry_count + 1, 4)
++                _write_health(manifest, "error" if verified_old else "quarantined", last_seen, exc.code)
++                _sleep_stoppable((5.0, 15.0, 60.0, 60.0)[transient_retry_count - 1])
++            except AgentFailure as exc:
++                if _STOP and exc.code == "agent_stopping":
++                    break
++                raise
+         return 0
+     finally:
+         channel.close()
+diff --git a/src/xenoid/proxy_source.py b/src/xenoid/proxy_source.py
+--- a/src/xenoid/proxy_source.py
++++ b/src/xenoid/proxy_source.py
+@@ -1784,3 +1784,164 @@
+ __all__ = ["CompiledSource", "FetchResult", "PinnedHTTPSFetcher",
+            "ProxySourceError", "compile_fetched_subscription", "compile_source",
+            "fetch_pinned_url", "fetch_url_cache_key"]
++
++
++# The host owns domain routing independently of the encrypted proxy source.
++# Source compilation remains pure; the native agent attaches this policy after
++# its networkless worker returns and the root engine validates the exact result.
++PROXY_ROUTING_SCHEMA = 'dev.xenoid.qa.proxy-routing/v1'
++PROXY_ROUTING_PATH = '/etc/xenoid/qa-proxy-routing.json'
++PROXY_ROUTING_DIRECT_DNS = (
++    'https://8.8.8.8/dns-query#DIRECT',
++    'https://8.8.4.4/dns-query#DIRECT',
++)
++
++
++class ProxyRoutingError(ValueError):
++    pass
++
++
++def normalize_proxy_routing_domain(value):
++    if (not isinstance(value, str) or not value
++            or any(c.isspace() or unicodedata.category(c).startswith('C') for c in value)):
++        raise ProxyRoutingError('routing_policy_invalid')
++    candidate = value[:-1] if value.endswith('.') else value
++    try:
++        domain = candidate.encode('idna').decode('ascii').lower()
++    except (UnicodeError, ValueError) as exc:
++        raise ProxyRoutingError('routing_policy_invalid') from exc
++    label = re.compile(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z')
++    if not domain or len(domain) > 253 or not all(label.fullmatch(part) for part in domain.split('.')):
++        raise ProxyRoutingError('routing_policy_invalid')
++    try:
++        ipaddress.ip_address(domain)
++    except ValueError:
++        pass
++    else:
++        raise ProxyRoutingError('routing_policy_invalid')
++    return domain
++
++
++def normalize_proxy_routing_policy(value):
++    if (not isinstance(value, dict) or set(value) - {'schema', 'exceptions'}
++            or value.get('schema', PROXY_ROUTING_SCHEMA) != PROXY_ROUTING_SCHEMA
++            or not isinstance(value.get('exceptions'), list)):
++        raise ProxyRoutingError('routing_policy_invalid')
++    entries, seen = [], set()
++    for item in value['exceptions']:
++        if (not isinstance(item, dict) or set(item) != {'domain', 'include_subdomains'}
++                or type(item['include_subdomains']) is not bool):
++            raise ProxyRoutingError('routing_policy_invalid')
++        domain = normalize_proxy_routing_domain(item['domain'])
++        key = (domain, item['include_subdomains'])
++        if key not in seen:
++            entries.append({'domain': domain, 'include_subdomains': item['include_subdomains']})
++            seen.add(key)
++    return {'schema': PROXY_ROUTING_SCHEMA, 'exceptions': entries}
++
++
++def load_proxy_routing_policy(path=PROXY_ROUTING_PATH):
++    """Read an administrator-owned profile; missing file preserves global mode."""
++    import os
++    import stat
++    from pathlib import Path
++    p = Path(path)
++    if not p.is_absolute():
++        raise ProxyRoutingError('routing_policy_invalid')
++    parent = Path('/')
++    for part in p.parts[1:-1]:
++        parent /= part
++        try:
++            info = parent.lstat()
++        except FileNotFoundError:
++            return {'schema': PROXY_ROUTING_SCHEMA, 'exceptions': []}
++        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) & 0o022
++                or not (stat.S_IMODE(info.st_mode) & 0o001)):
++            raise ProxyRoutingError('routing_policy_invalid')
++    try:
++        descriptor = os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, 'O_CLOEXEC', 0))
++    except FileNotFoundError:
++        return {'schema': PROXY_ROUTING_SCHEMA, 'exceptions': []}
++    except OSError as exc:
++        raise ProxyRoutingError('routing_policy_invalid') from exc
++    try:
++        with os.fdopen(descriptor, 'rb') as stream:
++            info = os.fstat(stream.fileno())
++            if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_nlink != 1
++                    or stat.S_IMODE(info.st_mode) != 0o644 or info.st_size > MAX_SOURCE_BYTES):
++                raise ProxyRoutingError('routing_policy_invalid')
++            body = stream.read(MAX_SOURCE_BYTES + 1)
++            if len(body) > MAX_SOURCE_BYTES:
++                raise ProxyRoutingError('routing_policy_invalid')
++    except OSError as exc:
++        raise ProxyRoutingError('routing_policy_invalid') from exc
++    try:
++        return normalize_proxy_routing_policy(json.loads(body))
++    except (UnicodeError, ValueError) as exc:
++        raise ProxyRoutingError('routing_policy_invalid') from exc
++
++
++def proxy_routing_rules(policy):
++    policy = normalize_proxy_routing_policy(policy)
++    entries = sorted({(item['domain'], item['include_subdomains']) for item in policy['exceptions']})
++    suffixes = {domain for domain, suffix in entries if suffix}
++    rules = []
++    for domain, suffix in entries:
++        if any(domain.endswith('.' + parent) or domain == parent and not suffix
++               for parent in suffixes if parent != domain or not suffix):
++            continue
++        rules.append(('DOMAIN-SUFFIX' if suffix else 'DOMAIN') + ',' + domain + ',DIRECT')
++    return rules + ['MATCH,GLOBAL']
++
++
++def proxy_routing_policy_from_rules(rules):
++    if not isinstance(rules, list) or not rules or rules[-1] != 'MATCH,GLOBAL':
++        raise ProxyRoutingError('routing_policy_invalid')
++    entries = []
++    for rule in rules[:-1]:
++        if not isinstance(rule, str):
++            raise ProxyRoutingError('routing_policy_invalid')
++        fields = rule.split(',')
++        if len(fields) != 3 or fields[0] not in ('DOMAIN', 'DOMAIN-SUFFIX') or fields[2] != 'DIRECT':
++            raise ProxyRoutingError('routing_policy_invalid')
++        domain = normalize_proxy_routing_domain(fields[1])
++        if domain != fields[1]:
++            raise ProxyRoutingError('routing_policy_invalid')
++        entries.append({'domain': domain, 'include_subdomains': fields[0] == 'DOMAIN-SUFFIX'})
++    policy = {'schema': PROXY_ROUTING_SCHEMA, 'exceptions': entries}
++    if rules != proxy_routing_rules(policy):
++        raise ProxyRoutingError('routing_policy_invalid')
++    return policy
++
++
++def proxy_routing_dns_policy(policy):
++    rules = proxy_routing_rules(policy)
++    return {('+' + '.' if rule.startswith('DOMAIN-SUFFIX,') else '') + rule.split(',')[1]: list(PROXY_ROUTING_DIRECT_DNS)
++            for rule in rules[:-1]}
++
++
++def apply_proxy_routing_config(config, policy):
++    result = json.loads(json.dumps(config, ensure_ascii=True, allow_nan=False))
++    rules = proxy_routing_rules(policy)
++    result['mode'] = 'rule' if len(rules) > 1 else 'global'
++    result['rules'] = rules
++    dns_policy = proxy_routing_dns_policy(policy)
++    if dns_policy:
++        result['dns']['nameserver-policy'] = dns_policy
++    else:
++        result['dns'].pop('nameserver-policy', None)
++    return result
++
++
++def validate_proxy_routing_config(config, policy=None):
++    """Old root-owned candidates stay readable during a policy transition.
++
++    write-config supplies the current policy and therefore cannot stage any
++    additional DIRECT destination, GLOBAL/DIRECT fallback or unrelated DNS rule.
++    """
++    embedded = proxy_routing_policy_from_rules(config.get('rules'))
++    expected = apply_proxy_routing_config(config, embedded if policy is None else policy)
++    if (config.get('mode') != expected['mode'] or config.get('rules') != expected['rules']
++            or (config.get('dns') or {}).get('nameserver-policy') != expected['dns'].get('nameserver-policy')):
++        raise ProxyRoutingError('routing_policy_invalid')
++    return embedded
