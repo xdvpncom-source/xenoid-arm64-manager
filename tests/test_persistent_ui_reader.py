@@ -132,6 +132,54 @@ class NativeFenceTests(unittest.TestCase):
    r=self.private_reader(d);r._terminate.side_effect=[RuntimeError('busy'),RuntimeError('busy'),None,None]
    with self.assertRaisesRegex(u.UiReaderError,'cleanup_unconfirmed'):r.close()
    self.assertTrue(d.exists());r.close();self.assertFalse(d.exists());self.assertIsNone(r.private_identity)
+ def test_outer_cleanup_recovery_clears_pipe_pending_and_repeated_close_is_noop(self):
+  with tempfile.TemporaryDirectory()as temp:
+   d=Path(temp)/'private';d.mkdir(mode=0o700);(d/'server.jar').write_bytes(b'jar')
+   r=self.private_reader(d);calls=[]
+   def sweep(identity):
+    calls.append(identity)
+    if len(calls)==1:raise u.UiReaderError('temporary guest sweep failure')
+   r._terminate=Mock(side_effect=sweep)
+   p=u.PipeProcess([sys.executable,'-u','-c',CHILD,'ok'],None,threading.Event(),r._terminate)
+   r.pipe=p
+   try:
+    r.close(force=True)
+    self.assertEqual(len(calls),2);self.assertIsNotNone(p.process.poll())
+    self.assertFalse(p.cleanup_pending);self.assertIsNone(r.private_identity);self.assertFalse(d.exists())
+    r._verify.assert_called_once_with(cleanup=True)
+    r.close(force=True)
+    self.assertEqual(len(calls),2);r._verify.assert_called_once_with(cleanup=True)
+   finally:p.cleanup=Mock();p.close(force=True)
+ def test_failed_outer_cleanup_keeps_pipe_pending_until_fenced_retirement(self):
+  with tempfile.TemporaryDirectory()as temp:
+   d=Path(temp)/'private';d.mkdir(mode=0o700);(d/'server.jar').write_bytes(b'jar')
+   r=self.private_reader(d);recover=[False]
+   def sweep(identity):
+    if not recover[0]:raise u.UiReaderError('guest cleanup still unverified')
+   r._terminate=Mock(side_effect=sweep)
+   p=u.PipeProcess([sys.executable,'-u','-c',CHILD,'ok'],None,threading.Event(),r._terminate)
+   r.pipe=p
+   try:
+    with self.assertRaisesRegex(u.UiReaderError,'cleanup_unconfirmed'):r.close(force=True)
+    self.assertTrue(p.cleanup_pending);self.assertIsNotNone(r.private_identity);self.assertTrue(d.exists())
+    recover[0]=True;r.close(force=True)
+    self.assertFalse(p.cleanup_pending);self.assertIsNone(r.private_identity);self.assertFalse(d.exists())
+   finally:p.cleanup=Mock();p.close(force=True)
+ def test_failed_directory_retirement_does_not_clear_recovered_pipe_pending(self):
+  with tempfile.TemporaryDirectory()as temp:
+   d=Path(temp)/'private';d.mkdir(mode=0o700);(d/'unexpected').write_text('preserve')
+   r=self.private_reader(d);calls=[]
+   def sweep(identity):
+    calls.append(identity)
+    if len(calls)==1:raise u.UiReaderError('temporary guest sweep failure')
+   r._terminate=Mock(side_effect=sweep)
+   p=u.PipeProcess([sys.executable,'-u','-c',CHILD,'ok'],None,threading.Event(),r._terminate)
+   r.pipe=p
+   try:
+    with self.assertRaisesRegex(u.UiReaderError,'cleanup_unconfirmed'):r.close(force=True)
+    self.assertEqual(len(calls),2);self.assertTrue(p.cleanup_pending)
+    self.assertIsNotNone(r.private_identity);self.assertEqual((d/'unexpected').read_text(),'preserve')
+   finally:p.cleanup=Mock();p.close(force=True)
  def test_retiring_directory_prevents_delayed_pre_ready_exec(self):
   with tempfile.TemporaryDirectory()as temp:
    root=Path(temp);d=root/'private';d.mkdir(mode=0o700);(d/'server.jar').write_bytes(b'jar');launched=root/'unexpected-launch'

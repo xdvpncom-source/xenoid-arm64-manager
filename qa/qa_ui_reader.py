@@ -547,6 +547,11 @@ class PersistentUiReader:
                     (self.directory/name).unlink()
                 self.directory.rmdir()
                 self.private_identity = None
+                if self.pipe is not None:
+                    # The outer fenced retry can complete a sweep that failed
+                    # in PipeProcess.close. Retire its pending flag only after
+                    # both the owned guest processes and directory are gone.
+                    self.pipe.cleanup_pending = False
                 error = None  # A retry within this close proved cleanup complete.
         except BaseException as failure:
             error = error or failure
