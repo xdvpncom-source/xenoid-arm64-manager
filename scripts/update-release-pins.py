@@ -25,6 +25,7 @@ source = (root / "install.sh").read_text()
 for name, filename in {"fleet_sha256": "xenoid-fleet",
                        "proxy_acceptance_patch_sha256": "patches/proxy-live-acceptance.patch",
                        "proxy_routing_patch_sha256": "patches/proxy-domain-routing.patch",
+                       "proxy_cleanup_patch_sha256": "patches/proxy-namespaced-cleanup.patch",
                        "host_vm_patch_sha256": "patches/host-vm-isolation.patch",
                        "proxy_upgrader_sha256": "scripts/upgrade-proxy-control.py",
                        "qa_manifest_sha256": "qa/manifest.sha256",

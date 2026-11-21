@@ -1,0 +1,49 @@
+diff --git a/scripts/xenoid-proxy-engine.py b/scripts/xenoid-proxy-engine.py
+--- a/scripts/xenoid-proxy-engine.py
++++ b/scripts/xenoid-proxy-engine.py
+@@ -1100,24 +1100,36 @@
+   return run([*base,"-w","-t",table,"-S",chain_name],check=False).returncode!=0
+  return False
+ def _ip_absent(command):
++ if not command:return False
++ namespace_prefix=[]
+  if Path(command[0]).name=="nsenter":
+-  net=next((arg.split("=",1)[1] for arg in command[1:] if arg.startswith("--net=")),None)
+-  return isinstance(net,str) and not Path(net).exists()
+- if Path(command[0]).name!="ip":return False
++  # An existing namespace does not imply its old owned IP object still
++  # exists. Keep that namespace when checking the inner operation.
++  if len(command)<4 or not command[1].startswith("--net=") or command[2]!="--":return False
++  net=command[1].split("=",1)[1]
++  if not Path(net).exists():return True
++  namespace_prefix=command[:3];command=command[3:]
++ if not command or Path(command[0]).name!="ip":return False
+  if "netns" in command and "del" in command:
+   return not (Path("/run/netns")/command[command.index("del")+1]).exists()
+  if "netns" in command and "exec" in command and not (Path("/run/netns")/command[command.index("exec")+1]).exists():return True
+  if "link" in command and "del" in command:
+   dev=command[command.index("del")+1] if command[command.index("del")+1]!="dev" else command[command.index("del")+2]
+-  prefix=command[:command.index("link")];return run([*prefix,"link","show","dev",dev],check=False).returncode!=0
++  prefix=namespace_prefix+command[:command.index("link")];output=run([*prefix,"link","show","dev",dev],capture=True,capture_error=True,check=False)
++  error=(output.stderr or b"").decode("ascii","ignore").strip()
++  return output.returncode!=0 and error in (f'Device "{dev}" does not exist.',f'Cannot find device "{dev}"')
+  operation="rule" if "rule" in command else "route" if "route" in command else None
+  if operation is None:return False
+- index=command.index(operation);prefix=command[:index]
++ index=command.index(operation);prefix=namespace_prefix+command[:index]
+  if operation=="rule":
+-  priority=command[command.index("priority")+1];output=run([*prefix,"rule","show"],capture=True,check=False)
+-  return output.returncode!=0 or not any(line.lstrip().startswith(f"{priority}:") for line in output.stdout.decode("ascii","ignore").splitlines())
+- table=command[command.index("table")+1];destination=command[command.index("table")+2];output=run([*prefix,"route","show","table",table],capture=True,check=False)
+- return output.returncode!=0 or not any(destination in line.split() for line in output.stdout.decode("ascii","ignore").splitlines())
++  priority=command[command.index("priority")+1];output=run([*prefix,"rule","show"],capture=True,capture_error=True,check=False)
++  return output.returncode==0 and not any(line.lstrip().startswith(f"{priority}:") for line in output.stdout.decode("ascii","ignore").splitlines())
++ table=command[command.index("table")+1];destination=command[command.index("table")+2];output=run([*prefix,"route","show","table",table],capture=True,capture_error=True,check=False)
++ if output.returncode:
++  error=(output.stderr or b"").decode("ascii","ignore").strip()
++  return error in ("Error: ipv4: FIB table does not exist.\nDump terminated","Error: ipv6: FIB table does not exist.\nDump terminated")
++ return not any(destination in line.split() for line in output.stdout.decode("ascii","ignore").splitlines())
++
+ def flush_owned_chains(resources):
+  for resource in resources:
+   command=resource.get("delete")

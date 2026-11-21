@@ -11,6 +11,7 @@ pins = {"fleet_sha256": "xenoid-fleet", "toolchain_sha256": "install-toolchain.s
         "protection_patch_sha256": "patches/shared-protection-inspect.patch",
         "proxy_acceptance_patch_sha256": "patches/proxy-live-acceptance.patch",
         "proxy_routing_patch_sha256": "patches/proxy-domain-routing.patch",
+        "proxy_cleanup_patch_sha256": "patches/proxy-namespaced-cleanup.patch",
         "host_vm_patch_sha256": "patches/host-vm-isolation.patch",
         "proxy_upgrader_sha256": "scripts/upgrade-proxy-control.py",
         "qa_manifest_sha256": "qa/manifest.sha256", "qa_installer_sha256": "install-qa-addon.sh"}
