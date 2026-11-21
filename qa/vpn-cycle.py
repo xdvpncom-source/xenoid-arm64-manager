@@ -60,6 +60,10 @@ GOOGLE_CACHE_PACKAGES = ("com.google.android.gms", "com.google.android.gsf")
 GOOGLE_CACHE_USER = "current"
 GOOGLE_CACHE_TIMEOUT = 0               # 0 waits without a cache-clear deadline.
 GOOGLE_CACHE_RETRY_SECONDS = 15
+GOOGLE_DATA_RESET_ENABLED = True
+GOOGLE_DATA_PACKAGES = ("com.google.android.gms", "com.google.android.gsf")
+GOOGLE_RESET_DELAY_SECONDS = 2         # Cache -> data clear -> microG registration; also between package clears.
+GOOGLE_RESET_TIMEOUT = 0               # 0 permits retries without an operation deadline.
 
 # Explicit resource IDs or labels can be added here for a particular APK.
 # Example: ({"resource_id": "com.example.vpn:id/ad_close"},)
@@ -1009,11 +1013,16 @@ class Cycle:
         cache_packages = list(dict.fromkeys(GOOGLE_CACHE_PACKAGES))
         post_cache = ({"packages": cache_packages, "user": GOOGLE_CACHE_USER,
                        "timeout": GOOGLE_CACHE_TIMEOUT} if cache_packages else None)
+        post_google = ({"clear_packages": list(dict.fromkeys(GOOGLE_DATA_PACKAGES)),
+                        "user": GOOGLE_CACHE_USER, "delay_seconds": GOOGLE_RESET_DELAY_SECONDS,
+                        "timeout": GOOGLE_RESET_TIMEOUT} if GOOGLE_DATA_RESET_ENABLED else None)
         while True:
             try:
                 self.invalidate_idle_monitor()
-                result = self.device.regenerate(timeout=REGENERATE_TIMEOUT, operation_key=operation_key,
-                                                post_cache=post_cache)
+                options = {"post_cache": post_cache}
+                if post_google is not None:
+                    options["post_google"] = post_google
+                result = self.device.regenerate(timeout=REGENERATE_TIMEOUT, operation_key=operation_key, **options)
                 required = ("ok", "native_ready", "profile_ready", "container_id_preserved",
                             "instance_id_preserved", "resource_tag_preserved", "identities_changed",
                             "input_ready", "foreground_ready")
@@ -1031,6 +1040,15 @@ class Cycle:
                         raise RuntimeError("regeneration_post_cache_pending: cache-only proof was not confirmed")
                     for package in cache_packages:
                         self.log("Google cache cleared (cache only): " + package)
+                if post_google is not None:
+                    reset = result.get("google_reset")
+                    if (not isinstance(reset, dict) or reset.get("ok") is not True
+                            or reset.get("data_cleared") is not True
+                            or reset.get("packages") != post_google["clear_packages"]
+                            or reset.get("registration_enabled") is not True
+                            or reset.get("checkin_requested") is not True):
+                        raise RuntimeError("regeneration_post_google_pending: data reset and microG registration were not confirmed")
+                    self.log("Google app data cleared after cache; microG device registration enabled and check-in requested")
                 break
             except (RuntimeError, OSError) as error:
                 self.log("Regeneration waiting: " + str(error))
@@ -1062,6 +1080,17 @@ def validate_regeneration_settings():
         raise ValueError("REGENERATE_ENABLED must be Boolean")
     if not REGENERATE_ENABLED:
         return
+    if type(GOOGLE_DATA_RESET_ENABLED) is not bool:
+        raise ValueError("GOOGLE_DATA_RESET_ENABLED must be Boolean")
+    if GOOGLE_DATA_RESET_ENABLED:
+        if (not isinstance(GOOGLE_DATA_PACKAGES, (tuple, list)) or not GOOGLE_DATA_PACKAGES
+                or any(not isinstance(p, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", p)
+                       for p in GOOGLE_DATA_PACKAGES)):
+            raise ValueError("GOOGLE_DATA_PACKAGES must contain Android package names")
+        if (type(GOOGLE_RESET_DELAY_SECONDS) not in (int, float)
+                or not math.isfinite(GOOGLE_RESET_DELAY_SECONDS) or GOOGLE_RESET_DELAY_SECONDS < 0
+                or type(GOOGLE_RESET_TIMEOUT) is not int or GOOGLE_RESET_TIMEOUT < 0):
+            raise ValueError("Invalid Google reset timing")
     if (not isinstance(REGENERATE_RANDOM_RANGE, (tuple, list)) or len(REGENERATE_RANDOM_RANGE) != 2
             or any(type(value) is not int for value in REGENERATE_RANDOM_RANGE)
             or REGENERATE_RANDOM_RANGE[0] > REGENERATE_RANDOM_RANGE[1]

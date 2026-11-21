@@ -1049,20 +1049,165 @@ class Broker:
             store.save(key, receipt)
             raise RegenerationPending("regeneration_post_cache_pending") from None
 
-    def regenerate(self, timeout=0, operation_key=None, post_cache=None, *, _deadline=None):
+    def restore_recorded_google_baseline(self, manager, cli, store, binding, deadline):
+        """Restore only the prior SDK-authorized post-reset native Google seed.
+
+        A fresh official GEN requires the strict offline baseline. The previous
+        explicit post-Google action may have enabled provider-managed check-in.
+        No unrecorded device or changed core identity is repaired here.
+        """
+        candidate = None
+        with db(store.folder) as connection:
+            rows = connection.execute("SELECT run_id,iteration,operation_key,document FROM regeneration_receipts ORDER BY rowid DESC").fetchall()
+        for row in rows:
+            previous = json.loads(row["document"])
+            reset = (previous.get("result") or {}).get("google_reset")
+            if (previous.get("binding") == binding and previous.get("status") == "committed"
+                    and previous.get("post_google") is not None and isinstance(reset, dict)
+                    and reset.get("ok") is True and reset.get("registration_enabled") is True
+                    and reset.get("checkin_requested") is True and previous.get("native_completion") is not None):
+                candidate = row, previous
+                break
+        if candidate is None:
+            return False
+        prior_row, previous = candidate
+        try:
+            self.verify_regeneration_native_completion(manager, cli, previous, deadline)
+        except RegenerationPending:
+            return False  # A later core/boot change never authorizes old reseeding.
+        state = previous["native_journal"]
+        if self.stopping.is_set():
+            raise RegenerationPending("script_stopping")
+        timeout = 60 if deadline is None else max(.1, min(60, deadline-time.monotonic()))
+        client = manager.daemon_client(timeout=timeout)
+        current = client.google_identity_inspect(timeout=timeout)
+        from qa_google_reset import registration_state_command
+        switch = self.native_display_exec(manager, registration_state_command(
+            previous["post_google_progress"]["resolved_user"]), deadline=deadline, check=False)
+        if switch.returncode:
+            raise RegenerationPending("previous_google_registration_state_unverified")
+        enabled = switch.stdout.decode(errors="replace").strip()
+        if enabled not in ("enabled", "disabled"):
+            raise RegenerationPending("previous_google_registration_state_unverified")
+        if (isinstance(current, dict) and current.get("ok") is True
+                and current.get("offlineSeeded") is True and enabled == "disabled"):
+            return False
+        # Use the same official seed derivation and activation API as Native.
+        # Plaintext identifiers remain in memory and are never persisted/logged.
+        target = cli.GoogleBindingStore(manager.context, manager.lease).regeneration_gsf_android_id(state["transactionId"])
+        expected_digest = hashlib.sha256(target.encode("ascii")).hexdigest()
+        answer = client.google_identity_activate(target, timeout=timeout)
+        if (not isinstance(answer, dict) or answer.get("ok") is not True
+                or answer.get("offlineSeeded") is not True
+                or answer.get("gsfAndroidIdSha256") != expected_digest):
+            raise RegenerationPending("previous_google_baseline_restore_pending")
+        switch = self.native_display_exec(manager, registration_state_command(
+            previous["post_google_progress"]["resolved_user"]), deadline=deadline, check=False)
+        if switch.returncode or switch.stdout.decode(errors="replace").strip() != "disabled":
+            raise RegenerationPending("previous_google_baseline_restore_pending")
+        previous["google_baseline_restore"] = {"ok": True, "restored_at": now(), "before_new_native_regeneration": True}
+        # Update the prior receipt, retaining its original run/iteration key.
+        with db(store.folder) as connection:
+            changed = connection.execute("UPDATE regeneration_receipts SET document=? WHERE run_id=? AND iteration=? AND operation_key=? AND document=?",
+                               (json.dumps(previous, sort_keys=True), prior_row["run_id"], prior_row["iteration"],
+                                prior_row["operation_key"], prior_row["document"]))
+            if changed.rowcount != 1:
+                raise RegenerationPending("previous_google_receipt_changed")
+        if self.log:
+            self.log("action", "Prior recorded Google baseline restored through official Xenoid before the next regeneration")
+        return True
+
+    def complete_regeneration_post_google(self, manager, receipt, store, key, deadline):
+        plan = receipt.get("post_google")
+        if plan is None:
+            return None
+        from qa_google_reset import complete
+        try:
+            cache_plan = receipt.get("post_cache")
+            if (plan["user"] == "current" and cache_plan is not None and cache_plan["user"] == "current"
+                    and receipt.get("post_cache_resolved_user") is not None):
+                progress = receipt.setdefault("post_google_progress", {})
+                if "resolved_user" not in progress:
+                    progress["resolved_user"] = receipt["post_cache_resolved_user"]
+                    store.save(key, receipt)
+            progress = receipt.get("post_google_progress") or {}
+            if progress.get("registration_started"):
+                cache = receipt.get("post_cache")
+                if cache is not None and set(receipt.get("post_cache_completed", {})) != set(cache["packages"]):
+                    raise RuntimeError("post_google_cache_progress_inconsistent")
+            def execute(args):
+                budget = deadline
+                not_after = (receipt.get("post_google_progress") or {}).get("not_after")
+                if not_after is not None:
+                    remaining = not_after - time.time()
+                    if remaining <= 0:
+                        raise TimeoutError("post_google_timeout")
+                    stage_deadline = time.monotonic() + remaining
+                    budget = stage_deadline if budget is None else min(budget, stage_deadline)
+                return self.native_display_exec(manager, args, deadline=budget, check=False)
+            result = complete(plan, receipt, lambda: store.save(key, receipt), execute,
+                              self.stopping, deadline=deadline)
+            if self.log:
+                self.log("action", "Google data reset completed; microG Device registration enabled and check-in requested")
+            return result
+        except RuntimeIdentityError:
+            raise
+        except Exception as error:
+            receipt["last_google_error"] = type(error).__name__
+            store.save(key, receipt)
+            raise RegenerationPending("regeneration_post_google_pending") from None
+
+    def regeneration_native_completion(self, manager, cli, state, result, deadline):
+        """Checkpoint the native proof before script-authorized Google data reset."""
+        identity = cli.DeviceIdentityStore(manager.context).load()
+        if (state.get("phase") != "committed" or identity is None
+                or cli.stable_identity_digest(identity["stable"]) != state["target"]["stableDigest"]):
+            raise RegenerationPending("regeneration_native_checkpoint_invalid")
+        boot = self.native_display_exec(manager, ["cat", "/proc/sys/kernel/random/boot_id"], deadline=deadline)
+        if boot.stdout.decode(errors="replace").strip() != state["target"]["bootId"]:
+            raise RegenerationPending("regeneration_native_boot_changed")
+        return {"schema": "dev.xenoid.native-post-google-checkpoint/v1", "result": dict(result),
+                "data_fence": self.regeneration_data_fence(manager),
+                "stable_digest": state["target"]["stableDigest"], "boot_id": state["target"]["bootId"]}
+
+    def verify_regeneration_native_completion(self, manager, cli, receipt, deadline):
+        checkpoint = receipt.get("native_completion")
+        state = receipt.get("native_journal")
+        if (not isinstance(checkpoint, dict) or checkpoint.get("schema") != "dev.xenoid.native-post-google-checkpoint/v1"
+                or not isinstance(state, dict) or state.get("phase") != "committed"
+                or checkpoint.get("stable_digest") != state["target"]["stableDigest"]
+                or checkpoint.get("boot_id") != state["target"]["bootId"]
+                or checkpoint.get("data_fence") != self.regeneration_data_fence(manager)):
+            raise RegenerationPending("regeneration_native_checkpoint_invalid")
+        self.regeneration_binding(manager)
+        identity = cli.DeviceIdentityStore(manager.context).load()
+        if identity is None or cli.stable_identity_digest(identity["stable"]) != checkpoint["stable_digest"]:
+            raise RegenerationPending("regeneration_native_identity_changed")
+        boot = self.native_display_exec(manager, ["cat", "/proc/sys/kernel/random/boot_id"], deadline=deadline)
+        if boot.stdout.decode(errors="replace").strip() != checkpoint["boot_id"]:
+            raise RegenerationPending("regeneration_native_boot_changed")
+        result = checkpoint.get("result")
+        if (not isinstance(result, dict) or result.get("ok") is not True or result.get("phase") != "committed"
+                or result.get("runtimeOnly") is not True or result.get("containerRecreated") is not False):
+            raise RegenerationPending("regeneration_native_checkpoint_invalid")
+        return dict(result)
+
+    def regenerate(self, timeout=0, operation_key=None, post_cache=None, post_google=None, *, _deadline=None):
         if type(timeout) is not int or timeout < 0:
             raise ValueError("Regeneration timeout must be a nonnegative integer; zero is unlimited")
         if not isinstance(operation_key, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", operation_key):
             raise ValueError("Supply a nonempty regeneration operation key")
         post_cache = self.regeneration_post_cache(post_cache)
+        from qa_google_reset import normalize_plan
+        post_google = normalize_plan(post_google)
         try:
-            return self._regenerate(timeout, operation_key, post_cache, _deadline=_deadline)
+            return self._regenerate(timeout, operation_key, post_cache, post_google, _deadline=_deadline)
         except (RuntimeIdentityError, RegenerationPending):
             raise
         except Exception as error:
             raise RegenerationPending(getattr(error, "code", None)) from None
 
-    def _regenerate(self, timeout, operation_key, post_cache=None, *, _deadline=None):
+    def _regenerate(self, timeout, operation_key, post_cache=None, post_google=None, *, _deadline=None):
         store = self.regeneration_receipts
         if store is None:
             raise RuntimeError("Regeneration receipts are unavailable outside a managed script iteration")
@@ -1086,6 +1231,8 @@ class Broker:
                 raise RuntimeIdentityError("The regeneration receipt belongs to a different runtime")
             if receipt is not None and receipt.get("post_cache") != post_cache:
                 raise RegenerationPending("regeneration_post_cache_plan_changed")
+            if receipt is not None and receipt.get("post_google") != post_google:
+                raise RegenerationPending("regeneration_post_google_plan_changed")
             if receipt is not None and receipt.get("status") == "committed":
                 self.regeneration_binding(manager)
                 self.invalidate_regeneration_caches()
@@ -1095,6 +1242,26 @@ class Broker:
                     self.ensure_native_interaction(manager, deadline, repair=True, foreground=True)
                 return {**receipt["result"], "input_ready": True, "foreground_ready": True,
                         "touch_backend": "xenoid_native", "replayed": True}
+            if post_google is not None and receipt is not None and receipt.get("native_completion") is not None:
+                # Google data now belongs to the explicit post stage. Its retry
+                # must not demand the pre-clear offline Google target or re-GEN.
+                cli = self.regeneration_cli()
+                self.cleanup()
+                self.invalidate_regeneration_caches()
+                with self.display_raw_docker(manager, deadline):
+                    result = self.verify_regeneration_native_completion(manager, cli, receipt, deadline)
+                    progress = receipt.get("post_google_progress") or {}
+                    if progress.get("registration_started") and post_cache is not None:
+                        if set(receipt.get("post_cache_completed", {})) != set(post_cache["packages"]):
+                            raise RegenerationPending("post_google_cache_progress_inconsistent")
+                    result["cache_cleanup"] = self.complete_regeneration_post_cache(manager, receipt, store, operation_key, deadline)
+                    result["google_reset"] = self.complete_regeneration_post_google(manager, receipt, store, operation_key, deadline)
+                    self.ensure_native_interaction(manager, deadline, repair=True, foreground=True)
+                receipt.update(status="committed", result=result, completed_at=now())
+                store.save(operation_key, receipt)
+                if self.log:
+                    self.log("action", "Official regeneration committed; container binding preserved and native profile ready")
+                return result
             for run, iteration, key, pending in store.pending():
                 if (run, iteration, key) != (store.run, store.iteration, operation_key) and pending.get("binding") == binding:
                     raise RegenerationPending("another_regeneration_is_pending")
@@ -1105,11 +1272,17 @@ class Broker:
             if identity is None:
                 raise RegenerationPending("device_identity_required")
             digest = cli.stable_identity_digest(identity["stable"])
+            google_prepared = False
+            if receipt is None and live_state is None:
+                with self.display_raw_docker(manager, deadline):
+                    google_prepared = self.restore_recorded_google_baseline(manager, cli, store, binding, deadline)
             if receipt is None:
                 self.regeneration_binding(manager)
                 receipt = {"status": "pending", "binding": binding, "timeout": timeout,
-                           "before_digest": digest, "created_at": now(), "post_cache": post_cache,
+                           "before_digest": digest, "created_at": now(), "post_cache": post_cache, "post_google": post_google,
                            "post_cache_command_timeout": self.config.get("command_timeout", 0)}
+                if google_prepared:
+                    receipt["google_reset_preparation"] = {"completed": True, "before_native_journal": True}
                 store.save(operation_key, receipt)
             saved_state = receipt.get("native_journal")
             if saved_state is not None:
@@ -1209,8 +1382,14 @@ class Broker:
                               "runtime_epoch_changed": True, "operation_key": operation_key, "replayed": False}
                     if not result["identities_changed"] or not result["boot_id_changed"]:
                         raise RegenerationPending("native_regeneration_identity_unchanged")
+                    if post_google is not None:
+                        receipt["native_completion"] = self.regeneration_native_completion(refreshed, cli, state, result, deadline)
+                        store.save(operation_key, receipt)
                     result["cache_cleanup"] = self.complete_regeneration_post_cache(
                         refreshed, receipt, store, operation_key, deadline)
+                    if post_google is not None:
+                        result["google_reset"] = self.complete_regeneration_post_google(refreshed, receipt, store, operation_key, deadline)
+                        self.ensure_native_interaction(refreshed, deadline, repair=True, foreground=True)
                     receipt.update(status="committed", result=result, completed_at=now())
                     store.save(operation_key, receipt)
                     if self.log:
@@ -2314,7 +2493,7 @@ done
     def dispatch(self, action, args):
         if not isinstance(args, list):
             raise ValueError("Expected an argument list")
-        if action == "regenerate" and 2 <= len(args) <= 3:
+        if action == "regenerate" and 2 <= len(args) <= 4:
             return self.regenerate(*args)
         if action == "input-status" and len(args) <= 1:
             return self.input_status(*args)
@@ -2660,6 +2839,8 @@ def resume_regeneration_receipts(folder, number, config, iteration, app_cache):
                 raise RegenerationPending("regeneration_timeout")
             try:
                 options = {} if deadline is None else {"_deadline": deadline}
+                if receipt.get("post_google") is not None:
+                    options["post_google"] = receipt["post_google"]
                 broker.regenerate(timeout, key, receipt.get("post_cache"), **options)
                 break
             except RegenerationPending as error:

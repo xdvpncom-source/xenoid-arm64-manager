@@ -7,7 +7,7 @@ import re
 root = Path(__file__).resolve().parents[1]
 required_host_modules = {
     "script_host.py", "script_runtime.py", "shared_policy.py",
-    "qa_lifecycle.py", "qa_vpn_probe.py", "qa_input_ready.py", "qa_ui_reader.py",
+    "qa_lifecycle.py", "qa_vpn_probe.py", "qa_input_ready.py", "qa_ui_reader.py", "qa_google_reset.py",
 }
 missing = sorted(name for name in required_host_modules if not (root / "qa" / name).is_file())
 if missing:

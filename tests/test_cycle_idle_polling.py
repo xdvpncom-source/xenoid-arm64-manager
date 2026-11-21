@@ -188,7 +188,7 @@ class IdlePollingTests(unittest.TestCase):
         invalidate = Mock(wraps=self.cycle.invalidate_idle_monitor)
         self.cycle.invalidate_idle_monitor = invalidate
         with patch.object(m.random, 'randint', return_value=5), patch.object(m, 'GOOGLE_CACHE_PACKAGES', ()), \
-                patch.object(m, 'configure_display', return_value={}):
+                patch.object(m, 'GOOGLE_DATA_RESET_ENABLED', False), patch.object(m, 'configure_display', return_value={}):
             self.assertTrue(self.cycle.regenerate_after_success())
         self.assertGreaterEqual(invalidate.call_count, 2)
         self.assertIsNotNone(self.cycle.observe_idle())

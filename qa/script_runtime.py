@@ -59,7 +59,7 @@ class Device:
         """
         return request("clear-cache", [package, user, timeout])
 
-    def regenerate(self, timeout=0, operation_key=None, *, post_cache=None):
+    def regenerate(self, timeout=0, operation_key=None, *, post_cache=None, post_google=None):
         """Regenerate/reload through official Xenoid, preserving the container.
 
         Zero waits without a deadline. Retain an explicit operation_key when
@@ -67,8 +67,12 @@ class Device:
         Display tuning remains a separate script-controlled step.
         Optional post_cache={packages:[...],user:'current',timeout:0} is saved
         before native work and completed durably before this operation returns.
+        Optional post_google is a separate, explicit data-reset/registration plan;
+        it never changes clear_cache into a full-data operation.
         """
         key = uuid.uuid4().hex if operation_key is None else operation_key
+        if post_google is not None:
+            return request("regenerate", [timeout, key, post_cache, post_google])
         return request("regenerate", [timeout, key] if post_cache is None else [timeout, key, post_cache])
 
     def set_frame_rate(self, fps, timeout=None):
@@ -265,9 +269,10 @@ def cli(program, args):
     if not args:
         raise ValueError("Usage: device open-url|page-json|close-chrome|ui-dump|tap|adb ...")
     action, *args = args
-    if action == "regenerate" and len(args) <= 3:
+    if action == "regenerate" and len(args) <= 4:
         return Device().regenerate(int(args[0]) if args else 0, args[1] if len(args) >= 2 else None,
-                                   post_cache=json.loads(args[2]) if len(args) == 3 else None)
+                                   post_cache=json.loads(args[2]) if len(args) >= 3 else None,
+                                   post_google=json.loads(args[3]) if len(args) == 4 else None)
     if action == "input-status" and len(args) <= 1:
         return Device().input_status(int(args[0]) if args else None)
     if action == "page-json":

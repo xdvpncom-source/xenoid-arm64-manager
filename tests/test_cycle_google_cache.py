@@ -67,7 +67,8 @@ class GoogleCacheWorkflowTests(unittest.TestCase):
         values={'REGENERATE_ENABLED':True,'REGENERATE_RANDOM_RANGE':(1,10),'REGENERATE_TRIGGER':5,
                 'REGENERATE_TIMEOUT':0,'REGENERATE_RETRY_SECONDS':15,'DISPLAY_FPS':20,'DISPLAY_SCALE':'minimum',
                 'MIN_DISPLAY_SIDE':200,'MIN_DISPLAY_DPI':72,'GOOGLE_CACHE_PACKAGES':('com.google.android.gms','com.google.android.gsf'),
-                'GOOGLE_CACHE_USER':'current','GOOGLE_CACHE_TIMEOUT':0,'GOOGLE_CACHE_RETRY_SECONDS':15}
+                'GOOGLE_CACHE_USER':'current','GOOGLE_CACHE_TIMEOUT':0,'GOOGLE_CACHE_RETRY_SECONDS':15,
+                'GOOGLE_DATA_RESET_ENABLED':False}
         for name,value in values.items():self.stack.enter_context(patch.object(m,name,value))
         self.clock=Clock();self.stack.enter_context(patch.object(m,'time',self.clock))
         self.device=CacheDevice(self.clock);self.cycle=m.Cycle(self.device,'qa.vpn')
@@ -199,7 +200,7 @@ class GoogleCacheWorkflowTests(unittest.TestCase):
                 self.assertEqual(len([r for r in device.trace if r[0]=='cache']),2)
 
     def test_bundled_production_source_matches_reviewed_unseeded_workflow(self):
-        self.assertEqual(hashlib.sha256(SOURCE.read_bytes()).hexdigest(),'59dec59e992a31f2ceb5d7f00605292314cfd0c05633c3fdd2471fda5e566a57')
+        self.assertEqual(hashlib.sha256(SOURCE.read_bytes()).hexdigest(),'a12e2d5bb611d1b0e9a0074dd73abc79cc65e4f2022224effe39813b57f579ca')
         self.assertNotIn('random.seed(',SOURCE.read_text())
 
 

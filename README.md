@@ -7,7 +7,7 @@ Install Xenoid on an ARM64 Ubuntu server and manage headless Android 13 instance
 Use an **ARM64 (aarch64) server running Ubuntu 24.04**, such as a Hetzner CAX server. The installer requires root access, outbound HTTPS, and free disk space for the build toolchain, container images, and Android data. Install and management commands use the same operator account and Xenoid registry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.24/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.25/install.sh | sudo -H bash -s -- --accept-android-licenses
 ```
 
 The `--accept-android-licenses` flag accepts the Android SDK licenses for the pinned build tools from Google. The installer prepares the host and starts device `1`. Allow tens of minutes for the first build on a small server. The CLI is installed as `/usr/local/bin/xenoid-fleet` and the managed checkout lives under `/opt/xenoid-fleet/upstream`. Rerunning the installer reuses the toolchain and converges device `1` with its existing data.
@@ -25,7 +25,7 @@ sudo -H xenoid-fleet run 1 -- adb shell getprop sys.boot_completed
 Use `--install-only` to prepare the host before creating the first device or upgrade an existing installation without issuing a device start. Upgrades also refresh enabled proxies on already-running devices when their native control/process revision has not been verified.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.24/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.25/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
 ```
 
 ## Devices
@@ -120,7 +120,7 @@ still fail ownership checks.
 
 ### Panel-controlled QA defaults
 
-Version v0.1.24 installs the QA SDK/backend, the native logical-to-raw input
+Version v0.1.25 installs the QA SDK/backend, the native logical-to-raw input
 coordinate correction, and configurable resource defaults for all instances,
 including devices with no APK or shared script assignment. The stock pinned
 Redroid image, each native instance identity, persistent data, and saved proxy
@@ -154,7 +154,7 @@ remain visible to the script after an earlier ANR.
 
 `Device.inspect_window(windows=True)` reads Android's stock all-window tree,
 including real close buttons exposed outside the main WebView and separate
-SystemUI navigation controls. The v17 scenario uses these semantic controls;
+SystemUI navigation controls. The v18 scenario uses these semantic controls;
 it does not guess an X coordinate. Its bounded store-return recovery applies
 only to a recently observed ad-close redirect and uses a freshly observed
 SystemUI Back button through `Device.tap`. The SDK's native touch route is
@@ -173,9 +173,9 @@ without silently substituting another reader or input path.
 
 For a confirmed full-screen AdActivity with no individually recognized Close, the v17 scenario can use a freshly observed SystemUI Back after the editable 15-second grace. It permits one attempt per semantic ad state and still requires a fresh unobstructed app view. MainActivity, terms, permission and VPN windows do not use this path.
 
-The v17 scenario closes any surviving app process before launch (`COLD_START_APP=True`), preserving app data until the scheduled end-of-cycle clear. This lets a stopped or replaced run start from a fresh app process instead of a surviving Connecting/Disconnect screen. Set the script option to False to preserve the existing process. Ad retry identity uses semantic control/content fields; transient accessibility window IDs are diagnostic metadata only.
+The v18 scenario closes any surviving app process before launch (`COLD_START_APP=True`), preserving app data until the scheduled end-of-cycle clear. This lets a stopped or replaced run start from a fresh app process instead of a surviving Connecting/Disconnect screen. Set the script option to False to preserve the existing process. Ad retry identity uses semantic control/content fields; transient accessibility window IDs are diagnostic metadata only.
 
-The v17 scenario's idle monitor checks focus every five seconds and takes a
+The v18 scenario's idle monitor checks focus every five seconds and takes a
 full fresh UI observation when focus changes or at most ten seconds after the
 last full observation. Timings are editable in the script. Controls and touch
 coordinates are never reused from a cached observation after an action.
@@ -205,8 +205,8 @@ devices, so changing ad selectors or timing does not require a Fleet upgrade.
 `qa/vpn-cycle.py` is the release-time reference protected by the installer
 manifest. The current panel workflow is also mirrored in
 [`examples/current-vpn-cycle.py`](examples/current-vpn-cycle.py) and exported as
-the [`vpn-cycle-v17.py` release asset](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.24/vpn-cycle-v17.py)
-with a [SHA-256 sidecar](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.24/vpn-cycle-v17.py.sha256).
+the [`vpn-cycle-v18.py` release asset](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.25/vpn-cycle-v18.py)
+with a [SHA-256 sidecar](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.25/vpn-cycle-v18.py.sha256).
 The historical v0.1.17 `vpn-cycle-v14.py`, v0.1.16 `vpn-cycle-v14.py`, v0.1.15 `vpn-cycle-v13.py`, v0.1.14 `vpn-cycle-v13.py`, v0.1.13 `vpn-cycle-v12.py` and v0.1.12 `vpn-cycle-v11.py` assets remain unchanged. Updating the
 editable workflow never rewrites an existing release tag or its installer pins.
 
@@ -492,3 +492,20 @@ pending; the panel cannot remove an upstream provider's connection quota.
 Version v0.1.22 also sets the mode of a newly created public domain-policy directory explicitly, so installation and routing configuration work under a private service umask. An existing private directory is still rejected; Native private settings permissions are unchanged. Existing custom and empty routing policies are retained.
 
 Version v0.1.23 makes repeated cleanup of owned proxy networking resources idempotent inside an existing network namespace. It checks the inner IP resource in that same namespace; an absent resource is accepted only after the matching readback proves absence. Permission, namespace-entry and unrelated failures still fail the operation. This changes no proxy source, input backend, Android image or device identity.
+
+
+After a successful cycle draws 5, workflow18 completes official Xenoid regeneration,
+clears the configured Google caches, waits2seconds, clears the full app data of
+`com.google.android.gms`, waits2seconds, clears `com.google.android.gsf`, waits2seconds,
+and enables microG Device registration through its supported ProvisionService.
+The package list, delays and operation timeout are editable scenario settings.
+The receipt checkpoints native completion and each post-action independently;
+recovery resumes unfinished steps without another regeneration or a data clear
+after registration has begun. Registration-switch proof is independent of
+Google-side network check-in completion. The latter depends on connectivity.
+Before the next official regeneration, the recorded previous native Google
+baseline is restored through the official daemon API so the native offline
+identity checks remain intact; registration is enabled again at the end of that
+regeneration's post-actions. Existing cache-only scripts and saved revisions
+retain their prior behavior. Full data reset applies only when explicitly
+requested by the new scenario plan. Official native touch is unchanged.
