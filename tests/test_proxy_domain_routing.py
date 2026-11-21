@@ -309,9 +309,12 @@ class PrivateLegacyMigrationTests(unittest.TestCase):
         actual_lstat=Path.lstat;actual_fstat=os.fstat
         def metadata(path):
             info=actual_lstat(path)
-            if stat.S_ISDIR(info.st_mode):
-                value=list(info);value[4]=0;value[5]=0;return os.stat_result(value)
-            return os.stat_result((stat.S_IFDIR|0o755,1,1,1,0,0,0,0,0,0))
+            value=list(info);value[4]=0;value[5]=0
+            # Model production's trusted /etc ancestors independently of the
+            # test host's /tmp (1777 on Linux). Preserve actual modes at/below
+            # the private fixture and on newly created public directories.
+            if path in private.parents:value[0]=stat.S_IFDIR|0o755
+            return os.stat_result(value)
         def fstat(descriptor):
             value=list(actual_fstat(descriptor));value[4]=0;value[5]=0;return os.stat_result(value)
         with patch.object(Path,'lstat',metadata),patch.object(os,'fstat',fstat),patch.object(os,'geteuid',return_value=0),patch.object(os,'fchown'),patch.dict(sys.modules,{'xenoid.proxy_source':NATIVE}):yield
