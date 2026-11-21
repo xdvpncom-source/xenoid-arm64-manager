@@ -297,4 +297,48 @@ class NativeRoutingReconcileTests(unittest.TestCase):
             self.assertFalse(result['changed']);self.assertEqual(json.loads(target.read_text()),policy())
 
 
+class PrivateLegacyMigrationTests(unittest.TestCase):
+    def test_public_profile_has_its_own_directory(self):
+        self.assertEqual(NATIVE.PROXY_ROUTING_PATH,'/etc/xenoid-proxy-routing/policy.json')
+        self.assertEqual(str(HELPER['POLICY']),NATIVE.PROXY_ROUTING_PATH)
+        self.assertEqual(str(HELPER['LEGACY_POLICY']),'/etc/xenoid/qa-proxy-routing.json')
+
+    @contextlib.contextmanager
+    def root_metadata(self,private):
+        import stat
+        actual_lstat=Path.lstat;actual_fstat=os.fstat
+        def metadata(path):
+            if path==private:
+                value=list(actual_lstat(path));value[4]=0;value[5]=0;return os.stat_result(value)
+            return os.stat_result((stat.S_IFDIR|0o755,1,1,1,0,0,0,0,0,0))
+        def fstat(descriptor):
+            value=list(actual_fstat(descriptor));value[4]=0;value[5]=0;return os.stat_result(value)
+        with patch.object(Path,'lstat',metadata),patch.object(os,'fstat',fstat),patch.object(os,'geteuid',return_value=0),patch.object(os,'fchown'),patch.dict(sys.modules,{'xenoid.proxy_source':NATIVE}):yield
+
+    def test_private_native_directory_is_not_chmodded_and_custom_or_empty_policy_migrates(self):
+        for value in (policy(('custom.example',False)),policy()):
+            with self.subTest(value=value),tempfile.TemporaryDirectory()as directory:
+                root=Path(directory);private=root/'native-private';private.mkdir(mode=0o700);old=private/'qa-proxy-routing.json';old.write_text(json.dumps(value));old.chmod(0o600);new=root/'public-routing'/'policy.json';before=old.read_bytes()
+                with self.root_metadata(private):result=HELPER['ensure_default_policy'](path=new,legacy_path=old)
+                self.assertTrue(result['migrated_legacy']);self.assertEqual(json.loads(new.read_text()),value);self.assertEqual(new.stat().st_mode&0o777,0o644);self.assertEqual(new.parent.stat().st_mode&0o777,0o755);self.assertEqual(private.stat().st_mode&0o777,0o700);self.assertEqual(old.stat().st_mode&0o777,0o600);self.assertEqual(old.read_bytes(),before)
+
+    def test_new_administrator_empty_profile_wins_without_reading_private_legacy(self):
+        with tempfile.TemporaryDirectory()as directory:
+            target=Path(directory)/'new.json';target.write_text(json.dumps(policy()));old=Path(directory)/'legacy.json';old.write_text(json.dumps(DEFAULT))
+            with patch.dict(HELPER_GLOBALS,{'read_legacy_policy':lambda *_:self.fail('legacy must not be read'),'save_policy':lambda value,**kw:{'ok':True,'changed':False}}):result=HELPER['ensure_default_policy'](path=target,legacy_path=old)
+            self.assertFalse(result['migrated_legacy']);self.assertEqual(json.loads(target.read_text()),policy())
+
+    def test_writable_legacy_file_is_rejected_without_creating_public_profile(self):
+        with tempfile.TemporaryDirectory()as directory:
+            private=Path(directory)/'private';private.mkdir(mode=0o700);old=private/'policy.json';old.write_text(json.dumps(DEFAULT));old.chmod(0o664);new=Path(directory)/'public'/'policy.json'
+            with self.root_metadata(private),self.assertRaises(HELPER['RoutingError'])as error:HELPER['ensure_default_policy'](path=new,legacy_path=old)
+            self.assertEqual(str(error.exception),'routing_legacy_file_invalid');self.assertFalse(new.exists());self.assertEqual(private.stat().st_mode&0o777,0o700)
+
+    def test_malformed_private_profile_is_not_replaced_with_defaults(self):
+        with tempfile.TemporaryDirectory()as directory:
+            private=Path(directory)/'private';private.mkdir(mode=0o700);old=private/'policy.json';old.write_text('{bad-json');old.chmod(0o600);new=Path(directory)/'public'/'policy.json'
+            with self.root_metadata(private),self.assertRaises(ValueError):HELPER['ensure_default_policy'](path=new,legacy_path=old)
+            self.assertFalse(new.exists());self.assertEqual(old.read_text(),'{bad-json')
+
+
 if __name__=='__main__':unittest.main()

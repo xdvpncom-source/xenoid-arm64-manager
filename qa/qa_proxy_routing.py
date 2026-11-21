@@ -13,7 +13,8 @@ import tempfile
 import time
 
 UPSTREAM=Path('/opt/xenoid-fleet/upstream')
-POLICY=Path('/etc/xenoid/qa-proxy-routing.json')
+POLICY=Path('/etc/xenoid-proxy-routing/policy.json')
+LEGACY_POLICY=Path('/etc/xenoid/qa-proxy-routing.json')
 SCHEMA='dev.xenoid.qa.proxy-routing/v1'
 DEFAULT={'schema':SCHEMA,'exceptions':[{'domain':domain,'include_subdomains':True}for domain in (
     'us.xdvpn.com','xdvpn.com','ir.xdgram.com','xdgram.com','github.com')]}
@@ -61,6 +62,37 @@ def save_policy(value,*,path=POLICY,only_if_missing=False):
         finally:os.close(descriptor)
     finally:temporary.unlink(missing_ok=True)
     return {'ok':True,'changed':True,'policy_sha256':policy_digest(value),'exception_count':len(value['exceptions'])}
+
+
+def read_legacy_policy(path):
+    """Root-only migration from the old private Native settings directory.
+
+    Never make that directory public. Only the normalized domain profile is
+    copied to the dedicated public directory; the legacy file is retained.
+    """
+    from xenoid.proxy_source import MAX_SOURCE_BYTES,normalize_proxy_routing_policy
+    require(os.geteuid()==0,'routing_root_required')
+    path=Path(path);require(path.is_absolute()and '..'not in path.parts,'routing_legacy_path_invalid')
+    parent=Path('/')
+    for part in path.parts[1:-1]:
+        parent/=part;info=parent.lstat()
+        require(stat.S_ISDIR(info.st_mode)and info.st_uid==0 and not info.st_mode&0o022,'routing_legacy_parent_invalid')
+    descriptor=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|getattr(os,'O_CLOEXEC',0))
+    with os.fdopen(descriptor,'rb')as stream:
+        info=os.fstat(stream.fileno())
+        require(stat.S_ISREG(info.st_mode)and info.st_uid==0 and info.st_nlink==1 and not info.st_mode&0o022 and info.st_size<=MAX_SOURCE_BYTES,'routing_legacy_file_invalid')
+        body=stream.read(MAX_SOURCE_BYTES+1);require(len(body)<=MAX_SOURCE_BYTES,'routing_policy_too_large')
+    return normalize_proxy_routing_policy(json.loads(body))
+
+
+def ensure_default_policy(*,path=POLICY,legacy_path=LEGACY_POLICY):
+    # An existing new custom/empty policy always wins. A private legacy policy
+    # is consulted only by this explicit root migration, never by the agent.
+    migrated=False;value=DEFAULT
+    if not(path.exists()or path.is_symlink())and(legacy_path.exists()or legacy_path.is_symlink()):
+        value=read_legacy_policy(legacy_path);migrated=True
+    result=save_policy(value,path=path,only_if_missing=True)
+    return {**result,'migrated_legacy':migrated and result['changed']}
 
 
 def accepted(value):
@@ -157,7 +189,8 @@ def main(argv=None):
         try:
             fcntl.flock(lock,fcntl.LOCK_EX)
             if args.action=='show':answer={'ok':True,'policy':load_proxy_routing_policy()}
-            else:answer=save_policy(json.load(sys.stdin)if args.action=='configure'else DEFAULT,only_if_missing=args.action=='ensure-default')
+            elif args.action=='ensure-default':answer=ensure_default_policy()
+            else:answer=save_policy(json.load(sys.stdin))
             print(json.dumps(answer));return 0
         finally:lock.close()
     require(args.timeout>=0 and bool(args.all)!=bool(args.device),'routing_arguments_invalid')

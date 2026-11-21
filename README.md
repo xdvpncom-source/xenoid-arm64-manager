@@ -398,7 +398,7 @@ parent suffix rules. Label boundaries are respected: `github.com.example.org`
 and `notgithub.com` are not exceptions. `raw.githubusercontent.com` is a
 separate domain and remains on the selected proxy unless explicitly added.
 
-Fleet stores the root-owned policy at `/etc/xenoid/qa-proxy-routing.json`.
+Fleet stores the root-owned policy at `/etc/xenoid-proxy-routing/policy.json`.
 The native agent compiles the matching DIRECT rules ahead of `MATCH,GLOBAL`
 and adds direct DNS resolution only for those exceptions. Existing encrypted
 proxy sources, selected nodes and UDP/IPv6 policy flags are preserved. Direct

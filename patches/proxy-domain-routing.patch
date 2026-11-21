@@ -741,7 +741,7 @@ diff --git a/src/xenoid/proxy_source.py b/src/xenoid/proxy_source.py
 +# Source compilation remains pure; the native agent attaches this policy after
 +# its networkless worker returns and the root engine validates the exact result.
 +PROXY_ROUTING_SCHEMA = 'dev.xenoid.qa.proxy-routing/v1'
-+PROXY_ROUTING_PATH = '/etc/xenoid/qa-proxy-routing.json'
++PROXY_ROUTING_PATH = '/etc/xenoid-proxy-routing/policy.json'
 +PROXY_ROUTING_DIRECT_DNS = (
 +    'https://8.8.8.8/dns-query#DIRECT',
 +    'https://8.8.4.4/dns-query#DIRECT',
