@@ -308,8 +308,9 @@ class PrivateLegacyMigrationTests(unittest.TestCase):
         import stat
         actual_lstat=Path.lstat;actual_fstat=os.fstat
         def metadata(path):
-            if path==private:
-                value=list(actual_lstat(path));value[4]=0;value[5]=0;return os.stat_result(value)
+            info=actual_lstat(path)
+            if stat.S_ISDIR(info.st_mode):
+                value=list(info);value[4]=0;value[5]=0;return os.stat_result(value)
             return os.stat_result((stat.S_IFDIR|0o755,1,1,1,0,0,0,0,0,0))
         def fstat(descriptor):
             value=list(actual_fstat(descriptor));value[4]=0;value[5]=0;return os.stat_result(value)
@@ -321,6 +322,22 @@ class PrivateLegacyMigrationTests(unittest.TestCase):
                 root=Path(directory);private=root/'native-private';private.mkdir(mode=0o700);old=private/'qa-proxy-routing.json';old.write_text(json.dumps(value));old.chmod(0o600);new=root/'public-routing'/'policy.json';before=old.read_bytes()
                 with self.root_metadata(private):result=HELPER['ensure_default_policy'](path=new,legacy_path=old)
                 self.assertTrue(result['migrated_legacy']);self.assertEqual(json.loads(new.read_text()),value);self.assertEqual(new.stat().st_mode&0o777,0o644);self.assertEqual(new.parent.stat().st_mode&0o777,0o755);self.assertEqual(private.stat().st_mode&0o777,0o700);self.assertEqual(old.stat().st_mode&0o777,0o600);self.assertEqual(old.read_bytes(),before)
+
+    def test_new_public_directory_is_traversable_under_service_umask_0077(self):
+        with tempfile.TemporaryDirectory()as directory:
+            parent=Path(directory)/'public-routing';target=parent/'policy.json';previous=os.umask(0o077)
+            try:
+                with self.root_metadata(Path(directory)):result=HELPER['save_policy'](DEFAULT,path=target)
+            finally:os.umask(previous)
+            self.assertTrue(result['changed']);self.assertEqual(parent.stat().st_mode&0o777,0o755);self.assertEqual(target.stat().st_mode&0o777,0o644);self.assertEqual(json.loads(target.read_text()),DEFAULT)
+
+    def test_preexisting_private_directory_is_rejected_without_chmod(self):
+        with tempfile.TemporaryDirectory()as directory:
+            parent=Path(directory)/'existing-private';parent.mkdir(mode=0o700);target=parent/'policy.json';previous=os.umask(0o077)
+            try:
+                with self.root_metadata(parent),self.assertRaises(HELPER['RoutingError'])as error:HELPER['save_policy'](DEFAULT,path=target)
+            finally:os.umask(previous)
+            self.assertEqual(str(error.exception),'routing_policy_parent_invalid');self.assertEqual(parent.stat().st_mode&0o777,0o700);self.assertFalse(target.exists())
 
     def test_new_administrator_empty_profile_wins_without_reading_private_legacy(self):
         with tempfile.TemporaryDirectory()as directory:

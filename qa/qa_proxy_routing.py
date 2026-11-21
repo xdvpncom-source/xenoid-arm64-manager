@@ -42,8 +42,22 @@ def save_policy(value,*,path=POLICY,only_if_missing=False):
     body=canonical(value)+b'\n'
     require(len(body)<=MAX_SOURCE_BYTES,'routing_policy_too_large')
     parent=path.parent
-    parent.mkdir(parents=True,mode=0o755,exist_ok=True)
+    created=False
+    try:
+        parent.mkdir(parents=True,mode=0o755,exist_ok=False);created=True
+    except FileExistsError:pass
     state=parent.lstat()
+    if created:
+        # Service UMask=0077 must not make this public policy unreadable to
+        # the dropped agent UID. Never relax a pre-existing private directory.
+        require(stat.S_ISDIR(state.st_mode)and state.st_uid==0 and not state.st_mode&0o022,'routing_policy_parent_invalid')
+        descriptor=os.open(parent,os.O_RDONLY|getattr(os,'O_DIRECTORY',0)|os.O_NOFOLLOW)
+        try:
+            opened=os.fstat(descriptor)
+            require((opened.st_dev,opened.st_ino)==(state.st_dev,state.st_ino)and opened.st_uid==0,'routing_policy_parent_changed')
+            os.fchmod(descriptor,0o755);os.fsync(descriptor)
+        finally:os.close(descriptor)
+        state=parent.lstat()
     require(stat.S_ISDIR(state.st_mode)and state.st_uid==0 and not(stat.S_IMODE(state.st_mode)&0o022)and bool(stat.S_IMODE(state.st_mode)&0o001),'routing_policy_parent_invalid')
     if path.exists()or path.is_symlink():
         existing=load_proxy_routing_policy(path)
