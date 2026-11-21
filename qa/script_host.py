@@ -1117,6 +1117,88 @@ class Broker:
             self.log("action", "Prior recorded Google baseline restored through official Xenoid before the next regeneration")
         return True
 
+    def retire_recorded_google_offline_marker(self, manager, receipt, store, key, deadline):
+        """Hand this explicit Google reset from native offline to provider mode."""
+        progress = receipt.get("post_google_progress")
+        plan = receipt.get("post_google")
+        state = receipt.get("native_journal")
+        if (not isinstance(plan, dict) or "com.google.android.gms" not in plan["clear_packages"]
+                or receipt.get("native_completion") is None or not isinstance(progress, dict)
+                or set(progress.get("cleared_packages", {})) != set(plan["clear_packages"])):
+            raise RegenerationPending("google_mode_handoff_unverified")
+        cli = self.regeneration_cli()
+        self.verify_regeneration_native_completion(manager, cli, receipt, deadline)
+        target = cli.GoogleBindingStore(manager.context, manager.lease).regeneration_gsf_android_id(state["transactionId"])
+        expected = hashlib.sha256(target.encode("ascii")).hexdigest()
+        intent = progress.get("mode_handoff")
+        script = r'''
+set -eu
+operation=$1
+expected=$2
+allow_missing=$3
+profile=/data/local/tmp/xenoid-profile
+marker=$profile/gsf_android_id
+[ -d "$profile" ] && [ ! -L "$profile" ]
+[ "$(readlink -f "$profile")" = "$profile" ]
+[ "$(stat -c '%u:%g:%a' "$profile")" = '0:0:700' ]
+if [ ! -e "$marker" ]; then
+    [ ! -L "$marker" ]
+    if [ "$operation" = inspect ]; then echo absent; exit 0; fi
+    [ "$allow_missing" = 1 ] || exit 71
+    sync -f "$profile"
+    [ ! -e "$marker" ] && [ ! -L "$marker" ]
+    echo absent
+    exit 0
+fi
+[ "$operation" != verify_absent ] || exit 72
+[ -f "$marker" ] && [ ! -L "$marker" ]
+[ "$(readlink -f "$marker")" = "$marker" ]
+[ "$(stat -c '%u:%g:%a:%h' "$marker")" = '0:0:600:1' ]
+size=$(stat -c %s "$marker")
+[ "$size" -ge 2 ] && [ "$size" -le 20 ]
+value=$(cat "$marker")
+case "$value" in ''|0*|*[!0-9]*) exit 73;; esac
+[ "$size" -eq "$((${#value}+1))" ]
+actual=$(printf '%s' "$value" | sha256sum)
+[ "${actual%% *}" = "$expected" ] || exit 74
+if [ "$operation" = inspect ]; then echo present; exit 0; fi
+[ "$operation" = retire ] || exit 75
+rm "$marker"
+sync -f "$profile"
+[ ! -e "$marker" ] && [ ! -L "$marker" ]
+echo retired
+'''
+        def command(operation, allow_missing=False):
+            answer = self.native_display_exec(manager, ["sh", "-c", script, "xenoid-google-mode-handoff",
+                                                       operation, expected, "1" if allow_missing else "0"],
+                                              deadline=deadline, check=False)
+            output = answer.stdout.decode(errors="replace").strip()
+            if answer.returncode or output not in ("present", "absent", "retired"):
+                raise RegenerationPending("google_mode_handoff_marker_invalid")
+            return output
+        if intent is None:
+            if progress.get("registration_started"):
+                raise RegenerationPending("google_mode_handoff_order_invalid")
+            if command("inspect") != "present":
+                raise RegenerationPending("google_mode_handoff_marker_missing_before_intent")
+            intent = {"intent": True, "transaction_id": state["transactionId"],
+                      "expected_marker_sha256": expected, "completed": False}
+            progress["mode_handoff"] = intent
+            store.save(key, receipt)  # Fence a lost response after unlink.
+        if (not isinstance(intent, dict) or intent.get("intent") is not True
+                or intent.get("transaction_id") != state["transactionId"]
+                or intent.get("expected_marker_sha256") != expected
+                or type(intent.get("completed")) is not bool):
+            raise RegenerationPending("google_mode_handoff_intent_invalid")
+        if intent["completed"]:
+            command("verify_absent", True)
+            return {"identity_mode": "provider-managed", "offline_marker_retired": True}
+        command("retire", True)
+        intent["completed"] = True
+        progress["offline_marker_retired"] = True
+        store.save(key, receipt)
+        return {"identity_mode": "provider-managed", "offline_marker_retired": True}
+
     def complete_regeneration_post_google(self, manager, receipt, store, key, deadline):
         plan = receipt.get("post_google")
         if plan is None:
@@ -1145,8 +1227,18 @@ class Broker:
                     stage_deadline = time.monotonic() + remaining
                     budget = stage_deadline if budget is None else min(budget, stage_deadline)
                 return self.native_display_exec(manager, args, deadline=budget, check=False)
+            def retire_marker():
+                handoff_deadline = deadline
+                progress = receipt.get("post_google_progress") or {}
+                if progress.get("completed") is not True and progress.get("not_after") is not None:
+                    remaining = progress["not_after"] - time.time()
+                    if remaining <= 0:
+                        raise TimeoutError("post_google_timeout")
+                    stage_deadline = time.monotonic() + remaining
+                    handoff_deadline = stage_deadline if deadline is None else min(deadline, stage_deadline)
+                return self.retire_recorded_google_offline_marker(manager, receipt, store, key, handoff_deadline)
             result = complete(plan, receipt, lambda: store.save(key, receipt), execute,
-                              self.stopping, deadline=deadline)
+                              self.stopping, deadline=deadline, retire_offline_marker=retire_marker)
             if self.log:
                 self.log("action", "Google data reset completed; microG Device registration enabled and check-in requested")
             return result

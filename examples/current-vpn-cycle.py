@@ -1046,7 +1046,10 @@ class Cycle:
                             or reset.get("data_cleared") is not True
                             or reset.get("packages") != post_google["clear_packages"]
                             or reset.get("registration_enabled") is not True
-                            or reset.get("checkin_requested") is not True):
+                            or reset.get("checkin_requested") is not True
+                            or ("com.google.android.gms" in post_google["clear_packages"]
+                                and (reset.get("identity_mode") != "provider-managed"
+                                     or reset.get("offline_marker_retired") is not True))):
                         raise RuntimeError("regeneration_post_google_pending: data reset and microG registration were not confirmed")
                     self.log("Google app data cleared after cache; microG device registration enabled and check-in requested")
                 break

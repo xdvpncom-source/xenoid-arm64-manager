@@ -60,7 +60,7 @@ END {
 ''', 'xenoid-registration-state', str(user)]
 
 
-def complete(plan, receipt, save, execute, stopping, *, deadline=None):
+def complete(plan, receipt, save, execute, stopping, *, deadline=None, retire_offline_marker=None):
     """Resume the recorded reset. execute(args) returns CompletedProcess bytes."""
     progress = receipt.setdefault('post_google_progress', {})
     if not isinstance(progress, dict):
@@ -97,7 +97,9 @@ def complete(plan, receipt, save, execute, stopping, *, deadline=None):
     def result_for(user):
         return {'ok': True, 'data_cleared': True, 'packages': list(plan['clear_packages']),
                 'user': plan['user'], 'resolved_user': user, 'delay_seconds': plan['delay_seconds'],
-                'registration_enabled': True, 'checkin_requested': True, 'network_registered': None}
+                'registration_enabled': True, 'checkin_requested': True, 'network_registered': None,
+                'identity_mode': 'provider-managed' if 'com.google.android.gms' in plan['clear_packages'] else 'unchanged',
+                'offline_marker_retired': 'com.google.android.gms' in plan['clear_packages']}
 
     if progress.get('completed') is True:
         # A later native readiness retry must not expire or repeat a completed
@@ -115,6 +117,13 @@ def complete(plan, receipt, save, execute, stopping, *, deadline=None):
                     or entry.get('ok') is not True or entry.get('data_cleared') is not True
                     or entry.get('uid_verified') is not True):
                 raise RuntimeError('post_google_completed_progress_invalid')
+        if 'com.google.android.gms' in plan['clear_packages']:
+            if progress.get('offline_marker_retired') is not True or retire_offline_marker is None:
+                raise RuntimeError('post_google_completed_mode_handoff_invalid')
+            handoff = retire_offline_marker()
+            if (not isinstance(handoff, dict) or handoff.get('offline_marker_retired') is not True
+                    or handoff.get('identity_mode') != 'provider-managed'):
+                raise RuntimeError('post_google_completed_mode_handoff_invalid')
         return dict(progress['result'])
 
     user = progress.get('resolved_user')
@@ -186,6 +195,15 @@ def complete(plan, receipt, save, execute, stopping, *, deadline=None):
                          'data_cleared': True, 'uid_verified': True}
         persist()
 
+    if 'com.google.android.gms' in plan['clear_packages']:
+        if retire_offline_marker is None:
+            raise RuntimeError('post_google_mode_handoff_unavailable')
+        handoff = retire_offline_marker()
+        if (not isinstance(handoff, dict) or handoff.get('identity_mode') != 'provider-managed'
+                or handoff.get('offline_marker_retired') is not True):
+            raise RuntimeError('post_google_mode_handoff_unverified')
+        progress['offline_marker_retired'] = True
+        persist()
     pause('before_registration')
     if not progress.get('registration_started'):
         progress['registration_started'] = True

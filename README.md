@@ -499,7 +499,7 @@ clears the configured Google caches, waits2seconds, clears the full app data of
 `com.google.android.gms`, waits2seconds, clears `com.google.android.gsf`, waits2seconds,
 and enables microG Device registration through its supported ProvisionService.
 The package list, delays and operation timeout are editable scenario settings.
-The receipt checkpoints native completion and each post-action independently;
+The post-stage retires only the authenticated obsolete offline GSF marker after the requested data clear, handing identity management back to microG without changing native guards. The receipt checkpoints native completion and each post-action independently;
 recovery resumes unfinished steps without another regeneration or a data clear
 after registration has begun. Registration-switch proof is independent of
 Google-side network check-in completion. The latter depends on connectivity.

@@ -9,7 +9,7 @@ class GoogleDevice(CacheDevice):
   self.google_plans.append((operation_key,copy.deepcopy(post_google)))
   answer=super().regenerate(timeout=timeout,operation_key=operation_key,post_cache=post_cache)
   if post_google:
-   proof={'ok':True,'data_cleared':True,'packages':post_google['clear_packages'],'registration_enabled':True,'checkin_requested':True,'network_registered':None}
+   proof={'ok':True,'data_cleared':True,'packages':post_google['clear_packages'],'registration_enabled':True,'checkin_requested':True,'network_registered':None,'identity_mode':'provider-managed','offline_marker_retired':True}
    if self.unverified_once:self.unverified_once=False;proof['registration_enabled']=False
    answer['google_reset']=proof
   return answer
