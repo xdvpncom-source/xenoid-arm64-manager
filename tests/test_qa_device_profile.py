@@ -14,7 +14,7 @@ class ProfilePolicyTest(unittest.TestCase):
         self.base = json.loads((Path(__file__).parent / "fixtures/native-profile-template.json").read_text())
         self.resources = {"enabled": True, "fps": 20, "scale": "minimum", "min_side": 200, "dpi": 72, "physical_size": [720, 1280], "physical_density": 560}
         self.policy = q.default_policy([self.base], self.resources)
-        self.policy.pop("display_presets")  # Exercise the unchanged v27 scalar-policy contract.
+        self.policy.pop("display_random")  # Exercise the unchanged v27 scalar-policy contract.
 
     def generate(self, key="host22-device6-operation1", **kwargs):
         return q.generate_profile(self.base, self.policy, key, resource_config=self.resources, **kwargs)

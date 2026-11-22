@@ -16,6 +16,8 @@ class DisplayPresetTests(unittest.TestCase):
         self.resources = {"enabled": True, "fps": 20, "scale": "minimum", "min_side": 200,
                           "dpi": 72, "physical_size": [720, 1280]}
         self.policy = q.default_policy([self.base], self.resources)
+        self.policy.pop("display_random")
+        self.policy["display_presets"] = {"enabled": True, "values": copy.deepcopy(q.DEFAULT_DISPLAY_PRESETS)}
         self.previous = q.normalize_resources(self.base, self.resources)
 
     def generate(self, key="preset-test", previous=None):
@@ -91,18 +93,18 @@ class DisplayPresetTests(unittest.TestCase):
         self.policy["display_presets"]["enabled"] = False
         self.assertFalse(set(q.DISPLAY_PRESET_FIELDS) & set(q.selected_fields(self.base, self.policy)))
 
-    def test_explicit_upgrade_adds_presets_but_preserves_existing_custom_group(self):
+    def test_explicit_upgrade_adds_range_but_preserves_existing_custom_group(self):
         old = copy.deepcopy(self.policy); del old["display_presets"]; old["revision"] = 3
         upgraded = q.migrate_policy(old, [self.base], self.resources)
         self.assertEqual(upgraded["revision"], 4)
-        self.assertEqual(upgraded["display_presets"]["values"], q.DEFAULT_DISPLAY_PRESETS)
+        self.assertEqual(upgraded["display_random"], q.DEFAULT_DISPLAY_RANDOM)
         custom = {"enabled": False, "values": [{"width": 300, "height": 500, "dpi": 90, "fps": 24}]}
         old["display_presets"] = custom
         self.assertEqual(q.migrate_policy(old, [self.base], self.resources)["display_presets"], custom)
 
     def test_invalid_duplicate_or_empty_enabled_presets_are_rejected(self):
         invalid = [[], [q.DEFAULT_DISPLAY_PRESETS[0]] * 2]
-        for key, value in (("width", 1), ("height", 32768), ("dpi", True), ("fps", 0)):
+        for key, value in (("width", 1), ("height", 32768), ("dpi", True), ("dpi", 71), ("fps", 0)):
             preset = dict(q.DEFAULT_DISPLAY_PRESETS[0]); preset[key] = value; invalid.append([preset])
         for rows in invalid:
             self.policy["display_presets"] = {"enabled": True, "values": rows}
@@ -110,7 +112,7 @@ class DisplayPresetTests(unittest.TestCase):
 
     def test_new_legacy_scalar_choices_also_require_nonzero_native_axis_span(self):
         del self.policy["display_presets"]
-        for path in ("display.width", "display.height"):
+        for path in ("display.width", "display.height", "display.densityDpi"):
             candidate = copy.deepcopy(self.policy)
             candidate["fields"][path]["values"] = [1]
             with self.subTest(path=path), self.assertRaises(ValueError): q.validate_policy(candidate, [self.base])

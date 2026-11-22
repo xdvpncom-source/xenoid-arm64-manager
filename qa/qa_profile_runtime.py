@@ -19,7 +19,7 @@ import stat
 import tempfile
 import time
 
-from qa_device_profile import DISPLAY_PRESET_FIELDS, canonical_bytes, field_catalog, generate_profile, profile_sha256, selected_fields, validate_policy, validate_profile
+from qa_device_profile import DISPLAY_PRESET_FIELDS, canonical_bytes, display_random_candidates, field_catalog, generate_profile, profile_sha256, selected_fields, validate_policy, validate_profile
 
 CONFIG = Path("/etc/xenoid-fleet/device-profile-policy.json")
 RESOURCE_CONFIG = Path("/etc/xenoid-fleet/qa-resources.json")
@@ -292,6 +292,10 @@ def _preflight_profile(policy, actual, previous, resource, capacities):
 
 
 def _fixed_display_only(policy, selected):
+    random_display = policy.get("display_random")
+    if random_display is not None:
+        return (random_display.get("enabled") is True and len(display_random_candidates(random_display)) == 1
+                and not set(selected) - set(DISPLAY_PRESET_FIELDS))
     presets = policy.get("display_presets") or {}
     return (presets.get("enabled") is True and len(presets.get("values", [])) == 1
             and not set(selected) - set(DISPLAY_PRESET_FIELDS))
@@ -890,5 +894,6 @@ def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=S
             "fps": fps, "period_ns": period, "temporary_target_removed": progress["target_file_removed"],
             "effective_changes_verified": effective, "field_audit": audit, "application_status": application_status,
             "display_input": display_input, "display_source": progress["generated"].get("display_source", "legacy"),
+            "display_selection": progress["generated"].get("display_selection", progress["generated"].get("display_preset")),
             "legacy_observation_unavailable": legacy_observation,
             "randomization_skipped": "no_enabled_fields" if not selected else "fixed_display_only" if fixed_display and not meaningful else None}

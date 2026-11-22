@@ -170,7 +170,7 @@ class RuntimeTest(unittest.TestCase):
         self.broker = Broker(self.manager); self.cli = Cli(self.manager); self.store = Store()
         self.policy_file = self.root / "policy.json"; self.resource_file = self.root / "resources.json"
         self.policy = engine.default_policy([self.base], self.resources)
-        self.policy.pop("display_presets")  # Existing persisted v27 policy.
+        self.policy.pop("display_random")  # Existing persisted v27 policy.
         self.policy_file.write_text(json.dumps(self.policy)); self.resource_file.write_text(json.dumps(self.resources))
         plan = runtime.capture_plan(self.broker, self.manager, self.manager.binding, None, config_path=self.policy_file, resource_path=self.resource_file)
         digest = engine.profile_sha256(self.manager.identity["stable"])
@@ -554,7 +554,7 @@ class RuntimeTest(unittest.TestCase):
 
     def v26_policy(self):
         policy = engine.default_policy([self.base], self.resources)
-        policy.pop("display_presets")
+        policy.pop("display_random")
         for path, row in policy["fields"].items():
             if path.startswith("build.") or path.startswith("memory.") or path == "cpu.implementer" or path.endswith((".part", ".model")):
                 row["values"] = []

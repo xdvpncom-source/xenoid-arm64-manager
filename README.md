@@ -544,10 +544,38 @@ display/FPS and host memory optimizations remain in place.
 A changed JSON value does not assert OEM signing, physical hardware changes, or
 hardware-backed DRM certification.
 
-### Atomic display presets (v0.1.28)
+### Random display dimensions and atomic presets (v0.1.28)
 
-The panel can select the complete display configuration as one preset. Its
-optional `display_presets` field belongs to the versioned profile policy:
+New profile policies select a random width from a bounded range around a stable
+configured base. Height and DPI are derived together; the base does not move
+after each round. The default policy uses:
+
+```json
+{
+  "display_random": {
+    "enabled": true,
+    "base_width": 200,
+    "base_height": 356,
+    "min_width": 180,
+    "max_width": 220,
+    "width_step": 2,
+    "base_dpi": 72,
+    "fps": 20
+  }
+}
+```
+
+The width is chosen uniformly from `min_width + n * width_step <= max_width`.
+Whenever another size exists, the immediately previous width/height is excluded.
+The operation key fixes the choice for retries. Height is rounded to the nearest
+even pixel, and DPI to the nearest integer; exact ties round upward. DPI is then
+clamped to Android's minimum of 72. Thus the default range is 180×320 at 72 DPI
+through 220×392 at 79 DPI, always at 20 FPS. Values can move above and below the
+200×356 base without a random walk. Every reachable tuple is validated before
+native regeneration starts.
+
+The optional `display_presets` field remains available for explicit tuples and
+existing saved policies. It is mutually exclusive with `display_random`:
 
 ```json
 {
@@ -564,10 +592,13 @@ optional `display_presets` field belongs to the versioned profile policy:
 }
 ```
 
-These modest defaults keep the composer at 20 FPS. Administrators can edit or
-add presets in the panel. Width and height must be integers from 2 through
-32767, DPI from 1 through 65535, and FPS from 1 through 1000000000; Android and
+Administrators can edit range parameters or explicit presets in the panel.
+Width and height must be integers from 2 through 32767, DPI from 72 through
+65535, and FPS from 1 through 1000000000; Android and
 the official native runtime must still accept and verify the chosen values.
+The DPI lower bound is enforced by Android 13's
+[WindowManager shell command](https://android.googlesource.com/platform/frameworks/base/+/android-13.0.0_r1/services/core/java/com/android/server/wm/WindowManagerShellCommand.java),
+not a panel resource policy. Historical profile documents remain readable.
 Duplicate presets and an enabled empty list are rejected. Two or more distinct
 sizes allow size variation; one preset deliberately fixes the display.
 
@@ -575,22 +606,26 @@ For each new profile operation, selection is deterministic from the saved
 operation key and policy. It prefers a different width/height pair from the
 current one whenever available, then a different complete tuple. The selected
 tuple is written into the full native JSON. Both refresh-rate fields receive
-the preset FPS; input X becomes `minimum=0, maximum=width-1`, and input Y becomes
+the selected FPS; input X becomes `minimum=0, maximum=width-1`, and input Y becomes
 `minimum=0, maximum=height-1`. Independent scalar display/input choices remain
 stored in the policy but are inactive while this group is present. There is no
 second set of active touch coordinates to edit.
 
-The panel offers three explicit modes:
+The panel offers four explicit modes:
 
+- **Random range:** `display_random.enabled=true` derives a full tuple from a
+  uniformly selected width and the configured base aspect ratio.
 - **Presets:** `display_presets.enabled=true` selects and applies a tuple.
 - **Freeze:** a present group with `enabled=false` preserves the current complete
   display/input tuple; it does not reactivate the retained scalar choices.
-- **Legacy:** omit the group to use the previous independent field settings.
+- **Legacy:** omit both groups to use the previous independent field settings.
 
-Reading an existing policy without presets preserves that legacy mode. The
+Reading an existing policy preserves its current range, presets or legacy mode. The
 upgrade button prepares a draft; only an explicit save publishes a new policy
 revision, such as revision 3 to 4. Existing custom presets are retained by the
-upgrade. A pending operation keeps its already pinned policy and target JSON.
+upgrade; it adds a random range only when neither display group exists. A pending
+operation keeps its already pinned policy and target JSON. The result records
+the `display_source` and exact chosen `display_selection` tuple.
 
 Before publishing a successful profile, the worker verifies the effective JSON,
 WindowManager dimensions/DPI, actual composer period, official input status and
