@@ -556,7 +556,7 @@ after each round. The default policy uses:
     "enabled": true,
     "base_width": 200,
     "base_height": 356,
-    "min_width": 180,
+    "min_width": 200,
     "max_width": 220,
     "width_step": 2,
     "base_dpi": 72,
@@ -569,10 +569,14 @@ The width is chosen uniformly from `min_width + n * width_step <= max_width`.
 Whenever another size exists, the immediately previous width/height is excluded.
 The operation key fixes the choice for retries. Height is rounded to the nearest
 even pixel, and DPI to the nearest integer; exact ties round upward. DPI is then
-clamped to Android's minimum of 72. Thus the default range is 180×320 at 72 DPI
-through 220×392 at 79 DPI, always at 20 FPS. Values can move above and below the
-200×356 base without a random walk. Every reachable tuple is validated before
-native regeneration starts.
+clamped to Android's minimum of 72. Thus the current default range is 200×356
+at 72 DPI through 220×392 at 79 DPI, always at 20 FPS, without a random walk.
+Android 13's `DisplayContent.setForcedSize` clamps either dimension below 200
+pixels. The requested 180-pixel lower bound is therefore unsupported by this
+official path; it is rejected before regeneration instead of silently applying
+a different size. A larger configured base can have a range both above and
+below it, provided both applied dimensions remain at least 200. Every reachable
+tuple is validated before native regeneration starts.
 
 The optional `display_presets` field remains available for explicit tuples and
 existing saved policies. It is mutually exclusive with `display_random`:
@@ -593,12 +597,14 @@ existing saved policies. It is mutually exclusive with `display_random`:
 ```
 
 Administrators can edit range parameters or explicit presets in the panel.
-Width and height must be integers from 2 through 32767, DPI from 72 through
+Applied width and height must be integers from 200 through 32767, DPI from 72 through
 65535, and FPS from 1 through 1000000000; Android and
 the official native runtime must still accept and verify the chosen values.
 The DPI lower bound is enforced by Android 13's
 [WindowManager shell command](https://android.googlesource.com/platform/frameworks/base/+/android-13.0.0_r1/services/core/java/com/android/server/wm/WindowManagerShellCommand.java),
-not a panel resource policy. Historical profile documents remain readable.
+not a panel resource policy. The dimension lower bound likewise comes from
+[DisplayContent.setForcedSize](https://android.googlesource.com/platform/frameworks/base/+/android-13.0.0_r1/services/core/java/com/android/server/wm/DisplayContent.java).
+Historical profile documents remain readable.
 Duplicate presets and an enabled empty list are rejected. Two or more distinct
 sizes allow size variation; one preset deliberately fixes the display.
 

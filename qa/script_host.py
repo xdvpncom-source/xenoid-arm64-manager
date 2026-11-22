@@ -695,17 +695,41 @@ def native_touch_point(dump, profile, x, y):
     rx, ry = invert(*calibration, ax, ay)
     if not math.isfinite(rx) or not math.isfinite(ry):
         missing("non-finite raw coordinates")
-    rx, ry = round(rx), round(ry)
-    if not xmin <= rx <= xmax or not ymin <= ry <= ymax:
-        missing("requested screen point cannot be represented by the native touchscreen")
     physical = {}
     for label in ("PhysicalLeft", "PhysicalTop", "PhysicalWidth", "PhysicalHeight"):
         physical[label] = int(match(r"^      " + label + r": (-?\d+)(?:px)?$", body,
                                     "reader physical frame is missing")[1])
-    # Android tests the raw point against this crop before affine calibration.
-    if not (physical["PhysicalLeft"] <= (rx - xmin) * sx <= physical["PhysicalLeft"] + physical["PhysicalWidth"]
-            and physical["PhysicalTop"] <= (ry - ymin) * sy <= physical["PhysicalTop"] + physical["PhysicalHeight"]):
-        missing("mapped raw point is outside the reader's active physical frame")
+    # A letterboxed viewport can start between two raw integer coordinates.
+    # Quantize only to the surrounding grid points and prove the selected one
+    # remains in Android's crop and projects within one logical pixel. Merely
+    # rounding can choose an event Android would discard at the cropped edge.
+    candidates = []
+    for qx in sorted({math.floor(rx), math.ceil(rx)}):
+        for qy in sorted({math.floor(ry), math.ceil(ry)}):
+            if not xmin <= qx <= xmax or not ymin <= qy <= ymax:
+                continue
+            # Android checks the uncalibrated raw point against this crop.
+            if not (physical["PhysicalLeft"] <= (qx - xmin) * sx <= physical["PhysicalLeft"] + physical["PhysicalWidth"]
+                    and physical["PhysicalTop"] <= (qy - ymin) * sy <= physical["PhysicalTop"] + physical["PhysicalHeight"]):
+                continue
+            ca, cb, ctx, cc, cd, cty = calibration
+            fx, fy = ca * qx + cb * qy + ctx, cc * qx + cd * qy + cty
+            if orientation == 0:
+                dx, dy = (fx - xmin) * sx, (fy - ymin) * sy
+            elif orientation == 1:
+                dx, dy = (fy - ymin) * sy, (xmax - fx) * sx
+            elif orientation == 2:
+                dx, dy = (xmax - fx) * sx, (ymax - fy) * sy
+            else:
+                dx, dy = (ymax - fy) * sy, (fx - xmin) * sx
+            lx, ly = a * dx + b * dy + tx, c * dx + d * dy + ty
+            ex, ey = abs(lx - x), abs(ly - y)
+            if not all(math.isfinite(value) for value in (lx, ly, ex, ey)) or ex > 1 or ey > 1:
+                continue
+            candidates.append((ex * ex + ey * ey, (qx - rx) ** 2 + (qy - ry) ** 2, qx, qy))
+    if not candidates:
+        missing("requested screen point has no representable native pixel within the active physical frame")
+    _, _, rx, ry = min(candidates)
     return rx, ry, {"device_id": int(device_id), "display_id": int(display_id),
                     "logical_size": [logical_width, logical_height], "orientation": orientation}
 

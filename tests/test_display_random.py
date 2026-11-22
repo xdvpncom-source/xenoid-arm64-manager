@@ -21,8 +21,8 @@ class DisplayRandomTests(unittest.TestCase):
         self.assertNotIn('display_presets', self.policy)
         self.assertEqual(self.policy['display_random'], q.DEFAULT_DISPLAY_RANDOM)
         candidates = q.display_random_candidates(self.policy['display_random'])
-        self.assertEqual(len(candidates), 21)
-        self.assertEqual(candidates[0], {'width': 180, 'height': 320, 'dpi': 72, 'fps': 20})
+        self.assertEqual(len(candidates), 11)
+        self.assertEqual(candidates[0], {'width': 200, 'height': 356, 'dpi': 72, 'fps': 20})
         self.assertEqual(candidates[-1], {'width': 220, 'height': 392, 'dpi': 79, 'fps': 20})
         self.assertTrue(all(v['height'] % 2 == 0 for v in candidates))
     def test_seeded_choice_is_replayable_avoids_previous_and_uses_whole_range(self):
@@ -38,20 +38,21 @@ class DisplayRandomTests(unittest.TestCase):
             self.assertEqual(p['display']['defaultRefreshRateHz'], 20)
             self.assertLessEqual(abs(h - w * 356 / 200), 1)
             seen.add(w); previous = p
-        self.assertTrue(any(w < 200 for w in seen)); self.assertTrue(any(w > 200 for w in seen)); self.assertGreater(len(seen), 15)
+        self.assertIn(200, seen); self.assertTrue(any(w > 200 for w in seen)); self.assertGreater(len(seen), 8)
     def test_uniform_selector_does_not_always_favor_a_range_edge(self):
         candidates = q.display_random_candidates(self.policy['display_random']); counts = {row['width']: 0 for row in candidates}
         for index in range(2100):
             selected = q._uniform_choice(hashlib.sha256(str(index).encode()).digest(), candidates); counts[selected['width']] += 1
-        self.assertTrue(all(55 < value < 145 for value in counts.values()), counts)
+        self.assertTrue(all(140 < value < 250 for value in counts.values()), counts)
     def test_rounding_and_unaligned_upper_bound_are_explicit(self):
-        config = dict(q.DEFAULT_DISPLAY_RANDOM, base_width=4, base_height=6, base_dpi=73, min_width=3, max_width=8, width_step=2)
+        config = dict(q.DEFAULT_DISPLAY_RANDOM, base_width=400, base_height=600, base_dpi=73, min_width=201, max_width=206, width_step=2)
         candidates = q.display_random_candidates(config)
-        self.assertEqual([p['width'] for p in candidates], [3, 5, 7])
-        self.assertEqual(candidates[0], {'width': 3, 'height': 4, 'dpi': 72, 'fps': 20})
-        self.assertEqual(candidates[1]['height'], 8)
-        self.assertEqual(candidates[2]['height'], 10)
-        self.assertEqual(q.display_random_candidates(dict(config, min_width=2, max_width=2))[0]['height'], 4)
+        self.assertEqual([p['width'] for p in candidates], [201, 203, 205])
+        self.assertEqual(candidates[0], {'width': 201, 'height': 302, 'dpi': 72, 'fps': 20})
+        self.assertEqual(candidates[1]['height'], 304)
+        self.assertEqual(candidates[2]['height'], 308)
+        self.assertEqual(q.display_random_candidates(dict(config, min_width=202, max_width=202))[0]['height'], 304)
+
     def test_frozen_group_retains_current_and_scalar_choices_remain_inactive(self):
         self.policy['display_random']['enabled'] = False; self.policy['fields']['display.width']['values'] = [1000]
         before = copy.deepcopy(self.previous); got = self.generate()['profile']
@@ -71,12 +72,19 @@ class DisplayRandomTests(unittest.TestCase):
         self.assertNotIn('display_random', migrated); self.assertEqual(migrated['display_presets'], legacy['display_presets'])
         self.assertEqual(q.migrate_policy(self.policy, [self.base])['display_random'], self.policy['display_random'])
     def test_invalid_full_ranges_and_conflicting_groups_are_rejected(self):
-        cases = [dict(base_width=0), dict(base_height=1), dict(min_width=1), dict(max_width=40000), dict(width_step=0), dict(width_step=True), dict(fps=0), dict(base_dpi=71), dict(min_width=220, max_width=180), dict(base_width=2, base_height=32767), dict(base_width=32767, base_height=2, min_width=2, max_width=2), dict(base_width=2, base_dpi=65535), dict(unrecognized=1)]
+        cases = [dict(base_width=0), dict(base_height=1), dict(min_width=199), dict(max_width=40000), dict(width_step=0), dict(width_step=True), dict(fps=0), dict(base_dpi=71), dict(min_width=220, max_width=200), dict(base_width=2, base_height=32767), dict(base_width=400, base_height=200, min_width=200, max_width=220), dict(base_width=2, base_dpi=65535), dict(unrecognized=1)]
         for change in cases:
             candidate = copy.deepcopy(self.policy); candidate['display_random'].update(change)
             with self.subTest(change=change), self.assertRaises(ValueError): q.validate_policy(candidate, [self.base])
         conflict = copy.deepcopy(self.policy); conflict['display_presets'] = {'enabled': False, 'values': []}
         with self.assertRaisesRegex(ValueError, 'mutually exclusive'): q.validate_policy(conflict, [self.base])
+
+    def test_historical_profile_smaller_than_wm_floor_remains_readable(self):
+        historical = copy.deepcopy(self.previous)
+        historical['display'].update(width=199, height=199)
+        historical['input']['x'] = {'minimum': 0, 'maximum': 198}
+        historical['input']['y'] = {'minimum': 0, 'maximum': 198}
+        self.assertEqual(q.validate_profile(historical), historical)
 
 class DisplayRandomRuntimeTests(unittest.TestCase):
     def fixture(self):
@@ -105,6 +113,22 @@ class DisplayRandomRuntimeTests(unittest.TestCase):
         value.policy_file.write_text(json.dumps(value.policy))
         with self.assertRaises(ValueError): self.capture(value)
         self.assertEqual(value.cli.apply_calls, 0); self.assertEqual(value.manager.actual_reloads, 0)
+
+    def test_wm_clamped_candidates_are_rejected_before_native_gen(self):
+        for mode in ('range', 'presets', 'legacy'):
+            value = self.fixture()
+            if mode == 'range':
+                value.policy['display_random']['min_width'] = 199
+            else:
+                value.policy.pop('display_random')
+                if mode == 'presets':
+                    value.policy['display_presets'] = {'enabled': True, 'values': [
+                        {'width': 200, 'height': 199, 'dpi': 72, 'fps': 20}]}
+                else:
+                    value.policy['fields']['display.width'] = {'enabled': True, 'values': [199]}
+            with self.subTest(mode=mode), self.assertRaises(ValueError): self.capture(value)
+            self.assertEqual(value.cli.apply_calls, 0)
+            self.assertEqual(value.manager.actual_reloads, 0)
     def test_fixed_single_width_and_disabled_range_are_intentional_noops_with_proof(self):
         for enabled in (True, False):
             value = self.fixture(); value.policy['display_random'].update(enabled=enabled, min_width=200, max_width=200); self.capture(value)

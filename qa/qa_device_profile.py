@@ -25,8 +25,11 @@ DISPLAY_RANDOM_MANAGED = DISPLAY_PRESET_MANAGED
 # Android 13 WindowManagerShellCommand.runDisplayDensity rejects density < 72:
 # https://android.googlesource.com/platform/frameworks/base/+/android-13.0.0_r1/services/core/java/com/android/server/wm/WindowManagerShellCommand.java
 DISPLAY_MIN_DPI = 72
+# Android 13 DisplayContent.setForcedSize clamps dimensions to at least 200:
+# https://android.googlesource.com/platform/frameworks/base/+/android-13.0.0_r1/services/core/java/com/android/server/wm/DisplayContent.java
+DISPLAY_MIN_SIZE = 200
 DEFAULT_DISPLAY_RANDOM = {"enabled": True, "base_width": 200, "base_height": 356,
-                          "min_width": 180, "max_width": 220, "width_step": 2,
+                          "min_width": 200, "max_width": 220, "width_step": 2,
                           "base_dpi": 72, "fps": 20}
 DEFAULT_DISPLAY_PRESETS = [
     {"width": 200, "height": 356, "dpi": 72, "fps": 20},
@@ -408,7 +411,7 @@ def _validate_choice(path, value, sample):
     if path in ("display.width", "display.height"):
         # New scalar choices must leave a nonzero native raw-axis span. Keep
         # validate_profile permissive enough to inspect historical documents.
-        _number(value, path, 2, 32767)
+        _number(value, path, DISPLAY_MIN_SIZE, 32767)
     if path == "display.densityDpi":
         _number(value, path, DISPLAY_MIN_DPI, 65535)
     if path in ("display.defaultRefreshRateHz", "display.peakRefreshRateHz"):
@@ -442,7 +445,7 @@ def display_random_candidates(group):
     if type(group["enabled"]) is not bool:
         raise ValueError("Random display enabled must be boolean")
     for key in ("base_width", "base_height", "min_width", "max_width", "width_step", "base_dpi", "fps"):
-        minimum = 2 if key in {"base_width", "base_height", "min_width", "max_width"} else DISPLAY_MIN_DPI if key == "base_dpi" else 1
+        minimum = DISPLAY_MIN_SIZE if key in {"min_width", "max_width"} else 2 if key in {"base_width", "base_height"} else DISPLAY_MIN_DPI if key == "base_dpi" else 1
         maximum = 65535 if key == "base_dpi" else 1000000000 if key == "fps" else 32767
         if type(group[key]) is not int or not minimum <= group[key] <= maximum:
             raise ValueError("Random display " + key + " is outside the native integer range")
@@ -453,7 +456,7 @@ def display_random_candidates(group):
         # Exact integer arithmetic: round to nearest 2 px / 1 DPI; ties upward.
         height = 2 * ((width * group["base_height"] + group["base_width"]) // (2 * group["base_width"]))
         dpi = max(DISPLAY_MIN_DPI, (2 * width * group["base_dpi"] + group["base_width"]) // (2 * group["base_width"]))
-        if not 2 <= height <= 32767 or not DISPLAY_MIN_DPI <= dpi <= 65535:
+        if not DISPLAY_MIN_SIZE <= height <= 32767 or not DISPLAY_MIN_DPI <= dpi <= 65535:
             raise ValueError("Random display range derives dimensions or DPI outside the native range")
         candidates.append({"width": width, "height": height, "dpi": dpi, "fps": group["fps"]})
     return candidates
@@ -503,7 +506,7 @@ def validate_policy(value, base_profiles=None, previous=None):
             if not isinstance(preset, dict) or set(preset) != {"width", "height", "dpi", "fps"}:
                 raise ValueError("Each display preset requires exactly width, height, dpi and fps")
             for key, upper in (("width", 32767), ("height", 32767), ("dpi", 65535), ("fps", 1000000000)):
-                minimum = 2 if key in {"width", "height"} else DISPLAY_MIN_DPI if key == "dpi" else 1
+                minimum = DISPLAY_MIN_SIZE if key in {"width", "height"} else DISPLAY_MIN_DPI if key == "dpi" else 1
                 if type(preset[key]) is not int or not minimum <= preset[key] <= upper:
                     raise ValueError("Display preset " + key + " is outside the native integer range")
             identity = tuple(preset[key] for key in ("width", "height", "dpi", "fps"))

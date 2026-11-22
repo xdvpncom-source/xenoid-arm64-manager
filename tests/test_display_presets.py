@@ -104,7 +104,7 @@ class DisplayPresetTests(unittest.TestCase):
 
     def test_invalid_duplicate_or_empty_enabled_presets_are_rejected(self):
         invalid = [[], [q.DEFAULT_DISPLAY_PRESETS[0]] * 2]
-        for key, value in (("width", 1), ("height", 32768), ("dpi", True), ("dpi", 71), ("fps", 0)):
+        for key, value in (("width", 199), ("height", 32768), ("dpi", True), ("dpi", 71), ("fps", 0)):
             preset = dict(q.DEFAULT_DISPLAY_PRESETS[0]); preset[key] = value; invalid.append([preset])
         for rows in invalid:
             self.policy["display_presets"] = {"enabled": True, "values": rows}
