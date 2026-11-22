@@ -20,6 +20,7 @@ class AppliedProfileResourceTests(unittest.TestCase):
   for k,v in [('PROFILE_POLICY',self.policy),('PROFILE_STATE',self.profiles),('STATE',self.state)]:
    h=patch.object(r,k,v);h.start();self.addCleanup(h.stop)
   self.profile={'schema':'dev.xenoid.fingerprint/v1','display':{'width':224,'height':398,'densityDpi':80,'defaultRefreshRateHz':30,'peakRefreshRateHz':60}}
+  self.profile['input']={'x':{'minimum':0,'maximum':223},'y':{'minimum':0,'maximum':397}}
   self.applied={'schema':'dev.xenoid.applied-profile/v1','instance_id':UUID,'resource_tag':TAG,'container_id':CID,'profile':self.profile,'profile_sha256':digest(self.profile),'policy_revision':7,'policy_sha256':'a'*64,'applied_at':'2026-11-21T21:00:00Z'}
   write(self.profiles/(UUID+'.json'),self.applied)
  def effective(self):return r.effective_config(self.config,self.manager,self.owned)
@@ -45,6 +46,10 @@ class AppliedProfileResourceTests(unittest.TestCase):
   for fps,peak in [(0,60),(30,20),(True,60),(29.5,60),(30,float('inf'))]:
    x=copy.deepcopy(self.applied);x['profile']['display'].update(defaultRefreshRateHz=fps,peakRefreshRateHz=peak);x['profile_sha256']=digest(x['profile']);write(self.profiles/(UUID+'.json'),x)
    with self.assertRaises(ValueError):self.effective()
+ def test_mismatched_input_bounds_fail_before_applying_saved_dimensions(self):
+  x=copy.deepcopy(self.applied);x['profile']['input']['x']['maximum']=224
+  x['profile_sha256']=digest(x['profile']);write(self.profiles/(UUID+'.json'),x)
+  with self.assertRaisesRegex(ValueError,'bounds disagree'):self.effective()
  def test_untrusted_private_file_or_invalid_policy_fails(self):
   self.policy.chmod(0o644)
   with self.assertRaisesRegex(ValueError,'Unsafe'):self.effective()
@@ -55,7 +60,7 @@ class AppliedProfileResourceTests(unittest.TestCase):
   with self.assertRaisesRegex(ValueError,'Unsafe'):self.effective()
  def test_new_profile_invalidates_marker_in_same_container_boot(self):
   old=r.resource_key(self.owned,self.effective(),{'instance_id':UUID,'resource_tag':TAG});x=copy.deepcopy(self.applied)
-  x['profile']['display']['width']=226;x['profile_sha256']=digest(x['profile']);write(self.profiles/(UUID+'.json'),x)
+  x['profile']['display']['width']=226;x['profile']['input']['x']['maximum']=225;x['profile_sha256']=digest(x['profile']);write(self.profiles/(UUID+'.json'),x)
   new=r.resource_key(self.owned,self.effective(),{'instance_id':UUID,'resource_tag':TAG});self.assertNotEqual(old,new);self.assertEqual(old['container_id'],new['container_id'])
  def test_internal_dimensions_not_accepted_as_public_setting(self):
   with self.assertRaisesRegex(ValueError,'Unknown'):r.validate_config({'explicit_size':[400,800]})

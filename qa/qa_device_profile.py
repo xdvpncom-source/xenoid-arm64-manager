@@ -17,6 +17,17 @@ from typing import Any, Mapping
 
 SCHEMA = "dev.xenoid.profile-policy/v1"
 PROFILE_SCHEMA = "dev.xenoid.fingerprint/v1"
+DISPLAY_PRESET_FIELDS = ("display.width", "display.height", "display.densityDpi",
+                         "display.defaultRefreshRateHz", "display.peakRefreshRateHz",
+                         "input.x.maximum", "input.y.maximum")
+DISPLAY_PRESET_MANAGED = set(DISPLAY_PRESET_FIELDS) | {"input.x.minimum", "input.y.minimum"}
+DEFAULT_DISPLAY_PRESETS = [
+    {"width": 200, "height": 356, "dpi": 72, "fps": 20},
+    {"width": 204, "height": 362, "dpi": 72, "fps": 20},
+    {"width": 208, "height": 370, "dpi": 74, "fps": 20},
+    {"width": 212, "height": 376, "dpi": 76, "fps": 20},
+    {"width": 216, "height": 384, "dpi": 76, "fps": 20},
+]
 MAX_PROFILE_BYTES = 256 * 1024  # Native stageEffectiveProfile contract.
 _MISSING = object()
 _NATIVE_IDS = {"android_id", "serial", "imei", "imeisv", "boot_id"}
@@ -133,13 +144,31 @@ def _descriptor(path, value=None):
     return {"path": path, "label": path, "type": "boolean" if type(value) is bool else "number" if type(value) in (int, float) else "string", "group": group, "mutable": mutable, "native_managed": native, "reason": reason}
 
 
-def field_catalog(base_profile=None):
+def field_catalog(base_profile=None, policy=None):
     if base_profile is None:
         paths = ["build." + k for k in sorted(_BUILD_KEYS)] + ["ids." + k for k in sorted(_NATIVE_IDS)] + ["display." + k for k in sorted(_DISPLAY_KEYS)]
-        return [_descriptor(path) for path in sorted(paths)]
-    if not isinstance(base_profile, dict):
-        raise ValueError("Base profile must be an object")
-    return [_descriptor(path, value) for path, value in _leaves(base_profile)]
+        result = [_descriptor(path) for path in sorted(paths)]
+    else:
+        if not isinstance(base_profile, dict):
+            raise ValueError("Base profile must be an object")
+        result = [_descriptor(path, value) for path, value in _leaves(base_profile)]
+    if isinstance(policy, dict) and "display_presets" in policy:
+        for row in result:
+            if row["path"] in DISPLAY_PRESET_MANAGED:
+                row.update(mutable=False, managed_by="display_presets",
+                           reason="The atomic display preset controls dimensions, DPI, FPS and derives official native input bounds; disabled presets freeze this tuple.")
+    return result
+
+
+def selected_fields(profile, policy):
+    if not policy.get("enabled", True): return []
+    presets = policy.get("display_presets")
+    result = [row["path"] for row in field_catalog(profile)
+              if row["mutable"] and policy.get("fields", {}).get(row["path"], {}).get("enabled") is True
+              and (presets is None or row["path"] not in DISPLAY_PRESET_MANAGED)]
+    if presets is not None and presets.get("enabled") is True:
+        result.extend(path for path in DISPLAY_PRESET_FIELDS if path not in result)
+    return result
 
 
 def _number(value, path, minimum, maximum):
@@ -327,7 +356,8 @@ def default_policy(base_profiles=None, resource_config=None):
     profiles = base_profiles or []
     if isinstance(profiles, dict):
         profiles = [profiles]
-    result = {"schema": SCHEMA, "enabled": True, "revision": 1, "fields": {}}
+    result = {"schema": SCHEMA, "enabled": True, "revision": 1, "fields": {},
+              "display_presets": {"enabled": True, "values": copy.deepcopy(DEFAULT_DISPLAY_PRESETS)}}
     for raw in profiles:
         profile = normalize_resources(validate_profile(raw), resource_config)
         choices = _default_choices(profile)
@@ -349,6 +379,8 @@ def migrate_policy(policy, base_profiles, resource_config=None):
         current = result["fields"].get(path)
         if reported and row["values"] and (current is None or current["enabled"] and not current["values"]):
             result["fields"][path] = copy.deepcopy(row)
+    if "display_presets" not in result:
+        result["display_presets"] = copy.deepcopy(defaults["display_presets"])
     result["revision"] += 1
     return validate_policy(result, base_profiles)
 
@@ -365,7 +397,9 @@ def _validate_choice(path, value, sample):
         if path == "battery.plugged" and value == 3:
             raise ValueError("battery.plugged=3 is not a native valid source")
     if path in ("display.width", "display.height"):
-        _number(value, path, 1, 32767)
+        # New scalar choices must leave a nonzero native raw-axis span. Keep
+        # validate_profile permissive enough to inspect historical documents.
+        _number(value, path, 2, 32767)
     if path == "display.densityDpi":
         _number(value, path, 1, 65535)
     if path in ("display.defaultRefreshRateHz", "display.peakRefreshRateHz"):
@@ -393,7 +427,7 @@ def _validate_choice(path, value, sample):
 
 
 def validate_policy(value, base_profiles=None, previous=None):
-    if not isinstance(value, dict) or set(value) - {"schema", "enabled", "revision", "fields"}:
+    if not isinstance(value, dict) or set(value) - {"schema", "enabled", "revision", "fields", "display_presets"}:
         raise ValueError("Unknown device profile policy field")
     if value.get("schema", SCHEMA) != SCHEMA or type(value.get("enabled", True)) is not bool:
         raise ValueError("Invalid device profile policy schema/enabled")
@@ -409,6 +443,24 @@ def validate_policy(value, base_profiles=None, previous=None):
         for desc in field_catalog(profile):
             known[desc["path"]] = desc
     result = {"schema": SCHEMA, "enabled": value.get("enabled", True), "revision": revision, "fields": {}}
+    if "display_presets" in value:
+        group = value["display_presets"]
+        if (not isinstance(group, dict) or set(group) - {"enabled", "values"}
+                or type(group.get("enabled")) is not bool or not isinstance(group.get("values"), list)):
+            raise ValueError("Display presets require enabled and a values list")
+        presets, seen = [], set()
+        for preset in group["values"]:
+            if not isinstance(preset, dict) or set(preset) != {"width", "height", "dpi", "fps"}:
+                raise ValueError("Each display preset requires exactly width, height, dpi and fps")
+            for key, upper in (("width", 32767), ("height", 32767), ("dpi", 65535), ("fps", 1000000000)):
+                minimum = 2 if key in {"width", "height"} else 1
+                if type(preset[key]) is not int or not minimum <= preset[key] <= upper:
+                    raise ValueError("Display preset " + key + " is outside the native integer range")
+            identity = tuple(preset[key] for key in ("width", "height", "dpi", "fps"))
+            if identity in seen: raise ValueError("Duplicate display preset")
+            seen.add(identity); presets.append(copy.deepcopy(preset))
+        if group["enabled"] and not presets: raise ValueError("Enabled display presets require at least one preset")
+        result["display_presets"] = {"enabled": group["enabled"], "values": presets}
     for path, row in fields.items():
         if not isinstance(path, str) or not path or len(path) > 256 or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", path):
             raise ValueError("Invalid profile field path")
@@ -443,7 +495,7 @@ def generate_profile(base, policy, operation_key, previous=None, native_ids=None
     base = validate_profile(base)
     current = validate_profile(previous) if previous is not None else copy.deepcopy(base)
     policy = validate_policy(policy, [base, current])
-    if policy["enabled"] and previous is None:
+    if policy["enabled"] and previous is None and "display_presets" not in policy:
         current = normalize_resources(current, resource_config)
     result = copy.deepcopy(current)
     if native_ids is not None:
@@ -458,9 +510,25 @@ def generate_profile(base, policy, operation_key, previous=None, native_ids=None
     token = seed.hex()[:16]; digits = "%06d" % (int.from_bytes(seed[:8], "big") % 1000000)
     fields = policy["fields"]; catalog = {d["path"]: d for d in field_catalog(current)}
     handled = set(); reasons = {}
+    presets = policy.get("display_presets")
+    chosen_preset = None
 
     def enabled(path):
-        return policy["enabled"] and catalog.get(path, {}).get("mutable", False) and fields.get(path, {}).get("enabled", False)
+        return (policy["enabled"] and catalog.get(path, {}).get("mutable", False)
+                and fields.get(path, {}).get("enabled", False)
+                and (presets is None or path not in DISPLAY_PRESET_MANAGED))
+
+    if presets is not None and policy["enabled"] and presets["enabled"]:
+        current_preset = {"width": current["display"]["width"], "height": current["display"]["height"],
+                          "dpi": current["display"]["densityDpi"], "fps": current["display"]["defaultRefreshRateHz"]}
+        chosen_preset = min(presets["values"], key=lambda item: (
+            (item["width"], item["height"]) == (current_preset["width"], current_preset["height"]),
+            item == current_preset, hashlib.sha256(seed + b"display-preset" + canonical_bytes(item)).digest()))
+        result["display"].update(width=chosen_preset["width"], height=chosen_preset["height"],
+                                 densityDpi=chosen_preset["dpi"], defaultRefreshRateHz=chosen_preset["fps"],
+                                 peakRefreshRateHz=chosen_preset["fps"])
+        for axis, dimension in (("x", "width"), ("y", "height")):
+            result["input"][axis] = {"minimum": 0, "maximum": chosen_preset[dimension] - 1}
 
     def values(path):
         old = _get(current, path)
@@ -480,6 +548,8 @@ def generate_profile(base, policy, operation_key, previous=None, native_ids=None
 
     def apply_group(proposals, paths, name):
         handled.update(paths)
+        if presets is not None and all(path in DISPLAY_PRESET_MANAGED for path in paths):
+            return  # The preset/freeze is the sole owner of this tuple.
         valid = [proposal for proposal in proposals if all(allowed(path, value) for path, value in proposal.items())]
         if valid:
             proposal = max(valid, key=lambda item: (
@@ -576,4 +646,6 @@ def generate_profile(base, policy, operation_key, previous=None, native_ids=None
     for path, desc in catalog.items():
         if enabled(path) and _get(result, path) == _get(current, path):
             unchanged.append({"path": path, "reason": reasons.get(path, "No distinct compatible configured candidate")})
-    return {"profile": result, "sha256": profile_sha256(result), "changed_fields": changed, "unchanged_enabled_fields": unchanged, "managed_fields": [path for path, desc in catalog.items() if desc["native_managed"]], "policy_revision": policy["revision"], "seed_sha256": seed.hex(), "qa_build_metadata": any(path.startswith("build.") for path in changed), "unique_profile": bool(changed), "enabled": policy["enabled"]}
+    return {"profile": result, "sha256": profile_sha256(result), "changed_fields": changed, "unchanged_enabled_fields": unchanged, "managed_fields": [path for path, desc in catalog.items() if desc["native_managed"]], "policy_revision": policy["revision"], "seed_sha256": seed.hex(), "qa_build_metadata": any(path.startswith("build.") for path in changed), "unique_profile": bool(changed), "enabled": policy["enabled"],
+            "display_preset": copy.deepcopy(chosen_preset),
+            "display_source": "legacy" if presets is None else "presets" if policy["enabled"] and presets["enabled"] else "frozen"}

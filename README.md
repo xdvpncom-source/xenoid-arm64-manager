@@ -530,8 +530,9 @@ fields, with deterministic `{token}` / `{digits}` placeholders for supported tex
 metadata. Coupled values are validated together. Original hardware/OS fields
 that this runtime compiles into native components are read-only with an explicit
 reason; native-managed IDs continue to rotate through official regeneration.
-The profile editor exposes 67 reported-value fields, including Build, CPU and
-RAM/swap values with native JSON consumers. Build candidates preserve property
+The profile editor exposes reported Build, CPU and RAM/swap values with native
+JSON consumers, while separating editable fields, preset-derived display fields
+and fixed/native-managed values. Build candidates preserve property
 storage capacity. After the official reload, each selected field has a live
 consumer audit: applied, partial, unchanged, mismatched or unobservable. A
 successful native command alone does not prove that a getter changed. The
@@ -542,3 +543,83 @@ Reported CPU/RAM values do not alter the host's physical resources; the existing
 display/FPS and host memory optimizations remain in place.
 A changed JSON value does not assert OEM signing, physical hardware changes, or
 hardware-backed DRM certification.
+
+### Atomic display presets (v0.1.28)
+
+The panel can select the complete display configuration as one preset. Its
+optional `display_presets` field belongs to the versioned profile policy:
+
+```json
+{
+  "display_presets": {
+    "enabled": true,
+    "values": [
+      {"width": 200, "height": 356, "dpi": 72, "fps": 20},
+      {"width": 204, "height": 362, "dpi": 72, "fps": 20},
+      {"width": 208, "height": 370, "dpi": 74, "fps": 20},
+      {"width": 212, "height": 376, "dpi": 76, "fps": 20},
+      {"width": 216, "height": 384, "dpi": 76, "fps": 20}
+    ]
+  }
+}
+```
+
+These modest defaults keep the composer at 20 FPS. Administrators can edit or
+add presets in the panel. Width and height must be integers from 2 through
+32767, DPI from 1 through 65535, and FPS from 1 through 1000000000; Android and
+the official native runtime must still accept and verify the chosen values.
+Duplicate presets and an enabled empty list are rejected. Two or more distinct
+sizes allow size variation; one preset deliberately fixes the display.
+
+For each new profile operation, selection is deterministic from the saved
+operation key and policy. It prefers a different width/height pair from the
+current one whenever available, then a different complete tuple. The selected
+tuple is written into the full native JSON. Both refresh-rate fields receive
+the preset FPS; input X becomes `minimum=0, maximum=width-1`, and input Y becomes
+`minimum=0, maximum=height-1`. Independent scalar display/input choices remain
+stored in the policy but are inactive while this group is present. There is no
+second set of active touch coordinates to edit.
+
+The panel offers three explicit modes:
+
+- **Presets:** `display_presets.enabled=true` selects and applies a tuple.
+- **Freeze:** a present group with `enabled=false` preserves the current complete
+  display/input tuple; it does not reactivate the retained scalar choices.
+- **Legacy:** omit the group to use the previous independent field settings.
+
+Reading an existing policy without presets preserves that legacy mode. The
+upgrade button prepares a draft; only an explicit save publishes a new policy
+revision, such as revision 3 to 4. Existing custom presets are retained by the
+upgrade. A pending operation keeps its already pinned policy and target JSON.
+
+Before publishing a successful profile, the worker verifies the effective JSON,
+WindowManager dimensions/DPI, actual composer period, official input status and
+kernel touch axes. It checks nine logical-to-raw mappings without sending touch
+events. Rotation is accounted for: InputReader physical dimensions need not be
+identical to rotated logical dimensions. The resulting `display_input` proof is
+included in the per-field audit. Failed geometry verification leaves the same
+operation pending. All scenario touches continue through Xenoid's official
+native input path; no ADB touch fallback or new native library is introduced.
+
+Display values in the committed profile are the resource reconciler's source
+for that device while profile management is enabled. Devices without an applied
+profile continue to use the central resource defaults. Reported CPU and RAM
+changes do not allocate different physical host resources.
+
+### Fingerprint uniqueness scope
+
+Default candidate selection avoids the immediately previous fingerprint when
+the enabled, linked fields provide a compatible alternative. Disabling a linked
+field or supplying only unchanged/incompatible candidates can prevent that
+change. The generator does not maintain a global set of fingerprints used by
+other devices or earlier rounds. An older value, including the original
+baseline fingerprint, can be selected again. Recorded history is audit data,
+not a uniqueness reservation.
+
+The default fingerprint templates reuse one six-digit decimal value in their
+Build ID/incremental components; these are not independent random values. The
+optional `{token}` placeholder is a separate 16-character hexadecimal rendering
+of the deterministic seed, but it is not used by the default fingerprint
+templates. JSON selection and actual Android getter observations are reported
+separately; neither a saved candidate nor a native command's success flag proves
+that every app API changed.

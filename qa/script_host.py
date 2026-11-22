@@ -1674,6 +1674,107 @@ echo retired
             if self.stopping.wait(delay):
                 raise TransportUnavailable("Device script is stopping")
 
+    def verify_native_display_geometry(self, manager, target, deadline, state=None):
+        """Prove a generated JSON preset reaches WM, kernel and InputReader.
+
+        No pointer event is sent. Existing official same-inode reannouncement is
+        allowed when InputReader is not ready; native driver implementation and
+        the calibrated per-tap mapping remain unchanged. Caller holds the native
+        instance lock, as the profile transaction already does.
+        """
+        from qa_input_ready import (NativeInputBindingError, parse_probe,
+                                    probe_command, validate_display_geometry, verify_reader_event_node)
+        from qa_device_profile import profile_sha256
+
+        desired = validate_display_geometry(target)
+        expected_sha = profile_sha256(target)
+
+        def verify_owned():
+            owned, _reason = manager._owned_container_record(timeout=8)
+            if (not owned or owned.get("Id") != self.container_id
+                    or not owned.get("State", {}).get("Running")):
+                raise RuntimeIdentityError("The assigned runtime changed during display/input verification")
+            if self.stopping.is_set():
+                raise TransportUnavailable("Device script is stopping")
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TransportUnavailable("Display/input verification exceeded the configured timeout")
+
+        def verify_profile(observed):
+            if (not isinstance(observed, dict) or not isinstance(observed.get("profile"), dict)
+                    or profile_sha256(observed["profile"]) != expected_sha):
+                raise NativeInputBindingError("The generated profile changed during display/input verification")
+            validate_display_geometry(observed["profile"])
+
+        def read_wm():
+            output = self.native_display_exec(manager, ["sh", "-c", "wm size; wm density"], deadline=deadline)
+            text = output.stdout.decode(errors="strict")
+            def value(kind, count):
+                label = "size" if kind == "size" else "density"
+                pattern = r"(\d+)x(\d+)" if count == 2 else r"(\d+)"
+                physical = re.findall(r"(?m)^Physical " + label + r":\s*" + pattern + r"\s*$", text)
+                override = re.findall(r"(?m)^Override " + label + r":\s*" + pattern + r"\s*$", text)
+                if len(physical) != 1 or len(override) > 1:
+                    raise NativeInputBindingError("WindowManager display metrics are ambiguous")
+                selected = (override or physical)[0]
+                return tuple(map(int, selected)) if count == 2 else int(selected)
+            size, density = value("size", 2), value("density", 1)
+            if size != (desired["width"], desired["height"]) or density != desired["density_dpi"]:
+                raise NativeInputBindingError("WindowManager metrics do not match the generated JSON preset")
+            return {"size": list(size), "density_dpi": density}
+
+        verify_owned()
+        epoch = manager._userspace_runtime_epoch(deadline=deadline)
+        if not epoch:
+            raise NativeInputBindingError("Android userspace epoch is unavailable")
+        observed = state if state is not None else self.native_interaction_snapshot(manager, deadline)
+        verify_profile(observed)  # Never repair a different/newer profile.
+        if not observed.get("ready"):
+            observed = self.ensure_native_interaction(manager, deadline, repair=True)
+            verify_profile(observed)
+        wm = read_wm()
+        evidence = self.native_input_rootd(manager, probe_command(), deadline)
+        binding = parse_probe(evidence, observed["profile"])
+        if binding.profile_sha != observed.get("profile_sha256"):
+            raise NativeInputBindingError("Kernel input probe and generated profile changed during verification")
+        # A fresh reader snapshot must still refer to the same exact profile
+        # bytes after probing kernel ownership, raw ABS and MT axes.
+        final = self.native_interaction_snapshot(manager, deadline)
+        verify_profile(final)
+        if not final.get("ready") or final.get("profile_sha256") != binding.profile_sha:
+            raise NativeInputBindingError("InputReader is not ready for the verified native profile")
+        mapping = final.get("mapping") or {}
+        orientation = mapping.get("orientation")
+        if type(orientation) is not int or orientation not in (0, 1, 2, 3):
+            raise NativeInputBindingError("InputReader orientation is invalid")
+        logical = [desired["width"], desired["height"]]
+        if orientation % 2:
+            logical.reverse()
+        if mapping.get("logical_size") != logical:
+            raise NativeInputBindingError("InputReader logical viewport does not match the generated display")
+        eventhub_id = verify_reader_event_node(final["dump"], final["profile"]["input"]["name"],
+                                                mapping.get("device_id"), binding.node)
+        points = []
+        for y in (0, (logical[1] - 1) // 2, logical[1] - 1):
+            for x in (0, (logical[0] - 1) // 2, logical[0] - 1):
+                try:
+                    raw_x, raw_y, actual_mapping = native_touch_point(final["dump"], final["profile"], x, y)
+                except (ValueError, TransportUnavailable) as error:
+                    raise NativeInputBindingError("Generated display point cannot be represented by official touch") from error
+                if actual_mapping != mapping:
+                    raise NativeInputBindingError("InputReader mapping changed between verified display points")
+                points.append({"logical": [x, y], "raw": [raw_x, raw_y]})
+        if read_wm() != wm or manager._userspace_runtime_epoch(deadline=deadline) != epoch:
+            raise NativeInputBindingError("Android display changed during native touch verification")
+        verify_owned()
+        return {"ok": True, "events_injected": False, "official_backend": "xenoid_native",
+                "native_profile_sha256": expected_sha, "raw_profile_sha256": binding.profile_sha,
+                "event_node": binding.node, "eventhub_id": eventhub_id, "native_binding_digest": binding.digest,
+                "userspace_epoch": epoch, "raw_bounds": desired["raw_bounds"],
+                "display": {"width": desired["width"], "height": desired["height"],
+                            "density_dpi": desired["density_dpi"], "logical_size": logical,
+                            "orientation": orientation, "display_id": mapping.get("display_id")},
+                "mapped_points": points}
+
     def input_status(self, timeout=None):
         """Read mapping/focus only; a script chooses what window to act on."""
         seconds = self.config.get("command_timeout", 0) if timeout is None else timeout

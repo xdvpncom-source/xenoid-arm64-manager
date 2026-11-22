@@ -123,8 +123,15 @@ def effective_config(config, manager, owned):
     if not isinstance(display, dict):
         raise ValueError("Applied device profile has no display settings")
     width, height, dpi = (display.get(key) for key in ("width", "height", "densityDpi"))
-    if any(type(value) is not int or value <= 0 for value in (width, height, dpi)):
+    if (any(type(value) is not int or value <= 0 for value in (width, height, dpi))
+            or min(width, height) < 2):
         raise ValueError("Invalid applied device display dimensions")
+    native_input = profile.get("input", {})
+    if not isinstance(native_input, dict):
+        raise ValueError("Applied native input bounds are unavailable")
+    for axis, maximum in (("x", width - 1), ("y", height - 1)):
+        if native_input.get(axis) != {"minimum": 0, "maximum": maximum}:
+            raise ValueError("Applied display and native input " + axis + " bounds disagree")
     fps, peak = display.get("defaultRefreshRateHz"), display.get("peakRefreshRateHz")
     if (type(fps) is not int or not 0 < fps <= 1_000_000_000
             or type(peak) not in (int, float) or not math.isfinite(peak) or peak < fps):

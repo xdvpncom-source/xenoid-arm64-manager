@@ -19,7 +19,7 @@ import stat
 import tempfile
 import time
 
-from qa_device_profile import canonical_bytes, field_catalog, generate_profile, profile_sha256, validate_policy, validate_profile
+from qa_device_profile import DISPLAY_PRESET_FIELDS, canonical_bytes, field_catalog, generate_profile, profile_sha256, selected_fields, validate_policy, validate_profile
 
 CONFIG = Path("/etc/xenoid-fleet/device-profile-policy.json")
 RESOURCE_CONFIG = Path("/etc/xenoid-fleet/qa-resources.json")
@@ -285,11 +285,16 @@ def _preflight_profile(policy, actual, previous, resource, capacities):
                 raise ProfilePending("profile_property_capacity_exceeded")
     preview = generate_profile(actual, policy, "profile-feasibility-validation-only",
                                previous=previous, resource_config=resource, property_capacities=capacities)
-    selected = {row["path"] for row in field_catalog(previous) if row["mutable"]
-                and policy["fields"].get(row["path"], {}).get("enabled") is True}
-    if selected and not (selected - {"display.peakRefreshRateHz"}) & set(preview["changed_fields"]):
+    selected = set(selected_fields(previous, policy))
+    if selected and not _fixed_display_only(policy, selected) and not (selected - {"display.peakRefreshRateHz"}) & set(preview["changed_fields"]):
         raise ProfilePending("profile_policy_has_no_feasible_change")
     return {"capacity_checked": True, "feasible": True, "validation_only": True}
+
+
+def _fixed_display_only(policy, selected):
+    presets = policy.get("display_presets") or {}
+    return (presets.get("enabled") is True and len(presets.get("values", [])) == 1
+            and not set(selected) - set(DISPLAY_PRESET_FIELDS))
 
 
 def capture_plan(broker, manager, binding, deadline, *, config_path=CONFIG, resource_path=RESOURCE_CONFIG):
@@ -452,9 +457,7 @@ def _matches_applied_fields(broker, manager, target, deadline):
 
 
 def _verify_readback(broker, manager, target, deadline):
-    count = _verify_applied_fields(broker, manager, target, deadline)
-    broker.ensure_native_interaction(manager, deadline, repair=True, foreground=True)
-    return count
+    return _verify_applied_fields(broker, manager, target, deadline)
 
 
 def _failed_action(value, *, allow_reported_property=False):
@@ -588,8 +591,7 @@ def _profile_value(profile, path):
 def _meaningful_changes(plan, target):
     previous = plan["previous_profile"]
     fields = plan["policy"]["fields"]
-    selected = [d["path"] for d in field_catalog(previous)
-                if d["mutable"] and fields.get(d["path"], {}).get("enabled") is True]
+    selected = selected_fields(previous, plan["policy"])
     # Peak metadata is not a second independent physical display cadence.
     # The default rate is verified separately through the actual HWC period.
     changed = [path for path in selected if path != "display.peakRefreshRateHz"
@@ -699,7 +701,8 @@ def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=S
     selected, meaningful = _meaningful_changes(plan, target)
     progress["selected_profile_fields"] = selected
     progress["meaningful_fields"] = meaningful
-    if selected and not meaningful:
+    fixed_display = _fixed_display_only(plan["policy"], selected)
+    if selected and not meaningful and not fixed_display:
         progress["no_effect"] = True
         store.save(key, receipt)
         raise ProfilePending("profile_no_effect")
@@ -823,6 +826,14 @@ def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=S
     if abs(period - 1000000000 // fps) > 1:
         raise ProfilePending("profile_frame_rate_readback_mismatch")
     stage_count = _verify_readback(broker, manager, target, deadline)
+    try:
+        display_input = broker.verify_native_display_geometry(manager, target, deadline)
+    except RuntimeError as error:
+        raise ProfilePending("profile_native_display_geometry_pending") from error
+    if (not isinstance(display_input, dict) or display_input.get("ok") is not True
+            or display_input.get("events_injected") is not False
+            or display_input.get("native_profile_sha256") != profile_sha256(target)):
+        raise ProfilePending("profile_native_display_geometry_unverified")
     _verify_core(broker, manager, cli, receipt, deadline)
     audit_epoch = manager._userspace_runtime_epoch(deadline=deadline)
     if progress.get("completed") and progress.get("field_audit") and progress.get("audit_epoch") == audit_epoch:
@@ -843,11 +854,13 @@ def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=S
         progress["audit_epoch"] = audit_epoch
     effective = [path for path in audit["effective_changes"] if path in meaningful]
     progress["field_audit"] = audit
+    audit["display_input"] = display_input
     progress["effective_changes_verified"] = effective
     legacy_observation = progress["consumer_before"].get("legacy_completed") is True
     audit["legacy_before_unavailable"] = legacy_observation
+    audit["intentional_fixed_display"] = fixed_display
     store.save(key, receipt)
-    if selected and not effective and not legacy_observation:
+    if selected and not effective and not legacy_observation and not fixed_display:
         raise ProfilePending("profile_no_effect")
     _verify_core(broker, manager, cli, receipt, deadline)
     application_status = "partial" if (audit.get("official_property_failures")
@@ -876,5 +889,6 @@ def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=S
             "profile_reload_observed": True, "staged_fields_verified": stage_count,
             "fps": fps, "period_ns": period, "temporary_target_removed": progress["target_file_removed"],
             "effective_changes_verified": effective, "field_audit": audit, "application_status": application_status,
+            "display_input": display_input, "display_source": progress["generated"].get("display_source", "legacy"),
             "legacy_observation_unavailable": legacy_observation,
-            "randomization_skipped": "no_enabled_fields" if not selected else None}
+            "randomization_skipped": "no_enabled_fields" if not selected else "fixed_display_only" if fixed_display and not meaningful else None}

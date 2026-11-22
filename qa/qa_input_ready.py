@@ -98,6 +98,51 @@ def _records(text):
     return records
 
 
+def validate_display_geometry(profile):
+    """Validate a generated display and its official raw axes as one preset.
+
+    This is intentionally separate from legacy parse_probe(), which also accepts
+    old physical-axis profiles under an independent WM scaling override.
+    """
+    try:
+        display, inputs = profile["display"], profile["input"]
+        width, height, density = (display[key] for key in ("width", "height", "densityDpi"))
+        axes = {axis: inputs[axis] for axis in ("x", "y")}
+    except (KeyError, TypeError) as error:
+        raise NativeInputBindingError("Generated display/input geometry is missing") from error
+    _require(all(type(n) is int and n >= 2 for n in (width, height)),
+             "Native touch display dimensions must be at least two pixels")
+    _require(type(density) is int and density > 0, "Native touch display density is invalid")
+    for axis, size in (("x", width), ("y", height)):
+        expected = {"minimum": 0, "maximum": size - 1}
+        actual = axes[axis]
+        _require(isinstance(actual, dict) and set(actual) == set(expected)
+                 and all(type(actual[key]) is int and actual[key] == value for key, value in expected.items()),
+                 "Generated display and native " + axis + " axes disagree")
+    return {"width": width, "height": height, "density_dpi": density,
+            "raw_bounds": {"x": [0, width - 1], "y": [0, height - 1]}}
+
+
+def verify_reader_event_node(dump, name, reader_device_id, event_node):
+    """Tie the selected InputReader device to the proven official event path."""
+    reader = re.search(r"(?s)Input Reader State[^\n]*:\n(.*?)(?:\nUnwantedInteractionBlocker:|\nInput Dispatcher State:)", dump)
+    _require(reader is not None, "InputReader state is missing")
+    bodies = re.findall(r"^  Device " + re.escape(str(reader_device_id)) + r": " + re.escape(name)
+                        + r"\n(.*?)(?=^  Device |^  Configuration:|\Z)", reader[1], re.M | re.S)
+    _require(len(bodies) == 1, "The selected InputReader device is ambiguous")
+    ids = re.findall(r"^    EventHub Devices:\s*\[\s*(-?\d+)\s*\]\s*$", bodies[0], re.M)
+    _require(len(ids) == 1, "The native touchscreen must have one EventHub source")
+    hub = re.search(r"(?s)Event Hub State:\n(.*?)\nInput Reader State", dump)
+    _require(hub is not None, "EventHub state is missing")
+    entries = re.findall(r"^    " + re.escape(ids[0]) + r": " + re.escape(name)
+                         + r"\n(.*?)(?=^    -?\d+:|^  Unattached video devices:|\Z)", hub[1], re.M | re.S)
+    _require(len(entries) == 1, "The selected EventHub source is ambiguous")
+    paths = re.findall(r"^      Path: (\S+)\s*$", entries[0], re.M)
+    enabled = re.findall(r"^      Enabled: (\S+)\s*$", entries[0], re.M)
+    _require(paths == [event_node] and enabled == ["true"], "InputReader is not using the verified official event node")
+    return int(ids[0])
+
+
 def parse_probe(text, profile):
     """Validate an actual official status + kernel descriptor against effective.json."""
     values = _records(text)
