@@ -2091,11 +2091,17 @@ echo retired
                 return True
             if status.get("quarantined") is True:
                 return True
+            continuous = status.get("failurePolicy") is not None
+            if continuous:
+                from xenoid.daemon_client import proxy_routing_ready
+                if not proxy_routing_ready(status):
+                    return True
             report = status.get("report")
             if isinstance(report, dict) and report.get("phase") in ("quarantine", "quarantined", "failed", "stopped"):
                 return True
             active = (isinstance(report, dict) and report.get("phase") == "active"
-                      and report.get("structuralApplied") is True and report.get("dataPlaneVerified") is True)
+                      and report.get("structuralApplied") is True
+                      and (continuous or report.get("dataPlaneVerified") is True))
             # mustBlock is the enabled fail-closed latch and can remain true
             # while a verified proxy is active; it alone is not quarantine.
             if status.get("mustBlock") is True and not active:
@@ -2137,6 +2143,9 @@ echo retired
             ready = (isinstance(live, dict) and live.get("ok") is True
                      and live.get("phase") == "active" and live.get("structuralApplied") is True
                      and live.get("quarantined") is not True)
+            if status.get("failurePolicy") is not None:
+                from xenoid.daemon_client import proxy_routing_ready
+                ready = proxy_routing_ready(status, live)
             if ready:
                 ready = (type(live.get("generation")) is int
                          and all(live.get(key) == status[key] for key in ("generation", "runtimeEpoch")))

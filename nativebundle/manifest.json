@@ -39,10 +39,73 @@
       "before_sha256": [
         null
       ],
+      "bytes": 4376,
+      "mode": "0644",
+      "path": "daemon/app/src/main/java/dev/xenoid/daemon/ProxyFailurePolicy.java",
+      "sha256": "5715462be3ee1dd6aebe53e7bb59666f60e1b626fab6ece8962a154f6ca79b36"
+    },
+    {
+      "before_sha256": [
+        "a5188f175d43e0dd801ae03c5404a11aa666d64de4181d258ec6a9150f567ccc"
+      ],
+      "bytes": 67899,
+      "mode": "0644",
+      "path": "daemon/app/src/main/java/dev/xenoid/daemon/ProxyManager.java",
+      "sha256": "55639722ad17a0693e536839e2154024e5cc7920acc9034482b9ff06d372f2b9"
+    },
+    {
+      "before_sha256": [
+        "1a151e3076e8d7859752504b415f48e65aae3fae4aa931620c653c5edcc5fa47"
+      ],
+      "bytes": 97720,
+      "mode": "0644",
+      "path": "daemon/app/src/main/java/dev/xenoid/daemon/ProxyStateStore.java",
+      "sha256": "612af11c9cfc0d610b46b343bd4efedc6ee054df4548433c9de3edb2805af94a"
+    },
+    {
+      "before_sha256": [
+        "345a24eaead312e130803e61e93164fa410b93a28ed15d5b913810c10ddf50cd"
+      ],
+      "bytes": 52887,
+      "mode": "0644",
+      "path": "daemon/app/src/test/java/dev/xenoid/daemon/ProxyStateStoreTest.java",
+      "sha256": "2fdcfebcb49adfe9522992e08499615d1081f95fe55ff70e5829816c4b9660ed"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 6226,
+      "mode": "0644",
+      "path": "daemon/app/src/test/resources/proxy-retained-lkg.json",
+      "sha256": "69ab313e99d381d99c816ff1f119e71b08b19241139f1904445f50f6650ab187"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
       "bytes": 7790,
       "mode": "0644",
       "path": "data/google-services/microg-0.3.15.250932-phonesky-30.4.17-gsfproxy-0.1.0-bluejay.json",
       "sha256": "26af903266f861ca2335e0c87991996495d398d1ceac6829484d15dc82acce69"
+    },
+    {
+      "before_sha256": [
+        "b74018e3447420b189247b90bbd136bb09d1ecd222f1090c9f7013e6995b4ef8"
+      ],
+      "bytes": 31761,
+      "mode": "0644",
+      "path": "docs/architecture.md",
+      "sha256": "812266f3e97ead5b807a07554a8400c0d8de1763d211f3cab3d3e35d555cb01b"
+    },
+    {
+      "before_sha256": [
+        "9b8f131ad1d4d3b983adfe1d33c6c99bc18524e030262ce7916d504f5e890b71"
+      ],
+      "bytes": 45093,
+      "mode": "0644",
+      "path": "docs/operations.md",
+      "sha256": "172931553558012f9d3b02152d582ef20f9f07f1f813dee2d42482faaead171d"
     },
     {
       "before_sha256": [
@@ -443,6 +506,43 @@
       "before_sha256": [
         null
       ],
+      "bytes": 22474,
+      "mode": "0755",
+      "path": "scripts/test-proxy-continuity-engine.py",
+      "sha256": "bb646f49ab879506655d4dbcb31bb039ef1380d181b14aadb33ce99ad4f4b414"
+    },
+    {
+      "before_sha256": [
+        null,
+        "9751de1b14eabb26b340e133bd0e842e5020364060e6db92c0c0d9cb691e77f6"
+      ],
+      "bytes": 19082,
+      "mode": "0755",
+      "path": "scripts/test-proxy-continuity.py",
+      "sha256": "5d0b5df31cd159f646b6b8e481ac97559cace89ea36a52f9e68e00a83e1bd5f4"
+    },
+    {
+      "before_sha256": [
+        "d40e3a3771af1a726f128cdd373a89d0734beaefe5c6240bde440e16d6980979"
+      ],
+      "bytes": 15829,
+      "mode": "0755",
+      "path": "scripts/test-proxy-control.py",
+      "sha256": "b749f8fabd23a6957dbc7991d6ce3aa2ee029d430c6da254af03d3155465b70e"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 10004,
+      "mode": "0755",
+      "path": "scripts/test-proxy-diagnostic-dispatch.py",
+      "sha256": "e5183ead3dcd2822ffcfb517d702e1ee4a2e0c457f52f2037d4738571a2631f1"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
       "bytes": 2139,
       "mode": "0644",
       "path": "scripts/test-regeneration-device-name.py",
@@ -462,22 +562,32 @@
         "24d05ead62f1fbfdd9cb91481c5d07fd51ac5468116775d375efacf98331bb5b",
         "cdac3ca5c1446d814a8d7ed283ace3a0933c4d314156f03e1e06971adeae09f8"
       ],
-      "bytes": 85301,
+      "bytes": 96099,
       "mode": "0755",
       "path": "scripts/xenoid-proxy-agent.py",
-      "sha256": "cdac3ca5c1446d814a8d7ed283ace3a0933c4d314156f03e1e06971adeae09f8"
+      "sha256": "80433bfe6920c29782af958e6626b471167fe9faee54f849f1232fbe7afe0fe4"
     },
     {
       "before_sha256": [
         "775ad1d7506708b9f5e9f39932ae107486ed2d0789b9da7f464af091e96f17f1",
         "9a3457d73560b557b265971867fdf685dcfb300960baeaec3308a396a59e65a7",
         "9e24b7237b1d3d515205d8a0392174aba0cb017ad6f5686835e2d6eb5279b918",
-        "dc1a4123373420694f9abbb7bea1340de2f82b4560ec4e76984c47126c5d1798"
+        "dc1a4123373420694f9abbb7bea1340de2f82b4560ec4e76984c47126c5d1798",
+        "44e8415ffd0a579843ff3afa3c5689a9052b3c05f3dc904645e7c9fc594b671c"
       ],
-      "bytes": 133529,
+      "bytes": 137028,
       "mode": "0755",
       "path": "scripts/xenoid-proxy-engine.py",
-      "sha256": "44e8415ffd0a579843ff3afa3c5689a9052b3c05f3dc904645e7c9fc594b671c"
+      "sha256": "6dd2758df035c657a38831a84a9a2a865d45b1288745209f246dd04cd1d7b436"
+    },
+    {
+      "before_sha256": [
+        "9fd9150a32c8e9373ded62a12e8696d9decbc2c8718919fb04df2991c891a4bc"
+      ],
+      "bytes": 17209,
+      "mode": "0644",
+      "path": "skills/xenoid/SKILL.md",
+      "sha256": "0cb77a8b50313ed3712ae09b300516a27e4d3229a87a65324be340e7b1d7575c"
     },
     {
       "before_sha256": [
@@ -498,21 +608,23 @@
         "c090c9a4c3796d0a63d073d17cc33fabcc8b0ba831958dcb687004812ffc7acb",
         "c42b8f7cc122e6c597a44fd0cd1969d5e2b5f728e0366f7f0aa80387dd5b0ebc",
         "bde5de99741fcb1c0d40f683bfd55039960badd8fb310a78cdb5e1c73866c7ee",
-        "991cfc59aa976065aee21b2ebb05602e8b31f8e01f277c1b03220bfa35648452"
+        "991cfc59aa976065aee21b2ebb05602e8b31f8e01f277c1b03220bfa35648452",
+        "61da636815884a47da938e201176cb440e38d7971d412157b829aae6c6128327"
       ],
-      "bytes": 591114,
+      "bytes": 592635,
       "mode": "0644",
       "path": "src/xenoid/backend.py",
-      "sha256": "61da636815884a47da938e201176cb440e38d7971d412157b829aae6c6128327"
+      "sha256": "3de8128936bccd8dca4a0bbdc68264ccf7af72ff4da818a4ccb1682a7dfa918a"
     },
     {
       "before_sha256": [
-        "3a3918eccce48cfdbbb1b075d0759227bed7d56b0ce83b928d7272974a16976f"
+        "3a3918eccce48cfdbbb1b075d0759227bed7d56b0ce83b928d7272974a16976f",
+        "f95001f6548551d9de8fe537b2349fc80c2d5e293262d380d03dbed4371bf5a7"
       ],
-      "bytes": 177289,
+      "bytes": 179014,
       "mode": "0644",
       "path": "src/xenoid/cli.py",
-      "sha256": "f95001f6548551d9de8fe537b2349fc80c2d5e293262d380d03dbed4371bf5a7"
+      "sha256": "2200f044b0ca27cf123ac024f3bbecddb794e42ee723ef868045be0c448604ef"
     },
     {
       "before_sha256": [
@@ -535,6 +647,15 @@
     },
     {
       "before_sha256": [
+        "e5468602420b740f900c997dda9cb9d29b9fe4dd03894f2122a5a80e71ca4d6d"
+      ],
+      "bytes": 65229,
+      "mode": "0644",
+      "path": "src/xenoid/daemon_client.py",
+      "sha256": "9cd3654fa66527227cdaf1dc8f41630da6188f57e04f284bf34b29c830b5f73f"
+    },
+    {
+      "before_sha256": [
         "f62cf48fb2f0deea99a613abfe1b24180a55889872a3fb88bbadb6dc43a3a6c6"
       ],
       "bytes": 130881,
@@ -546,12 +667,22 @@
       "before_sha256": [
         "12e5f659f17118ca7f9a4bb704c6d56aa69756bdd516706ca2c845a39a91b05b",
         "3f359f93657f28f5b892005ecf69571c5522429b2399d768b35c0f403479546f",
-        "b8e409b67b2605c89dd451da233e9d1252fbb05df3ae0608c8b0cb153e91d868"
+        "b8e409b67b2605c89dd451da233e9d1252fbb05df3ae0608c8b0cb153e91d868",
+        "d6e7d26129b2fda1bb15c9253415fb6af031e245a8944d04b0a406b797b158a2"
       ],
-      "bytes": 47591,
+      "bytes": 48475,
       "mode": "0644",
       "path": "src/xenoid/live_observe.py",
-      "sha256": "d6e7d26129b2fda1bb15c9253415fb6af031e245a8944d04b0a406b797b158a2"
+      "sha256": "d368756124ff01c16ade3ebd03b8c089319fb9383f2c86accf6720bf986354aa"
+    },
+    {
+      "before_sha256": [
+        "71dc557a9afe8828e518064ee3c7f99e529e2ffd609506c61312ee87d7e0dfca"
+      ],
+      "bytes": 55818,
+      "mode": "0644",
+      "path": "src/xenoid/mcp_server.py",
+      "sha256": "c1e40391c0387cb92cf85f32e449ffcbcc9df2791471e883930dcdb2a4e40bf0"
     },
     {
       "before_sha256": [
@@ -565,14 +696,33 @@
     },
     {
       "before_sha256": [
+        "4e7d0eb65a6efd777cca19cd504e2d610e5e3901d4c5b5942750886c04704ddb",
+        "1d61a33142edc289200a75f90598a267880029505b8609eb0ffd3eddc87ebfcd"
+      ],
+      "bytes": 24909,
+      "mode": "0644",
+      "path": "src/xenoid/proxy_controller.py",
+      "sha256": "502267b62d8dcb52c3bb2e8e1d085d1c5445514aee84474ba89c100fbbf2840a"
+    },
+    {
+      "before_sha256": [
         "4c199ef4de2e26ef39990389b8d42127c662a6e0c19832f35f7508bae7a9707f",
         "def4ca54910af27b3b913f53611c315e92de98258d4993fbc965c981d8d2e57d",
         "e52b4603891adad4f27c4b2b996a7cf21615dffbe6f6e635bd89f6fe9b85ada0"
       ],
-      "bytes": 90382,
+      "bytes": 91278,
       "mode": "0644",
       "path": "src/xenoid/proxy_source.py",
-      "sha256": "4c199ef4de2e26ef39990389b8d42127c662a6e0c19832f35f7508bae7a9707f"
+      "sha256": "10a0c34f35ddbf68b44158a5753037b209baa25d62561738449e6b1bb1b0392d"
+    },
+    {
+      "before_sha256": [
+        "e50010177ce5b3f23fa336b2fccac815f668b9228af6cb6692e03b503d5c54f0"
+      ],
+      "bytes": 71841,
+      "mode": "0644",
+      "path": "src/xenoid/remote_service.py",
+      "sha256": "c0f7711b333f0fdcf82a6e7c03a8aab754a4f7c6024a5d990575274822bd5f61"
     },
     {
       "before_sha256": [

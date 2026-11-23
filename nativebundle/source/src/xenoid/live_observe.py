@@ -783,7 +783,20 @@ class LiveAcceptance:
         checks.add("proxyHostQuarantine", not host_quarantined, "proxy_quarantined")
 
         disabled_proof = False
-        if enabled is True:
+        if enabled is True and status.get("failurePolicy") is not None:
+            from .daemon_client import proxy_routing_ready
+            checks.add("proxyRouting", proxy_routing_ready(dict(status), dict(host)),
+                       "proxy_route_unverified")
+            # This is the last explicit diagnostic, not a fabricated continuous
+            # internet-health claim. No probe is launched by this observer.
+            report = status.get("report")
+            current_diagnostic = (isinstance(report, Mapping)
+                                  and report.get("checkId") == status.get("checkId"))
+            identifiers["proxyDiagnosticState"] = (report.get("upstreamState")
+                if current_diagnostic else "unknown")
+            identifiers["proxyDataPlaneVerified"] = bool(current_diagnostic
+                and report.get("dataPlaneVerified") is True)
+        elif enabled is True:
             report = status.get("report")
             probe = status.get("probe")
             check_id = status.get("checkId")

@@ -1822,8 +1822,22 @@ def normalize_proxy_routing_domain(value):
     return domain
 
 
+def normalize_proxy_failure_policy(value):
+    if (not isinstance(value, dict)
+            or set(value) != {'schema', 'mode', 'retry_delays_seconds'}
+            or value['schema'] != 'dev.xenoid.proxy-failure-policy/v1'
+            or value['mode'] != 'retry_proxy'
+            or not isinstance(value['retry_delays_seconds'], list)
+            or not 1 <= len(value['retry_delays_seconds']) <= 8
+            or any(type(delay) is not int or not 1 <= delay <= 2147483647
+                   for delay in value['retry_delays_seconds'])):
+        raise ProxyRoutingError('routing_policy_invalid')
+    return {'schema': value['schema'], 'mode': 'retry_proxy',
+            'retry_delays_seconds': list(value['retry_delays_seconds'])}
+
+
 def normalize_proxy_routing_policy(value):
-    if (not isinstance(value, dict) or set(value) - {'schema', 'exceptions'}
+    if (not isinstance(value, dict) or set(value) - {'schema', 'exceptions', 'failure_policy'}
             or value.get('schema', PROXY_ROUTING_SCHEMA) != PROXY_ROUTING_SCHEMA
             or not isinstance(value.get('exceptions'), list)):
         raise ProxyRoutingError('routing_policy_invalid')
@@ -1837,7 +1851,10 @@ def normalize_proxy_routing_policy(value):
         if key not in seen:
             entries.append({'domain': domain, 'include_subdomains': item['include_subdomains']})
             seen.add(key)
-    return {'schema': PROXY_ROUTING_SCHEMA, 'exceptions': entries}
+    result = {'schema': PROXY_ROUTING_SCHEMA, 'exceptions': entries}
+    if 'failure_policy' in value:
+        result['failure_policy'] = normalize_proxy_failure_policy(value['failure_policy'])
+    return result
 
 
 def load_proxy_routing_policy(path=PROXY_ROUTING_PATH):

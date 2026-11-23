@@ -59,16 +59,17 @@ For Chrome builds that require size seals on Android shared memory, use schema `
 
 Create the root-owned directory `/opt/xenoid-fleet/proxy-default` with mode `0700`. Use the native `proxy export --out` command on a configured instance to create `source.conf`. Keep that file and `manifest.json` root-owned with mode `0600`. The manifest contains `schema` set to `dev.xenoid.fleet.proxy-default/v1`, the exported `kind`, the hex `sha256` of `source.conf`, and the Boolean policy fields `udpAllowed`, `ipv6Allowed`, and `allowInsecureHttp`.
 
-After startup, Fleet imports this source through the native Xenoid CLI on unconfigured devices and requires a successful data-plane check. Create, recreate, and plain `up` keep a device's configured proxy policy and use Xenoid's native reconciliation.
+After startup, Fleet imports this source through the native Xenoid CLI on unconfigured devices. Fresh defaults select the versioned `retry_proxy` policy: startup requires a valid owned transparent route, while internet reachability is an optional diagnostic. Existing saved policies without that opt-in retain legacy strict data-plane checks. Create, recreate, and plain `up` keep the configured source, node and UDP/IPv6 flags through native reconciliation.
 
-The pinned Xenoid patch reads live host quarantine status during boot acceptance. The native acceptance checks still require a verified data plane before accepting an enabled proxy.
+Native acceptance reads current host ownership, process, rules, generation and runtime epoch. A continuity report must also match the daemon-owned encrypted failure policy digest. Structural routing readiness does not claim internet availability; only an actual explicit diagnostic can set `dataPlaneVerified=true`.
 
 The patch also preserves the rules and traffic counters already verified during
 candidate staging when committing that candidate. Commit checks the pending
 process, health, current structure and runtime identity before promoting its
 metadata. Acceptance reads fresh host counters after the daemon report and
-continues to require matching generation, runtime epoch, capabilities and
-counter proof. Stale snapshots cannot accept an unverified or reset data plane.
+continues to require matching generation, runtime epoch and counter proof.
+Legacy mode and explicit internet diagnostics additionally require the requested
+capability matrix. Stale snapshots cannot accept an unowned or reset route.
 Startup planning uses that same combined daemon/host proof, allowing a healthy
 enabled proxy to converge instead of remaining permanently pending on the
 host-only disabled-state flag.
@@ -76,7 +77,7 @@ host-only disabled-state flag.
 The installer refreshes each running, configured, enabled proxy through native
 prerequisite, quarantine, agent stop and desired-state reconciliation. It checks
 the original container, instance identity, data mount and complete source/policy
-fingerprint, then requires strict live proxy proof. It preserves the selected
+fingerprint, then requires the policy-selected native route proof. It preserves the selected
 node and never starts stopped devices or enables disabled/unconfigured proxies.
 Pending native identity transactions are left for their own resume path.
 
@@ -357,8 +358,9 @@ When an older native startup journal remains unfinished, the SDK may first
 resume official `up` only after verifying that the remaining plan preserves the
 same image, container and storage. It blocks image builds, container replacement,
 storage migration and seed operations during this preparation. Native readiness
-and proxy data-plane verification remain required; there is no direct-network
-fallback. A failed acceptance check leaves the request pending.
+and proxy routing verification remain required; there is no direct-network
+fallback. Internet diagnostics do not block a valid continuity route. A failed
+ownership or structural acceptance check leaves the request pending.
 
 An officially supported daemon-only live update can reuse the selected image
 after verifying unchanged boot inputs, base/context/tool inputs, non-daemon
@@ -496,23 +498,42 @@ removes a failed mount. The existing display/FPS rollback remains separate.
 The SDK also reads the live native proxy engine/agent state before accepting an
 Android cached success report. A dead host process triggers official saved-state
 reconciliation; a successful return is checked against the actual generation and
-runtime epoch. Display readiness and proxy network readiness remain separate.
+runtime epoch and policy digest. In continuity mode a valid route remains ready
+while upstream diagnostics are unknown or retrying; display setup does not
+repeatedly reconcile merely because the internet is unavailable.
 
 ### Temporary proxy and control-channel failures
 
-Provider connection limits and temporary transport failures leave Android and
-the QA scenario's saved progress intact. The native proxy agent retains its
-authenticated session and retries recoverable connection, timeout and local
-port/file-descriptor exhaustion errors with interruptible backoff. A pending
-failure stays visible until a fresh Android network probe succeeds, including
-when the desired configuration and check ID have not changed. The agent never
-reports an old successful probe as current recovery.
+Fresh/default policies use `failure_policy` on the existing domain-routing profile:
 
-Malformed responses, authentication/ownership failures and missing structural
-control files still fail explicitly. Recovery does not reboot or regenerate a
-device, alter the selected proxy source, or replace official Xenoid touch.
-While a provider remains unavailable, network-dependent actions can remain
-pending; the panel cannot remove an upstream provider's connection quota.
+```json
+{"schema":"dev.xenoid.proxy-failure-policy/v1","mode":"retry_proxy","retry_delays_seconds":[5,15,60]}
+```
+
+The Proxy page exposes this opt-in and editable retry delays. Existing saved
+policies without the field keep legacy behavior until explicitly migrated.
+Delays are positive integer seconds; they control local engine/source recovery,
+not a background internet gate. The five saved domain exceptions are retained.
+
+In continuity mode, provider limits, disconnects and permanent upstream failure
+keep the configured proxy enabled and transparent routes installed. All
+non-exempt requests still go through that proxy; no automatic DIRECT fallback,
+source-off toggle, replacement source or external-probe quarantine is added.
+The agent repairs a clearly owned dead Mihomo process with configured backoff,
+without rebooting Android, changing device identity or replacing official touch.
+A previously valid subscription configuration is retained during fetch outages.
+
+`proxy status --check` is an optional manual diagnostic. A failed check reports
+its real error without disrupting a structurally valid route or blocking GEN.
+`upstreamState` describes the last explicit diagnostic (`unknown`, `online`, or
+`retrying`), not continuous monitoring. `dataPlaneVerified` remains false when
+no successful proof exists. Device readiness does not imply working internet:
+a dead upstream cannot carry requests, so app requests may wait or fail while
+the device and scenario keep running and retrying.
+
+Malformed responses, unreadable credentials, authentication/ownership failures,
+wrong generation/runtime and invalid structural state still fail closed. A
+provider outage is kept separate from those security and configuration faults.
 
 Version v0.1.22 also sets the mode of a newly created public domain-policy directory explicitly, so installation and routing configuration work under a private service umask. An existing private directory is still rejected; Native private settings permissions are unchanged. Existing custom and empty routing policies are retained.
 

@@ -144,8 +144,8 @@ def _canonical(value: Any) -> bytes:
         raise AgentFailure("agent_schema_invalid") from exc
 
 
-def _require_keys(value: Mapping[str, Any], expected: set[str]) -> None:
-    if set(value) != expected:
+def _require_keys(value: Mapping[str, Any], expected: set[str], optional: set[str] | None = None) -> None:
+    if not expected.issubset(value) or set(value) - (expected | (optional or set())):
         raise AgentFailure("agent_schema_invalid")
 
 
@@ -452,7 +452,7 @@ class EngineIPC:
         timeout: float = ROOT_TIMEOUT,
     ) -> tuple[dict[str, Any], list[int]]:
         if method not in {
-            "status", "writeConfig", "prepare", "apply", "off", "quarantine",
+            "status", "liveness", "writeConfig", "prepare", "apply", "off", "quarantine",
             "spawnCompiler", "spawnFetcher", "stopWorker", "daemonRequest",
         }:
             raise AgentFailure("agent_internal_error")
@@ -668,8 +668,8 @@ def _engine() -> EngineIPC:
 
 def _run_root(action: str, _manifest_path: Path, payload: bytes | None = None) -> dict[str, Any]:
     client = _engine()
-    if action == "status":
-        body, _ = client.call("status", {})
+    if action in {"status", "liveness"}:
+        body, _ = client.call(action, {})
         return body
     if action == "write-config":
         if payload is None:
@@ -694,14 +694,14 @@ def _commit_candidate() -> None:
     _engine().call("apply", {"target": "candidate", "commit": True})
 
 
-def _live_status(manifest: dict[str, Any], manifest_path: Path) -> dict[str, Any]:
-    value = _run_root("status", manifest_path)
+def _live_status(manifest: dict[str, Any], manifest_path: Path, *, lightweight: bool = False) -> dict[str, Any]:
+    value = _run_root("liveness" if lightweight else "status", manifest_path)
     required = {
         "ok", "instanceId", "resourceTag", "runtimeEpoch", "generation", "manifestDigest",
         "phase", "structuralApplied", "dataPlaneVerified", "capabilities", "counters",
         "selectedNode", "nodeCount",
     }
-    if set(value) - (required | {"evidence"}) or not required.issubset(value):
+    if set(value) - (required | {"evidence", "failurePolicy", "failurePolicyDigest"}) or not required.issubset(value):
         raise AgentFailure("manifest_live_mismatch")
     if value["ok"] is not True:
         raise AgentFailure("manifest_live_mismatch")
@@ -729,6 +729,15 @@ def _live_status(manifest: dict[str, Any], manifest_path: Path) -> dict[str, Any
         raise AgentFailure("manifest_live_mismatch")
     if not isinstance(value["nodeCount"], int) or isinstance(value["nodeCount"], bool) or not 0 <= value["nodeCount"] <= 512:
         raise AgentFailure("manifest_live_mismatch")
+    policy_keys = {"failurePolicy", "failurePolicyDigest"}
+    if policy_keys.intersection(value):
+        try:
+            from xenoid.proxy_source import normalize_proxy_failure_policy
+            policy = normalize_proxy_failure_policy(value["failurePolicy"])
+        except (KeyError, ValueError, TypeError, ProxyRoutingError) as exc:
+            raise AgentFailure("manifest_live_mismatch") from exc
+        if value.get("failurePolicyDigest") != hashlib.sha256(_canonical(policy)).hexdigest():
+            raise AgentFailure("manifest_live_mismatch")
     if "evidence" in value and not isinstance(value["evidence"], dict):
         raise AgentFailure("manifest_live_mismatch")
     return value
@@ -1026,7 +1035,9 @@ class DaemonChannel:
 
 def _desired(channel: DaemonChannel, manifest: dict[str, Any], floor: int) -> dict[str, Any]:
     value = channel.call("desired", {})
-    _require_keys(value, {"schemaVersion", "instanceId", "generation", "enabled", "checkId", "source"})
+    _require_keys(value, {"schemaVersion", "instanceId", "generation", "enabled", "checkId", "source"}, {"diagnosticRequested"})
+    if "diagnosticRequested" in value and not isinstance(value["diagnosticRequested"], bool):
+        raise AgentFailure("agent_schema_invalid")
     if value["schemaVersion"] != 2 or value["instanceId"] != manifest["instanceId"]:
         raise ChannelAuthenticationFailure("runtime_epoch_mismatch")
     generation = value["generation"]
@@ -1045,7 +1056,7 @@ def _desired(channel: DaemonChannel, manifest: dict[str, Any], floor: int) -> di
             # Daemons predating the IPv4-only mode implicitly allow IPv6.
             source = dict(source)
             source["ipv6Allowed"] = True
-        _require_keys(source, {"kind", "value", "selectedNode", "udpAllowed", "allowInsecureHttp", "ipv6Allowed"})
+        _require_keys(source, {"kind", "value", "selectedNode", "udpAllowed", "allowInsecureHttp", "ipv6Allowed"}, {"failurePolicy"})
         if source["kind"] not in {"endpoint", "uri_list", "clash", "subscription"}:
             raise AgentFailure("source_invalid")
         if not isinstance(source["value"], str) or not source["value"] or len(source["value"].encode("utf-8")) > MAX_SOURCE_BYTES:
@@ -1538,11 +1549,68 @@ def _report_status(
     }
     if live["phase"] != "off":
         report["checkId"] = desired["checkId"]
+    if live.get("failurePolicy") == "retry_proxy":
+        for key in ("failurePolicy", "failurePolicyDigest", "upstreamState"):
+            report[key] = live[key]
     if error_code:
         report["errorCode"] = error_code
     if len(_canonical(report)) > 60 * 1024:
         raise AgentFailure("source_invalid")
     channel.call("report", report)
+
+
+def _retry_schedule(policy: dict[str, Any] | None, count: int) -> tuple[int, float]:
+    delays = policy["retry_delays_seconds"] if policy else (5.0, 15.0, 60.0, 60.0)
+    count = min(count + 1, len(delays))
+    return count, delays[count - 1]
+
+
+def _retry_policy(desired: dict[str, Any]) -> dict[str, Any] | None:
+    host = load_proxy_routing_policy().get("failure_policy")
+    source = desired.get("source") or {}
+    wanted = source.get("failurePolicy")
+    if host is None and wanted is None:
+        return None
+    try:
+        from xenoid.proxy_source import normalize_proxy_failure_policy
+        normalized = normalize_proxy_failure_policy(wanted)
+        trusted = normalize_proxy_failure_policy(host)
+    except (ValueError, TypeError, ProxyRoutingError) as exc:
+        raise AgentFailure("failure_policy_mismatch") from exc
+    if normalized != trusted:
+        raise AgentFailure("failure_policy_mismatch")
+    return normalized
+
+
+def _continuous_live(live: dict[str, Any], policy: dict[str, Any], *,
+                     upstream: str = "unknown", verified: bool = False) -> dict[str, Any]:
+    if not live["structuralApplied"] or live["phase"] != "active":
+        raise AgentFailure("engine_structure_mismatch")
+    if upstream not in {"unknown", "online", "retrying"} or verified != (upstream == "online"):
+        raise AgentFailure("agent_internal_error")
+    result = dict(live)
+    result.update(failurePolicy="retry_proxy",
+                  failurePolicyDigest=hashlib.sha256(_canonical(policy)).hexdigest(),
+                  upstreamState=upstream, dataPlaneVerified=verified)
+    return result
+
+
+def _continuous_diagnostic(channel, desired, manifest, manifest_path, before, policy):
+    try:
+        observed = _probe_data_plane(channel, desired, manifest, manifest_path, before)
+    except (ChannelAuthenticationFailure, DesiredStateAdvanced):
+        raise
+    except AgentFailure as exc:
+        if exc.code not in {"probe_timeout", "probe_failed", "proxy_outbound_unavailable"}:
+            raise
+        result = _continuous_live(before, policy, upstream="retrying")
+        capabilities = getattr(exc, "capabilities", None)
+        if isinstance(capabilities, dict) and set(capabilities) == CAPABILITY_KEYS and all(isinstance(value, bool) for value in capabilities.values()):
+            result["capabilities"] = dict(capabilities)
+        return result, exc.code
+    if observed.get("dataPlaneVerified") is not True:
+        raise AgentFailure("data_plane_unverified")
+    return _continuous_live(observed, policy, upstream="online", verified=True), ""
 
 
 def _probe_data_plane(
@@ -1579,7 +1647,10 @@ def _probe_data_plane(
     if error_code == "stale_probe":
         raise DesiredStateAdvanced(error_code)
     if error_code:
-        raise AgentFailure(error_code)
+        failure = AgentFailure(error_code)
+        if error_code in {"probe_timeout", "probe_failed", "proxy_outbound_unavailable"}:
+            failure.capabilities = dict(capabilities)
+        raise failure
     udp_allowed = desired["source"]["udpAllowed"]
     ipv6_allowed = desired["source"].get("ipv6Allowed", True)
     if not isinstance(ipv6_allowed, bool):
@@ -1660,6 +1731,8 @@ def _run(
     retry_count = 0
     retry_at = 0.0
     retry_error = ""
+    last_local_check = 0.0
+    retry_policy = None
     try:
         transient_retry_count = 0
         transient_error = ""
@@ -1667,12 +1740,35 @@ def _run(
             try:
                 desired = _desired(channel, manifest, floor)
                 generation = desired["generation"]
+                retry_policy = _retry_policy(desired) if desired["enabled"] else None
                 if verified_old and not retry_error and not transient_error:
                     _write_health(manifest, "ready", active_generation)
                 if generation < last_seen or desired["checkId"] < last_check:
                     raise ChannelAuthenticationFailure("agent_stale")
                 _engine().generation = generation
                 now = time.monotonic()
+                # One local controller request per15s; no external reachability
+                # gate and no full netfilter walk on the3s control poll.
+                if retry_policy and verified_old and active_generation == generation and (now - last_local_check >= 15.0 or bool(transient_error)):
+                    last_local_check = now
+                    try:
+                        local = _live_status(manifest, manifest_path, lightweight=True)
+                        if transient_error:
+                            local.update(selectedNode=active_selected, nodeCount=len(active_nodes), nodes=active_nodes)
+                            _report_status(channel, desired, _continuous_live(local, retry_policy))
+                            transient_error = ""
+                    except AgentFailure as exc:
+                        if exc.code in {"engine_busy", "agent_channel_unreachable"}:
+                            raise TransientTransportFailure(exc.code)
+                        if exc.code not in {"engine_process_failed", "engine_health_failed"}:
+                            raise
+                        verified_old = False
+                        active_generation, active_digest = -1, ""
+                        retry_generation = generation
+                        retry_count, retry_delay = _retry_schedule(retry_policy, retry_count)
+                        retry_at = now + retry_delay
+                        retry_error = exc.code
+                        _write_health(manifest, "error", generation, exc.code)
                 candidate_due = (
                     generation != active_generation
                     and (generation != retry_generation or now >= retry_at)
@@ -1681,14 +1777,17 @@ def _run(
                 if retry_generation == generation and now < retry_at:
                     _write_health(
                         manifest,
-                        "error" if verified_old else "quarantined",
+                        "ready" if retry_policy and verified_old else "error" if verified_old or retry_policy else "quarantined",
                         generation,
                         retry_error,
                     )
-                refresh_due = desired["enabled"] and now - last_refresh >= REFRESH_SECONDS
+                refresh_due = desired["enabled"] and (
+                    now >= retry_at if retry_policy and retry_error
+                    else now - last_refresh >= REFRESH_SECONDS
+                )
                 # A recovered control poll is not a fresh data-plane proof.
                 # Re-run the daemon's current check before restoring ready.
-                check_due = desired["checkId"] > last_check or bool(transient_error)
+                check_due = (bool(desired.get("diagnosticRequested")) and desired["checkId"] > last_check) if retry_policy else (desired["checkId"] > last_check or bool(transient_error))
                 last_seen = generation
 
                 if not desired["enabled"]:
@@ -1730,7 +1829,13 @@ def _run(
                     report_nodes: list[str] = []
                     report_selected = ""
                     try:
-                        if _live_status(manifest, manifest_path)["phase"] == "off":
+                        try:
+                            existing = _live_status(manifest, manifest_path)
+                        except AgentFailure as exc:
+                            if not retry_policy or exc.code not in {"engine_process_failed", "engine_health_failed"}:
+                                raise
+                            existing = {"phase": "active"}
+                        if existing["phase"] == "off":
                             _run_root("prepare", manifest_path)
                         _validate_binary(ENGINE_BINARY, manifest["engine"]["binarySha256"])
                         compiled = _compile_source(manifest, desired["source"], metadata)
@@ -1767,6 +1872,13 @@ def _run(
                             candidate_staged = True
                             _run_root("apply", manifest_path)
                         elif not check_due and verified_old:
+                            if retry_policy:
+                                refreshed = _live_status(manifest, manifest_path)
+                                if refreshed["generation"] != generation:
+                                    raise AgentFailure("agent_stale")
+                                _report_status(channel, desired, _continuous_live(refreshed, retry_policy))
+                                retry_generation, retry_count, retry_at, retry_error = -1, 0, 0.0, ""
+                                transient_error = ""
                             last_refresh = time.monotonic()
                             _write_health(manifest, "ready", generation)
                             continue
@@ -1774,13 +1886,33 @@ def _run(
                         if before["generation"] != generation or not before["structuralApplied"]:
                             raise AgentFailure("data_plane_unverified")
                         before.update({"selectedNode": selected, "nodeCount": len(nodes), "nodes": nodes})
-                        if not (check_due or candidate_staged):
-                            raise AgentFailure("data_plane_unverified")
-                        live = _probe_data_plane(channel, desired, manifest, manifest_path, before)
-                        if candidate_staged:
-                            _commit_candidate()
+                        diagnostic_error = ""
+                        if retry_policy:
+                            # Commit verified local structure before optional diagnostics.
+                            # Remote reachability cannot destroy this valid candidate.
+                            if candidate_staged:
+                                _commit_candidate()
+                                candidate_staged = False
+                            live = _continuous_live(before, retry_policy)
+                            if check_due:
+                                last_check = desired["checkId"]
+                                live, diagnostic_error = _continuous_diagnostic(channel, desired, manifest, manifest_path, before, retry_policy)
+                        else:
+                            if not (check_due or candidate_staged):
+                                raise AgentFailure("data_plane_unverified")
+                            live = _probe_data_plane(channel, desired, manifest, manifest_path, before)
+                            if candidate_staged:
+                                _commit_candidate()
                         live.update({"selectedNode": selected, "nodeCount": len(nodes), "nodes": nodes})
-                        _report_status(channel, desired, live)
+                        if retry_policy:
+                            # A lost report is a control transport failure, not an
+                            # instruction to destroy an already committed route.
+                            active_generation, active_digest = generation, config_digest
+                            active_nodes, active_selected = list(nodes), selected
+                            verified_old = True
+                            last_refresh = time.monotonic()
+                            last_local_check = last_refresh
+                        _report_status(channel, desired, live, error_code=diagnostic_error)
                         active_generation, active_digest = generation, config_digest
                         active_nodes, active_selected = list(nodes), selected
                         verified_old = True
@@ -1792,6 +1924,21 @@ def _run(
                     except (ChannelAuthenticationFailure, DesiredStateAdvanced):
                         raise
                     except AgentFailure as exc:
+                        if retry_policy and (isinstance(exc, TransientTransportFailure) or exc.code in {"engine_busy", "agent_channel_unreachable"}):
+                            raise TransientTransportFailure(exc.code)
+                        if retry_policy and had_verified_old and active_generation == generation and exc.code in {"source_fetch_denied", "provider_empty", "worker_unavailable", "compiler_unavailable"}:
+                            retained = _live_status(manifest, manifest_path)
+                            if retained["generation"] != generation:
+                                raise AgentFailure("agent_stale")
+                            _report_status(channel, desired, _continuous_live(retained, retry_policy), error_code=exc.code)
+                            _write_health(manifest, "ready", generation, exc.code)
+                            retry_generation = generation
+                            retry_count, retry_delay = _retry_schedule(retry_policy, retry_count)
+                            retry_at = time.monotonic() + retry_delay
+                            retry_error = exc.code
+                            last_refresh = time.monotonic()
+                            time.sleep(POLL_SECONDS)
+                            continue
                         restored_active = False
                         report_failure = (
                             retry_generation != generation
@@ -1812,14 +1959,21 @@ def _run(
                                     "nodeCount": len(active_nodes),
                                     "nodes": active_nodes,
                                 })
-                                restored = _probe_data_plane(
-                                    channel,
-                                    desired,
-                                    manifest,
-                                    manifest_path,
-                                    restored_before,
-                                    expected_generation=active_generation,
-                                )
+                                if retry_policy:
+                                    # LKG restoration is a local ownership/structure
+                                    # operation, not another upstream reachability gate.
+                                    if active_generation != generation:
+                                        raise AgentFailure("agent_stale")
+                                    restored = _continuous_live(restored_before, retry_policy)
+                                else:
+                                    restored = _probe_data_plane(
+                                        channel,
+                                        desired,
+                                        manifest,
+                                        manifest_path,
+                                        restored_before,
+                                        expected_generation=active_generation,
+                                    )
                                 restored.update({
                                     "selectedNode": active_selected,
                                     "nodeCount": len(active_nodes),
@@ -1837,6 +1991,8 @@ def _run(
                                 raise
                             except AgentFailure:
                                 _quarantine(manifest_path)
+                                if retry_policy:
+                                    verified_old = False
                         else:
                             try:
                                 if candidate_staged:
@@ -1869,8 +2025,8 @@ def _run(
                         if retry_generation != generation:
                             retry_generation, retry_count = generation, 0
                         retry_error = exc.code
-                        retry_count = min(retry_count + 1, 4)
-                        retry_at = time.monotonic() + (5.0, 15.0, 60.0, 60.0)[retry_count - 1]
+                        retry_count, retry_delay = _retry_schedule(retry_policy, retry_count)
+                        retry_at = time.monotonic() + retry_delay
                 elif check_due and verified_old and active_generation == generation and now >= retry_at:
                     try:
                         before = _live_status(manifest, manifest_path)
@@ -1887,11 +2043,16 @@ def _run(
                         before.update({
                             "selectedNode": active_selected, "nodeCount": len(active_nodes), "nodes": active_nodes,
                         })
-                        live = _probe_data_plane(channel, desired, manifest, manifest_path, before)
+                        diagnostic_error = ""
+                        if retry_policy:
+                            last_check = desired["checkId"]
+                            live, diagnostic_error = _continuous_diagnostic(channel, desired, manifest, manifest_path, before, retry_policy)
+                        else:
+                            live = _probe_data_plane(channel, desired, manifest, manifest_path, before)
                         live.update({
                             "selectedNode": active_selected, "nodeCount": len(active_nodes), "nodes": active_nodes,
                         })
-                        _report_status(channel, desired, live)
+                        _report_status(channel, desired, live, error_code=diagnostic_error)
                         verified_old = True
                         last_check = desired["checkId"]
                         retry_generation, retry_count, retry_at, retry_error = -1, 0, 0.0, ""
@@ -1900,15 +2061,21 @@ def _run(
                     except (ChannelAuthenticationFailure, DesiredStateAdvanced):
                         raise
                     except AgentFailure as exc:
-                        if not verified_old:
+                        if retry_policy and (isinstance(exc, TransientTransportFailure) or exc.code in {"engine_busy", "agent_channel_unreachable"}):
+                            raise TransientTransportFailure(exc.code)
+                        if retry_policy:
+                            _quarantine(manifest_path)
+                            verified_old = False
+                            active_generation, active_digest = -1, ""
+                        elif not verified_old:
                             _quarantine(manifest_path)
                         _report_failure(channel, desired, exc.code, not verified_old)
                         _write_health(manifest, "error" if verified_old else "quarantined", generation, exc.code)
                         if retry_generation != generation:
                             retry_generation, retry_count = generation, 0
                         retry_error = exc.code
-                        retry_count = min(retry_count + 1, 4)
-                        retry_at = time.monotonic() + (5.0, 15.0, 60.0, 60.0)[retry_count - 1]
+                        retry_count, retry_delay = _retry_schedule(retry_policy, retry_count)
+                        retry_at = time.monotonic() + retry_delay
                 time.sleep(POLL_SECONDS)
                 transient_retry_count = 0
             except ChannelAuthenticationFailure:
@@ -1926,9 +2093,9 @@ def _run(
                 if _STOP:
                     break
                 transient_error = exc.code
-                transient_retry_count = min(transient_retry_count + 1, 4)
-                _write_health(manifest, "error" if verified_old else "quarantined", last_seen, exc.code)
-                _sleep_stoppable((5.0, 15.0, 60.0, 60.0)[transient_retry_count - 1])
+                transient_retry_count, retry_delay = _retry_schedule(retry_policy, transient_retry_count)
+                _write_health(manifest, "error" if verified_old or retry_policy else "quarantined", last_seen, exc.code)
+                _sleep_stoppable(retry_delay)
             except AgentFailure as exc:
                 if _STOP and exc.code == "agent_stopping":
                     break

@@ -3752,6 +3752,13 @@ cat >/dev/null
             for index in range(len(source)):
                 source[index] = 0
 
+    def proxy_failure_policy(self) -> dict[str, Any]:
+        """Read the validated policy on the selected engine host, not the CLI host."""
+        prepared = self.proxy_prerequisite()
+        if prepared.get("ok") is not True:
+            return prepared
+        return self._proxy_root_json("failure-policy")
+
     def reconcile_proxy_desired(self) -> dict[str, Any]:
         """Converge this instance's daemon desired state before runtime acceptance."""
         try:
@@ -12666,7 +12673,7 @@ cat >/dev/null
             ):
                 return self._proxy_failure(response["error"])
             return self._proxy_failure("engine_unavailable")
-        if response == {"ok": True}:
+        if response == {"ok": True} and action != "failure-policy":
             return response
         if (
             action == "check-control"
@@ -12678,6 +12685,15 @@ cat >/dev/null
             return response
         if action in {"quarantine", "cleanup"} and response == {"notPrepared": True, "ok": True}:
             return response
+        if action == "failure-policy" and set(response) == {"ok", "failurePolicy", "failurePolicyDigest"}:
+            try:
+                from .daemon_client import _failure_policy, _failure_policy_digest
+                policy = _failure_policy(response["failurePolicy"])
+                if response.get("ok") is True and response["failurePolicyDigest"] == _failure_policy_digest(policy):
+                    return response
+            except (ValueError, TypeError):
+                pass
+            return self._proxy_failure("engine_response_invalid")
         if action == "status" and self._proxy_valid_status(response):
             return response
         return self._proxy_failure("engine_response_invalid")
@@ -12696,13 +12712,24 @@ cat >/dev/null
             for capability in ("Dns", "Tcp", "Udp")
             for stage in ("Ingress", "Uplink", "Egress")
         )
+        optional_policy = {"failurePolicy", "failurePolicyDigest"}
+        policy_valid = True
+        if optional_policy & set(response):
+            try:
+                from .daemon_client import _failure_policy, _failure_policy_digest
+                policy = _failure_policy(response.get("failurePolicy"))
+                policy_valid = (optional_policy <= set(response) and policy is not None
+                    and response["failurePolicyDigest"] == _failure_policy_digest(policy))
+            except (ValueError, TypeError):
+                policy_valid = False
         return (
-            set(response)
+            set(response) - optional_policy
             == {
                 "ok", "instanceId", "resourceTag", "runtimeEpoch", "generation",
                 "manifestDigest", "phase", "structuralApplied", "dataPlaneVerified",
                 "capabilities", "counters", "selectedNode", "nodeCount",
             }
+            and policy_valid
             and response.get("ok") is True
             and all(isinstance(response.get(name), str) for name in ("instanceId", "resourceTag", "runtimeEpoch"))
             and isinstance(response.get("generation"), int)

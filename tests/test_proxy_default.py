@@ -8,11 +8,13 @@ import os
 import runpy
 import stat
 import tempfile
+import sys
+import types
 import unittest
 from argparse import Namespace
 from pathlib import Path
 from subprocess import CompletedProcess
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 FLEET = runpy.run_path(str(Path(__file__).resolve().parents[1] / "xenoid-fleet"))
@@ -140,6 +142,28 @@ class ProxyDefaultTest(unittest.TestCase):
         self.directory.symlink_to(moved)
         with self.assertRaisesRegex(FLEET["FleetError"], "private and root-owned"):
             PROXY.load()
+
+    def test_continuous_import_uses_native_route_proof_without_external_check(self):
+        helper = Mock(return_value=True)
+        package = types.ModuleType("xenoid"); package.__path__ = []
+        module = types.ModuleType("xenoid.daemon_client"); module.proxy_routing_ready = helper
+        instance = Instance(checkCompleted=False, routingReady=True,
+                            failurePolicy={"mode": "retry_proxy"})
+        with patch.dict(sys.modules, {"xenoid": package, "xenoid.daemon_client": module}):
+            PROXY.load().converge(instance, "1")
+        helper.assert_called_once_with(instance.import_result)
+        self.assertFalse(any(command == ["proxy", "status", "--check"] for command in instance.commands))
+        self.assertEqual(instance.import_bytes, SOURCE)
+
+    def test_continuous_import_cannot_fall_back_to_a_stale_legacy_check(self):
+        package = types.ModuleType("xenoid"); package.__path__ = []
+        for routing_ready, native_ready in [(False, True), (True, False)]:
+            helper = Mock(return_value=native_ready)
+            module = types.ModuleType("xenoid.daemon_client"); module.proxy_routing_ready = helper
+            instance = Instance(checkCompleted=True, routingReady=routing_ready,
+                                failurePolicy={"mode": "retry_proxy"})
+            with patch.dict(sys.modules, {"xenoid": package, "xenoid.daemon_client": module}):
+                with self.assertRaises(FLEET["FleetError"]): PROXY.load().converge(instance, "1")
 
     def test_native_error_and_stale_proof_fail_without_echoing_source(self):
         default = PROXY.load()

@@ -1,0 +1,227 @@
+{
+  "failure_policy": {
+    "mode": "retry_proxy",
+    "retry_delays_seconds": [
+      5,
+      15,
+      60
+    ],
+    "schema": "dev.xenoid.proxy-failure-policy/v1"
+  },
+  "producer": "xenoid-proxy-agent._continuous_live/_report_status",
+  "reports": [
+    {
+      "error": "source_fetch_denied",
+      "report": {
+        "capabilities": {
+          "v4DnsProxy": false,
+          "v4TcpProxy": false,
+          "v4UdpProxy": false,
+          "v6DnsProxy": false,
+          "v6TcpProxy": false,
+          "v6UdpProxy": false
+        },
+        "checkId": 9,
+        "counters": {
+          "egress": 1,
+          "egressBytes": 1,
+          "ingress": 1,
+          "ingressBytes": 1,
+          "proxyUplink": 1,
+          "proxyUplinkBytes": 1,
+          "v4DnsEgress": 1,
+          "v4DnsIngress": 1,
+          "v4DnsUplink": 1,
+          "v4TcpEgress": 1,
+          "v4TcpIngress": 1,
+          "v4TcpUplink": 1,
+          "v4UdpEgress": 1,
+          "v4UdpIngress": 1,
+          "v4UdpUplink": 1,
+          "v6DnsEgress": 1,
+          "v6DnsIngress": 1,
+          "v6DnsUplink": 1,
+          "v6TcpEgress": 1,
+          "v6TcpIngress": 1,
+          "v6TcpUplink": 1,
+          "v6UdpEgress": 1,
+          "v6UdpIngress": 1,
+          "v6UdpUplink": 1
+        },
+        "dataPlaneVerified": false,
+        "errorCode": "source_fetch_denied",
+        "failurePolicy": "retry_proxy",
+        "failurePolicyDigest": "b72af613db9e44e05160dacba4bc5dfaaac9b89ef9e87e7e0f826fe944c555a2",
+        "generation": 7,
+        "nodeCount": 1,
+        "nodes": [
+          "node-001"
+        ],
+        "phase": "active",
+        "selectedNode": "node-001",
+        "structuralApplied": true,
+        "upstreamState": "unknown"
+      }
+    },
+    {
+      "error": "provider_empty",
+      "report": {
+        "capabilities": {
+          "v4DnsProxy": false,
+          "v4TcpProxy": false,
+          "v4UdpProxy": false,
+          "v6DnsProxy": false,
+          "v6TcpProxy": false,
+          "v6UdpProxy": false
+        },
+        "checkId": 9,
+        "counters": {
+          "egress": 1,
+          "egressBytes": 1,
+          "ingress": 1,
+          "ingressBytes": 1,
+          "proxyUplink": 1,
+          "proxyUplinkBytes": 1,
+          "v4DnsEgress": 1,
+          "v4DnsIngress": 1,
+          "v4DnsUplink": 1,
+          "v4TcpEgress": 1,
+          "v4TcpIngress": 1,
+          "v4TcpUplink": 1,
+          "v4UdpEgress": 1,
+          "v4UdpIngress": 1,
+          "v4UdpUplink": 1,
+          "v6DnsEgress": 1,
+          "v6DnsIngress": 1,
+          "v6DnsUplink": 1,
+          "v6TcpEgress": 1,
+          "v6TcpIngress": 1,
+          "v6TcpUplink": 1,
+          "v6UdpEgress": 1,
+          "v6UdpIngress": 1,
+          "v6UdpUplink": 1
+        },
+        "dataPlaneVerified": false,
+        "errorCode": "provider_empty",
+        "failurePolicy": "retry_proxy",
+        "failurePolicyDigest": "b72af613db9e44e05160dacba4bc5dfaaac9b89ef9e87e7e0f826fe944c555a2",
+        "generation": 7,
+        "nodeCount": 1,
+        "nodes": [
+          "node-001"
+        ],
+        "phase": "active",
+        "selectedNode": "node-001",
+        "structuralApplied": true,
+        "upstreamState": "unknown"
+      }
+    },
+    {
+      "error": "worker_unavailable",
+      "report": {
+        "capabilities": {
+          "v4DnsProxy": false,
+          "v4TcpProxy": false,
+          "v4UdpProxy": false,
+          "v6DnsProxy": false,
+          "v6TcpProxy": false,
+          "v6UdpProxy": false
+        },
+        "checkId": 9,
+        "counters": {
+          "egress": 1,
+          "egressBytes": 1,
+          "ingress": 1,
+          "ingressBytes": 1,
+          "proxyUplink": 1,
+          "proxyUplinkBytes": 1,
+          "v4DnsEgress": 1,
+          "v4DnsIngress": 1,
+          "v4DnsUplink": 1,
+          "v4TcpEgress": 1,
+          "v4TcpIngress": 1,
+          "v4TcpUplink": 1,
+          "v4UdpEgress": 1,
+          "v4UdpIngress": 1,
+          "v4UdpUplink": 1,
+          "v6DnsEgress": 1,
+          "v6DnsIngress": 1,
+          "v6DnsUplink": 1,
+          "v6TcpEgress": 1,
+          "v6TcpIngress": 1,
+          "v6TcpUplink": 1,
+          "v6UdpEgress": 1,
+          "v6UdpIngress": 1,
+          "v6UdpUplink": 1
+        },
+        "dataPlaneVerified": false,
+        "errorCode": "worker_unavailable",
+        "failurePolicy": "retry_proxy",
+        "failurePolicyDigest": "b72af613db9e44e05160dacba4bc5dfaaac9b89ef9e87e7e0f826fe944c555a2",
+        "generation": 7,
+        "nodeCount": 1,
+        "nodes": [
+          "node-001"
+        ],
+        "phase": "active",
+        "selectedNode": "node-001",
+        "structuralApplied": true,
+        "upstreamState": "unknown"
+      }
+    },
+    {
+      "error": "compiler_unavailable",
+      "report": {
+        "capabilities": {
+          "v4DnsProxy": false,
+          "v4TcpProxy": false,
+          "v4UdpProxy": false,
+          "v6DnsProxy": false,
+          "v6TcpProxy": false,
+          "v6UdpProxy": false
+        },
+        "checkId": 9,
+        "counters": {
+          "egress": 1,
+          "egressBytes": 1,
+          "ingress": 1,
+          "ingressBytes": 1,
+          "proxyUplink": 1,
+          "proxyUplinkBytes": 1,
+          "v4DnsEgress": 1,
+          "v4DnsIngress": 1,
+          "v4DnsUplink": 1,
+          "v4TcpEgress": 1,
+          "v4TcpIngress": 1,
+          "v4TcpUplink": 1,
+          "v4UdpEgress": 1,
+          "v4UdpIngress": 1,
+          "v4UdpUplink": 1,
+          "v6DnsEgress": 1,
+          "v6DnsIngress": 1,
+          "v6DnsUplink": 1,
+          "v6TcpEgress": 1,
+          "v6TcpIngress": 1,
+          "v6TcpUplink": 1,
+          "v6UdpEgress": 1,
+          "v6UdpIngress": 1,
+          "v6UdpUplink": 1
+        },
+        "dataPlaneVerified": false,
+        "errorCode": "compiler_unavailable",
+        "failurePolicy": "retry_proxy",
+        "failurePolicyDigest": "b72af613db9e44e05160dacba4bc5dfaaac9b89ef9e87e7e0f826fe944c555a2",
+        "generation": 7,
+        "nodeCount": 1,
+        "nodes": [
+          "node-001"
+        ],
+        "phase": "active",
+        "selectedNode": "node-001",
+        "structuralApplied": true,
+        "upstreamState": "unknown"
+      }
+    }
+  ],
+  "schema": "dev.xenoid.proxy-retained-lkg-fixture/v1"
+}

@@ -24,6 +24,9 @@ CANDIDATE=Path(TEMP.name)
 for name,body in sources().items():
     path=CANDIDATE/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(body)
 subprocess.run(['git','apply',str(ROOT/'patches/proxy-domain-routing.patch')],cwd=CANDIDATE,check=True,capture_output=True)
+bundled=ROOT/'nativebundle/source/src/xenoid/proxy_source.py'
+if bundled.is_file():
+    (CANDIDATE/'src/xenoid/proxy_source.py').write_bytes(bundled.read_bytes())
 SPEC=importlib.util.spec_from_file_location('actual_routing_source',CANDIDATE/'src/xenoid/proxy_source.py')
 NATIVE=importlib.util.module_from_spec(SPEC);sys.modules[SPEC.name]=NATIVE;SPEC.loader.exec_module(NATIVE)
 ENGINE=runpy.run_path(str(CANDIDATE/'scripts/xenoid-proxy-engine.py'))

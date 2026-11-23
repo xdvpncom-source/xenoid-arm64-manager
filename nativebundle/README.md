@@ -120,3 +120,20 @@ Google, TUN, proxy-underlay and soft-reboot tests, plus `tests/test_fresh_render
 and the pacer's normal and address/undefined-sanitized C++ tests. Platform-only
 tests still require their stated Linux/root/runtime environment. Source and
 artifact installation tests use temporary checkouts and never operate Android.
+
+## Optional proxy continuity
+
+The versioned `retry_proxy` policy uses the existing routing settings and encrypted
+desired-source owner. Its report binds the same policy digest, generation and
+runtime. Owned local routes can be ready while internet diagnostics are unknown
+or retrying; `dataPlaneVerified` is not fabricated. Upstream failures retain the
+enabled proxy, source/node/UDP/IPv6 flags and explicit domain exceptions. There is
+no automatic DIRECT fallback or external readiness gate. The agent recovers a
+clearly owned dead local process with configured backoff.
+
+A manual `proxy status --check` reports real external failure without disturbing
+a valid route. Its result describes that diagnostic, not continuous monitoring.
+Legacy policy absence keeps strict acceptance, and unreadable state, ownership,
+configuration and runtime mismatches remain guarded. These source changes require
+a coordinated update-compatible daemon/host-control deployment; local unit tests
+do not replace the real outage and recovery acceptance gate.

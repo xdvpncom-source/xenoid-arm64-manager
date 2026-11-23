@@ -17,7 +17,9 @@ POLICY=Path('/etc/xenoid-proxy-routing/policy.json')
 LEGACY_POLICY=Path('/etc/xenoid/qa-proxy-routing.json')
 SCHEMA='dev.xenoid.qa.proxy-routing/v1'
 DEFAULT={'schema':SCHEMA,'exceptions':[{'domain':domain,'include_subdomains':True}for domain in (
-    'us.xdvpn.com','xdvpn.com','ir.xdgram.com','xdgram.com','github.com')]}
+    'us.xdvpn.com','xdvpn.com','ir.xdgram.com','xdgram.com','github.com')],
+    'failure_policy':{'schema':'dev.xenoid.proxy-failure-policy/v1','mode':'retry_proxy',
+                      'retry_delays_seconds':[5,15,60]}}
 
 
 class RoutingError(RuntimeError):
@@ -162,14 +164,20 @@ def reconcile(manager,broker,*,timeout,pending,proof=strict_proxy):
         if status.get('configured')is not True or status.get('enabled')is not True:
             return {'ok':True,'skipped':'disabled_or_unconfigured','policy_sha256':digest}
         original=source(client)
-        original_digest=policy_digest(original)
+        original_digest=policy_digest({k:v for k,v in original.items()if k!='failurePolicy'})
+        def desired_unchanged():
+            current=source(client)
+            return (policy_digest({k:v for k,v in current.items()if k!='failurePolicy'})==original_digest
+                    and current.get('failurePolicy')==policy.get('failure_policy'))
         installed=manager._proxy_root_json('check-control')
         current_control=installed.get('ok')is True and installed.get('controlDigest')==manager._proxy_local_control_digest()
-        if current_control and active_config_matches(manager,policy):
+        if (current_control and active_config_matches(manager,policy)
+                and status.get('failurePolicy')==policy.get('failure_policy')):
             proof(manager,client,deadline)
-            require(binding(manager)[0]==before and policy_digest(source(client))==original_digest,'routing_binding_changed')
+            require(binding(manager)[0]==before and desired_unchanged(),'routing_binding_changed')
             require(policy_digest(load_proxy_routing_policy())==digest,'routing_policy_changed_during_apply')
-            return {'ok':True,'changed':False,'policy_sha256':digest,'exception_count':len(policy['exceptions']),'native_proxy_verified':True}
+            return {'ok':True,'changed':False,'policy_sha256':digest,'exception_count':len(policy['exceptions']),'native_proxy_routing_verified':True,'native_proxy_verified':(policy.get('failure_policy')is None
+                    or ((client.proxy_status().get('report')or{}).get('dataPlaneVerified')is True))}
         accepted(manager.proxy_prerequisite())
         accepted(manager.proxy_quarantine())
         require(manager._proxy_stop_agent(),'agent_stop_failed')
@@ -179,10 +187,11 @@ def reconcile(manager,broker,*,timeout,pending,proof=strict_proxy):
         accepted(result)
         proof(manager,client,deadline)
         require(active_config_matches(manager,policy),'routing_config_not_applied')
-        require(binding(manager)[0]==before and policy_digest(source(client))==original_digest,'routing_binding_changed')
+        require(binding(manager)[0]==before and desired_unchanged(),'routing_binding_changed')
         require(policy_digest(load_proxy_routing_policy())==digest,'routing_policy_changed_during_apply')
         return {'ok':True,'changed':True,'policy_sha256':digest,'exception_count':len(policy['exceptions']),
-                'container_binding_preserved':True,'desired_proxy_preserved':True,'native_proxy_verified':True}
+                'container_binding_preserved':True,'desired_proxy_preserved':True,'native_proxy_routing_verified':True,'native_proxy_verified':(policy.get('failure_policy')is None
+                    or ((client.proxy_status().get('report')or{}).get('dataPlaneVerified')is True))}
 
 
 def main(argv=None):

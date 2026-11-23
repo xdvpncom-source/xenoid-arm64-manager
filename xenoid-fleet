@@ -412,13 +412,26 @@ class ProxyDefault:
                 flags.append("--allow-insecure-http")
             verified = self._request(upstream, device_id, ["import", str(source), *flags],
                                      "native proxy default import failed")
+        proof = verified.get("checkCompleted") is True
+        if verified.get("failurePolicy") is not None:
+            # Native convergence already proved the owned host route. Reuse its
+            # desired-policy proof here without allocating an internet check.
+            previous_path = list(sys.path)
+            try:
+                sys.path.insert(0, str(upstream.root / "src"))
+                from xenoid.daemon_client import proxy_routing_ready
+                proof = verified.get("routingReady") is True and proxy_routing_ready(verified)
+            except (ImportError, AttributeError, OSError, ValueError, TypeError):
+                proof = False
+            finally:
+                sys.path[:] = previous_path
         if (verified.get("configured") is not True or verified.get("enabled") is not True
-                or verified.get("quarantined") is not False or verified.get("checkCompleted") is not True
+                or verified.get("quarantined") is not False or not proof
                 or verified.get("sourceKind") != self.kind
                 or verified.get("udpAllowed") is not self.udp_allowed
                 or verified.get("ipv6Allowed") is not self.ipv6_allowed
                 or verified.get("allowInsecureHttp") is not self.allow_insecure_http):
-            raise FleetError("native proxy default did not pass its fresh data-plane check")
+            raise FleetError("native proxy default did not pass its policy-selected native routing check")
 
     @staticmethod
     def _request(upstream: Upstream, device_id: str, args: list[str], error: str) -> dict:

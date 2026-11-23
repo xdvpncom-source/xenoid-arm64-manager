@@ -39,6 +39,7 @@ from .daemon_client import (
     KEYBOX_MAX_SOURCE_BYTES,
     PROXY_MAX_SOURCE_BYTES,
     DaemonClient,
+    wait_for_proxy_check,
 )
 from .doctor import build_doctor_report
 from .device_identity import (
@@ -1515,9 +1516,45 @@ def _atomic_write_proxy_export(target: str, data: bytes) -> Optional[str]:
 
 
 def cmd_proxy_status(args: argparse.Namespace) -> int:
-    result = _call_proxy_controller(
-        args,
-        lambda controller: controller.status(check=args.check),
+    if not args.check:
+        result = _call_proxy_controller(
+            args, lambda controller: controller.status(check=False),
+        )
+        return _emit_proxy_result(result)
+    # This command owns its preparation lock instead of main() retaining it
+    # across an optional external diagnostic. Legacy convergence stays locked.
+    with cli_operation_lock(args):
+        _refresh_instance_under_lock(args)
+        args._operation_lock_held = True
+        try:
+            blocked = _reject_unrelated_regeneration_mutation(args)
+            if blocked is not None:
+                print_json(blocked)
+                return 1
+            manager = runtime(args)
+            manager.migrate_legacy_token_state()
+            client = daemon(args, manager)
+            current = client.proxy_status()
+            if current.get("ok") is not True:
+                return _emit_proxy_result(current)
+            if current.get("failurePolicy") is None:
+                result = _call_proxy_controller(
+                    args, lambda controller: controller.status(check=True),
+                )
+                return _emit_proxy_result(result)
+            controller = ProxyController(
+                args.context, args.config, args.lease, manager, client,
+            )
+            requested = controller.begin_diagnostic()
+        finally:
+            args._operation_lock_held = False
+    if requested.get("ok") is not True:
+        return _emit_proxy_result(requested)
+    result = wait_for_proxy_check(
+        client,
+        expected_check_id=requested["checkId"],
+        expected_generation=requested["generation"],
+        expected_runtime_epoch=requested["runtimeEpoch"],
     )
     return _emit_proxy_result(result)
 
@@ -4814,6 +4851,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                     "instance_identity_mismatch",
                     "instance identity changed during an operation",
                 )
+        if args.func is cmd_proxy_status and bool(getattr(args, "check", False)):
+            return int(args.func(args))
         if _command_mutates_instance(args):
             with cli_operation_lock(args):
                 _refresh_instance_under_lock(args)

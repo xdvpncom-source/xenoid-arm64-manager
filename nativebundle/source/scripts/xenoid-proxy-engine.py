@@ -1005,9 +1005,14 @@ def launch(m,o,p,c,g,n):
  raise Error("engine_start_failed")
 def checked_process(m,path,generation,candidate):
  record=read_json(path,"process_identity_mismatch");pid=record.get("pid")
- if not isinstance(pid,int):raise Error("process_identity_mismatch")
- current=identity(m,pid)
- if any(record.get(key)!=value for key,value in current.items()) or record.get("generation")!=generation or record.get("candidate")!=candidate or record.get("supervisor")!="systemd-unit":raise Error("process_identity_mismatch")
+ if isinstance(pid,bool) or not isinstance(pid,int) or pid<=1 or record.get("generation")!=generation or record.get("candidate")!=candidate or record.get("supervisor")!="systemd-unit" or record.get("binarySha256")!=m["engine"]["binarySha256"]:raise Error("process_identity_mismatch")
+ # A recorded process which no longer exists is repairable. A live PID with
+ # another start time, executable or namespace remains an ownership failure.
+ try:current=identity(m,pid)
+ except Error:
+  if not Path(f"/proc/{pid}").exists():raise Error("engine_process_failed")
+  raise
+ if any(record.get(key)!=value for key,value in current.items()):raise Error("process_identity_mismatch")
  return record
 def health(m,child,ports,secret,udp_allowed,ipv6_allowed=True,record=None):
  deadline=time.monotonic()+20
@@ -1024,6 +1029,16 @@ def health(m,child,ports,secret,udp_allowed,ipv6_allowed=True,record=None):
    if not response.returncode:return
   time.sleep(.25)
  raise Error("engine_health_failed")
+def failure_policy_status(m):
+ policy=routing_module().load_proxy_routing_policy().get("failure_policy")
+ if policy is not None:policy=routing_module().normalize_proxy_failure_policy(policy)
+ digest=hashlib.sha256(json.dumps(policy,sort_keys=True,separators=(",",":")).encode()).hexdigest() if policy is not None else ""
+ return {"ok":True,"failurePolicy":policy,"failurePolicyDigest":digest}
+def retry_proxy_policy():
+ policy=routing_module().load_proxy_routing_policy().get("failure_policy")
+ if policy is None:return False
+ routing_module().normalize_proxy_failure_policy(policy)
+ return policy["mode"]=="retry_proxy"
 def outbound_ready(m,controller_port,secret):
  data=("silent\nfail\nmax-time = 8\n"+f'header = "Authorization: Bearer {secret}"\n').encode()
  url=(f"http://127.0.0.1:{controller_port}/proxies/GLOBAL/delay"
@@ -1081,7 +1096,7 @@ def apply(m,o,target="candidate",commit=False,expected_generation=None):
   if o["phase"]!="applied-pending" or not isinstance(o.get("candidate"),dict):raise Error("apply_not_pending")
   meta=o["candidate"];path=Path(meta["path"]);_,tp,dp,cp,secret,udp_allowed,ipv6_allowed=candidate_config(m,path,meta["name"]);pending=checked_process(m,proc_path(m,"pending-process"),meta["generation"],meta["name"])
   # Staging already configured/activated this candidate before the agent's
-  # successful Android probe. Reapplying those rules here would flush the
+  # local structural acceptance (and, in legacy mode, Android probe). Reapplying those rules here would flush the
   # meters and invalidate that proof without changing generation/runtimeEpoch.
   health(m,None,(tp,dp,cp),secret,udp_allowed,ipv6_allowed,{"stateName":"pending-process","generation":pending["generation"],"candidate":pending["candidate"]})
   observed=status(m,o,expected_generation=meta["generation"])
@@ -1098,7 +1113,9 @@ def apply(m,o,target="candidate",commit=False,expected_generation=None):
  apply_stage("topology",topology,m,o);apply_stage("policy",policy,m,o);apply_stage("dataplane",dataplane,m,o)
  configure(m,meta["name"],tproxy_port,dns_port,udp_allowed,ipv6_allowed)
  child=launch(m,o,path,meta["name"],meta["generation"],"pending-process")
- try:health(m,child,(tproxy_port,dns_port,controller_port),secret,udp_allowed,ipv6_allowed);activate(m,meta["name"]);outbound_ready(m,controller_port,secret)
+ try:
+  health(m,child,(tproxy_port,dns_port,controller_port),secret,udp_allowed,ipv6_allowed);activate(m,meta["name"])
+  if not retry_proxy_policy():outbound_ready(m,controller_port,secret)
  except Error:quarantine(m,o);stop(m,"pending-process",child);raise
  o["previous"]={"generation":o["appliedGeneration"],"name":o["activeCandidate"]} if isinstance(o["appliedGeneration"],int) and o["activeCandidate"] in ("a","b") else None;o["phase"]="applied-pending";save_owner(m,o)
 def _iptables_absent(command):
@@ -1250,7 +1267,28 @@ def status(m,o,expected_generation=None):
  wire_generation=generation if structural else o["appliedGeneration"] if o["appliedGeneration"] is not None else m["generation"]
  if expected_generation is not None:wire_generation=max(wire_generation,expected_generation)
  capabilities={f"v{family}{capability}Proxy":False for family in ("4","6") for capability in ("Dns","Tcp","Udp")}
- return {"ok":True,"instanceId":m["instanceId"],"resourceTag":m["resourceTag"],"runtimeEpoch":m["runtimeEpoch"],"generation":wire_generation,"manifestDigest":m["manifestDigest"],"phase":phase,"structuralApplied":structural or offok,"dataPlaneVerified":offok,"capabilities":capabilities,"counters":counters,"selectedNode":"","nodeCount":0}
+ result={"ok":True,"instanceId":m["instanceId"],"resourceTag":m["resourceTag"],"runtimeEpoch":m["runtimeEpoch"],"generation":wire_generation,"manifestDigest":m["manifestDigest"],"phase":phase,"structuralApplied":structural or offok,"dataPlaneVerified":offok,"capabilities":capabilities,"counters":counters,"selectedNode":"","nodeCount":0}
+ failure_policy=routing_module().load_proxy_routing_policy().get("failure_policy")
+ if failure_policy is not None:
+  failure_policy=routing_module().normalize_proxy_failure_policy(failure_policy);result.update(failurePolicy=failure_policy,failurePolicyDigest=hashlib.sha256(json.dumps(failure_policy,sort_keys=True,separators=(",",":")).encode()).hexdigest())
+ return result
+def liveness(m,o,expected_generation=None):
+ # No external request, netfilter walk, sysctl or routing mutation. The full
+ # audit remains mandatory on apply/repair/manual checks and periodic refresh.
+ validate_control();validate_ipc(m)
+ phase=o["phase"];process=None;generation=None;candidate=None;config_path=None
+ if phase=="applied":process=proc_path(m,"process");generation=o["appliedGeneration"];candidate=o["activeCandidate"];config_path=Path(m["paths"]["config"])
+ elif phase=="applied-pending":
+  meta=o.get("candidate")
+  if isinstance(meta,dict):process=proc_path(m,"pending-process");generation=meta["generation"];candidate=meta["name"];config_path=Path(meta["path"])
+ if process is None or not process.exists():raise Error("engine_process_failed")
+ checked_process(m,process,generation,candidate)
+ _,_,_,controller_port,secret,_,_=candidate_config(m,config_path,candidate)
+ data=("silent\nfail\nmax-time = 2\n"+f'header = "Authorization: Bearer {secret}"\n').encode()
+ response=run([*netns_command(m["proxyNamespace"]),tool("curl"),"--config","-",f"http://127.0.0.1:{controller_port}/version"],data=data,check=False)
+ if response.returncode:raise Error("engine_health_failed")
+ checked_process(m,process,generation,candidate)
+ return {"ok":True,"instanceId":m["instanceId"],"resourceTag":m["resourceTag"],"runtimeEpoch":m["runtimeEpoch"],"generation":generation,"manifestDigest":m["manifestDigest"],"phase":"active","structuralApplied":True,"dataPlaneVerified":False,"capabilities":{f"v{family}{capability}Proxy":False for family in ("4","6") for capability in ("Dns","Tcp","Udp")},"counters":{},"selectedNode":"","nodeCount":0}
 def remove_owned_tree(path,uid,gid):
  flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
  try:root_fd=os.open(path,flags);root=os.fstat(root_fd)
@@ -1600,6 +1638,7 @@ def serve(m,listener):
    if method=="writeConfig" and request["body"]=={} and len(fds)==1:write_config(manifest,ownership,sealed(fds[0]),generation);body={}
    elif method=="apply" and isinstance(request["body"],dict) and set(request["body"])=={"target","commit"} and isinstance(request["body"]["commit"],bool):apply(manifest,ownership,request["body"]["target"],request["body"]["commit"],generation);body=status(manifest,ownership,generation)
    elif method=="status" and request["body"]=={} and not fds:body=status(manifest,ownership,generation)
+   elif method=="liveness" and request["body"]=={} and not fds:body=liveness(manifest,ownership,generation)
    elif method=="prepare" and request["body"]=={} and not fds:prepare_runtime(manifest,ownership);body={}
    elif method=="off" and request["body"]=={} and not fds:off(manifest,ownership,generation);body=status(manifest,ownership,generation)
    elif method=="quarantine" and request["body"]=={} and not fds:quarantine(manifest,ownership);body={}
@@ -1661,7 +1700,7 @@ def service_launch(m,o):
   raise
 def parser():
  p=Parser(allow_abbrev=False);s=p.add_subparsers(dest="action",required=True)
- for x in ("check-control","prepare-host","install-control","install-asset","discard-key","prepare","write-config","apply","off","status","quarantine","cleanup","service"):q=s.add_parser(x,allow_abbrev=False);q.add_argument("--manifest",required=True)
+ for x in ("check-control","prepare-host","install-control","install-asset","discard-key","prepare","write-config","apply","off","status","failure-policy","quarantine","cleanup","service"):q=s.add_parser(x,allow_abbrev=False);q.add_argument("--manifest",required=True)
  return p
 def main(argv=None):
  lock_fd=-1
@@ -1678,7 +1717,12 @@ def main(argv=None):
     if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode) or (metadata.st_uid,metadata.st_gid,stat.S_IMODE(metadata.st_mode))!=(0,0,expected_mode) or any(parent.iterdir()):raise Error("ownership_mismatch")
     if arguments.action=="cleanup":parent.rmdir()
    print('{"notPrepared":true,"ok":true}');return 0
-  manifest=load_manifest(arguments.manifest);mkdir(LOCK.parent,0o755);lock_fd=os.open(LOCK,os.O_RDWR|os.O_CREAT|os.O_CLOEXEC|os.O_NOFOLLOW,0o600);fcntl.flock(lock_fd,fcntl.LOCK_EX)
+  manifest=load_manifest(arguments.manifest)
+  if arguments.action=="failure-policy":
+   # Root-owned manifest/runtime validation, then read only: no owner creation,
+   # lock directory, process, route, socket or external request is necessary.
+   live(manifest);print(json.dumps(failure_policy_status(manifest),sort_keys=True,separators=(",",":")));return 0
+  mkdir(LOCK.parent,0o755);lock_fd=os.open(LOCK,os.O_RDWR|os.O_CREAT|os.O_CLOEXEC|os.O_NOFOLLOW,0o600);fcntl.flock(lock_fd,fcntl.LOCK_EX)
   if arguments.action=="cleanup":
    if not owner_path(manifest).exists():
     runtime=RUN/manifest["resourceTag"];state=manifest["_state"]
