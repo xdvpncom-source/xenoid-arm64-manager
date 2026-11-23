@@ -1,6 +1,8 @@
 """Verify Fleet's native proxy bootstrap and private source handling."""
 
 import contextlib
+import argparse
+import ast
 import hashlib
 import io
 import json
@@ -21,6 +23,19 @@ FLEET = runpy.run_path(str(Path(__file__).resolve().parents[1] / "xenoid-fleet")
 PROXY = FLEET["ProxyDefault"]
 GLOBALS = PROXY.load.__func__.__globals__
 SOURCE = b"socks5://fixture:private-material@example.invalid:1080\n"
+
+
+def native_parser():
+    """Run the unchanged production parser with inert command dispatch targets."""
+    path = Path(__file__).resolve().parents[1] / "nativebundle/source/src/xenoid/cli.py"
+    node = next(node for node in ast.parse(path.read_bytes()).body
+                if isinstance(node, ast.FunctionDef) and node.name == "build_parser")
+    scope = {"argparse": argparse, "Path": Path, "__version__": "fixture",
+             "MICROG_PLAY_RELEASE": "fixture", "registered_releases": lambda **kwargs: []}
+    scope.update({node.id: None for node in ast.walk(node)
+                  if isinstance(node, ast.Name) and node.id.startswith("cmd_")})
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), scope)
+    return scope["build_parser"]()
 
 
 def root_owned(info):
@@ -124,10 +139,24 @@ class ProxyDefaultTest(unittest.TestCase):
         self.assertFalse(updated.enabled)
         self.assertEqual(updated.selected_node, "saved-node")
         self.assertIn("--no-initial-proxy-enable", command)
-        self.assertEqual(command[command.index("--initial-proxy-name") + 1], "saved-node")
+        self.assertIn("--initial-proxy-name=saved-node", command)
         self.manifest["enabled"] = 0
         self.write_manifest()
         with self.assertRaises(FLEET["FleetError"]): PROXY.load()
+
+    def test_selected_node_roundtrips_actual_native_parser_including_option_like_names(self):
+        parser = native_parser()
+        for name in ("", "saved-node", "-UK", "--UK"):
+            with self.subTest(name=name):
+                default = PROXY(SOURCE, "endpoint", False, True, False, selected_node=name)
+                parsed = parser.parse_args(default.initial_up_arguments())
+                self.assertEqual(parsed.initial_proxy_name, name)
+                self.assertFalse(parsed.initial_proxy_udp)
+                self.assertTrue(parsed.initial_proxy_ipv6)
+                instance = Instance(selectedNode=name)
+                default.converge(instance, "1")
+                imported = parser.parse_args(instance.commands[-1])
+                self.assertEqual(imported.name or "", name)
 
     def test_plain_up_retries_default_but_respects_configured_proxy(self):
         for configured in (False, True):

@@ -408,7 +408,7 @@ class ProxyDefault:
         arguments = ["up", "--initial-proxy-file", str(INSTALL_ROOT / "proxy-default/source.conf"),
                      "--initial-proxy-sha256", hashlib.sha256(self.source).hexdigest(),
                      "--initial-proxy-kind", self.kind,
-                     "--initial-proxy-name", self.selected_node,
+                     "--initial-proxy-name=" + self.selected_node,
                      "--initial-proxy-enable" if self.enabled else "--no-initial-proxy-enable",
                      "--initial-proxy-udp" if self.udp_allowed else "--no-initial-proxy-udp",
                      "--initial-proxy-ipv6" if self.ipv6_allowed else "--no-initial-proxy-ipv6"]
@@ -430,7 +430,7 @@ class ProxyDefault:
                      "--udp" if self.udp_allowed else "--no-udp",
                      "--ipv6" if self.ipv6_allowed else "--no-ipv6"]
             if self.selected_node:
-                flags.extend(("--name", self.selected_node))
+                flags.append("--name=" + self.selected_node)
             if self.allow_insecure_http:
                 flags.append("--allow-insecure-http")
             verified = self._request(upstream, device_id, ["import", str(source), *flags],
