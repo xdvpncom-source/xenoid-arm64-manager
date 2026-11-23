@@ -53,7 +53,7 @@ class Harness:
   mocks={'time':Clock,'DaemonChannel':Channel,'_desired':self.desired,'_engine':lambda:types.SimpleNamespace(generation=1),'_write_health':lambda *a:None,'_live_status':self.live,'_run_root':self.root,'_quarantine':self.quarantine,'_validate_binary':lambda*a:None,'_compile_source':self.compile,'apply_proxy_routing_config':lambda c,p:c,'load_proxy_routing_policy':lambda:{'failure_policy':copy.deepcopy(self.policy)}if self.mode else{},'_report_staging':lambda*a:None,'_probe_data_plane':self.probe,'_commit_candidate':lambda:self.events.append((self.step,'commit')),'_report_status':self.report,'_report_failure':lambda*a,**kw:self.events.append((self.step,'failure_report')),'_rollback_previous':lambda:self.events.append((self.step,'rollback')),'_sleep_stoppable':lambda*a:None}
   with ExitStack()as stack:
    for name,value in mocks.items():stack.enter_context(patch.object(m,name,value))
-   return m._run({'generation':1,'engine':{'binarySha256':'0'*64},'instanceId':'fixture','runtimeEpoch':'fixture'},pathlib.Path('/never-used'),bytearray(b'a'),bytearray(b'b'),{'generation':1,'structuralApplied':False})
+   return m._run({'generation':1,'engine':{'binarySha256':'0'*64},'instanceId':'fixture','resourceTag':'tag','runtimeEpoch':'fixture','manifestDigest':'0'*64},pathlib.Path('/never-used'),bytearray(b'a'),bytearray(b'b'),{'generation':1,'structuralApplied':False})
  def actions(self,name):return[e for e in self.events if e[1]==name]
 class AgentFlow(unittest.TestCase):
  def test_retry_mode_initial_and_refresh_never_probe_external(self):
@@ -219,5 +219,65 @@ class EngineLiveness(unittest.TestCase):
   with patch.object(e,'read_json',return_value=record),patch.object(e,'identity',side_effect=e.Error('process_identity_mismatch')),patch.object(e.Path,'exists',return_value=True):
    with self.assertRaises(e.Error)as caught:e.checked_process(m,pathlib.Path('/unused'),1,'a')
    self.assertEqual(caught.exception.code,'process_identity_mismatch')
+
+class UnverifiedDiagnosticAudit(unittest.TestCase):
+ def fixture(self):
+  m=load('unverified_diagnostic_fixture_'+str(id(self)),'xenoid-proxy-agent.py')
+  manifest={'instanceId':'fixture','resourceTag':'tag','runtimeEpoch':'e'*64,'manifestDigest':'a'*64,'generation':1}
+  counters={x:5 for x in ('ingress','proxyUplink','egress','ingressBytes','proxyUplinkBytes','egressBytes')}
+  counters.update({cap[:-len('Proxy')]+stage:5 for cap in m.CAPABILITY_KEYS for stage in ('Ingress','Uplink','Egress')})
+  before={**manifest,'phase':'active','structuralApplied':True,'dataPlaneVerified':False,'counters':counters,'capabilities':{k:False for k in m.CAPABILITY_KEYS},'failurePolicy':copy.deepcopy(POLICY),'failurePolicyDigest':hashlib.sha256(m._canonical(POLICY)).hexdigest()}
+  desired={'generation':1,'checkId':2,'source':{'udpAllowed':False,'ipv6Allowed':True}}
+  channel=types.SimpleNamespace(call=lambda*a:{'checkId':2,'capabilities':{k:'Udp'not in k for k in m.CAPABILITY_KEYS},'elapsedMs':1,'errorCode':''})
+  return m,manifest,before,desired,channel
+ def invoke(self,m,manifest,before,desired,channel,after):
+  with patch.object(m,'_live_status',return_value=after)as live:
+   result=m._continuous_diagnostic(channel,desired,manifest,pathlib.Path('/unused'),before,POLICY)
+  return result,live.call_count
+ def test_equal_complete_counters_keep_real_route_but_not_network_proof(self):
+  m,manifest,before,desired,channel=self.fixture();(result,error),calls=self.invoke(m,manifest,before,desired,channel,copy.deepcopy(before))
+  self.assertEqual(calls,2);self.assertEqual(error,'probe_path_unverified');self.assertEqual(result['upstreamState'],'unknown');self.assertFalse(result['dataPlaneVerified']);self.assertTrue(result['structuralApplied'])
+ def test_partially_advancing_complete_set_is_still_truthfully_unverified(self):
+  m,manifest,before,desired,channel=self.fixture();after=copy.deepcopy(before);after['counters']['ingress']+=1
+  (result,error),_=self.invoke(m,manifest,before,desired,channel,after);self.assertEqual(error,'probe_path_unverified');self.assertFalse(result['dataPlaneVerified'])
+ def test_missing_or_decreasing_or_invalid_counters_remain_rejected(self):
+  for kind in ('missing','decreasing','negative','boolean','extra'):
+   with self.subTest(kind=kind):
+    m,manifest,before,desired,channel=self.fixture();after=copy.deepcopy(before)
+    if kind=='missing':after['counters'].pop('v4DnsIngress')
+    elif kind=='decreasing':after['counters']['v4DnsIngress']-=1
+    elif kind=='negative':after['counters']['ingress']=-1
+    elif kind=='boolean':after['counters']['ingress']=True
+    else:after['counters']['foreign']=0
+    with self.assertRaises(m.AgentFailure)as caught:self.invoke(m,manifest,before,desired,channel,after)
+    self.assertEqual(caught.exception.code,'data_plane_unverified')
+ def test_before_counter_set_is_also_required_complete(self):
+  m,manifest,before,desired,channel=self.fixture();after=copy.deepcopy(before);before['counters'].pop('ingressBytes')
+  with self.assertRaises(m.AgentFailure):self.invoke(m,manifest,before,desired,channel,after)
+ def test_epoch_generation_owner_and_manifest_changes_remain_rejected(self):
+  for key in ('runtimeEpoch','generation','instanceId','resourceTag','manifestDigest'):
+   with self.subTest(key=key):
+    m,manifest,before,desired,channel=self.fixture();after=copy.deepcopy(before);after[key]=2 if key=='generation'else'changed'
+    with self.assertRaises(m.AgentFailure):self.invoke(m,manifest,before,desired,channel,after)
+ def test_host_policy_change_during_diagnostic_is_not_accepted(self):
+  m,manifest,before,desired,channel=self.fixture();after=copy.deepcopy(before);after['failurePolicy']=dict(POLICY,retry_delays_seconds=[7]);after['failurePolicyDigest']=hashlib.sha256(m._canonical(after['failurePolicy'])).hexdigest()
+  with self.assertRaises(m.AgentFailure)as caught:self.invoke(m,manifest,before,desired,channel,after)
+  self.assertEqual(caught.exception.code,'failure_policy_mismatch')
+ def test_fresh_structural_failure_is_never_reclassified_as_network_unknown(self):
+  m,manifest,before,desired,channel=self.fixture()
+  with patch.object(m,'_probe_data_plane',side_effect=m.AgentFailure('data_plane_unverified')),patch.object(m,'_live_status',side_effect=m.AgentFailure('process_identity_mismatch')):
+   with self.assertRaises(m.AgentFailure)as caught:m._continuous_diagnostic(channel,desired,manifest,pathlib.Path('/unused'),before,POLICY)
+  self.assertEqual(caught.exception.code,'process_identity_mismatch')
+ def test_run_retains_route_on_manual_path_unverified_without_reapply(self):
+  h=Harness(steps=[(1000,1,False),(1020,2,True),(1040,2,False)]);original=h.live
+  def live(*args,**kw):
+   value=original(*args,**kw);value.update(instanceId='fixture',resourceTag='tag',runtimeEpoch='fixture',manifestDigest='0'*64,failurePolicy=copy.deepcopy(POLICY),failurePolicyDigest=hashlib.sha256(h.m._canonical(POLICY)).hexdigest())
+   value['counters']={key:5 for key in ('ingress','proxyUplink','egress','ingressBytes','proxyUplinkBytes','egressBytes')};value['counters'].update({cap[:-len('Proxy')]+stage:5 for cap in h.m.CAPABILITY_KEYS for stage in ('Ingress','Uplink','Egress')});return value
+  def probe(*args,**kw):h.events.append((h.step,'probe'));raise h.m.AgentFailure('data_plane_unverified')
+  h.live=live;h.probe=probe;h.run();self.assertEqual(len(h.actions('apply')),1);self.assertEqual(len(h.actions('probe')),1);self.assertFalse(h.actions('quarantine'));self.assertFalse(h.actions('rollback'))
+  reports=[(r,e)for _,_,r,e in h.actions('report')if e=='probe_path_unverified'];self.assertEqual(len(reports),1);self.assertEqual(reports[0][0]['upstreamState'],'unknown');self.assertFalse(reports[0][0]['dataPlaneVerified'])
+ def test_actual_fresh_audit_refuses_stopped_structure(self):
+  m,manifest,before,desired,channel=self.fixture();after=copy.deepcopy(before);after['phase']='off'
+  with self.assertRaises(m.AgentFailure):self.invoke(m,manifest,before,desired,channel,after)
 
 if __name__=='__main__':unittest.main()

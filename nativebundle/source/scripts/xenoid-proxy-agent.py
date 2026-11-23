@@ -1601,6 +1601,43 @@ def _continuous_diagnostic(channel, desired, manifest, manifest_path, before, po
     except (ChannelAuthenticationFailure, DesiredStateAdvanced):
         raise
     except AgentFailure as exc:
+        if exc.code == "data_plane_unverified":
+            # An application VPN can carry this diagnostic without advancing
+            # the underlay meters. Re-audit the route without claiming that
+            # the diagnostic proved proxy reachability.
+            after = _live_status(manifest, manifest_path)
+            expected_counters = {
+                "ingress", "proxyUplink", "egress",
+                "ingressBytes", "proxyUplinkBytes", "egressBytes",
+            } | {
+                capability[:-len("Proxy")] + stage
+                for capability in CAPABILITY_KEYS
+                for stage in ("Ingress", "Uplink", "Egress")
+            }
+            digest = hashlib.sha256(_canonical(policy)).hexdigest()
+            for state in (before, after):
+                if (
+                    any(name not in state or name not in manifest or state[name] != manifest[name] for name in (
+                        "instanceId", "resourceTag", "runtimeEpoch", "manifestDigest",
+                    ))
+                    or type(state.get("generation")) is not int
+                    or state.get("generation") != desired["generation"]
+                    or state.get("phase") != "active"
+                    or state.get("structuralApplied") is not True
+                ):
+                    raise AgentFailure("manifest_live_mismatch")
+                if state.get("failurePolicy") != policy or state.get("failurePolicyDigest") != digest:
+                    raise AgentFailure("failure_policy_mismatch")
+                counters = state.get("counters")
+                if (
+                    not isinstance(counters, dict)
+                    or set(counters) != expected_counters
+                    or any(type(value) is not int or value < 0 for value in counters.values())
+                ):
+                    raise AgentFailure("data_plane_unverified")
+            if any(after["counters"][key] < before["counters"][key] for key in expected_counters):
+                raise AgentFailure("data_plane_unverified")
+            return _continuous_live(after, policy), "probe_path_unverified"
         if exc.code not in {"probe_timeout", "probe_failed", "proxy_outbound_unavailable"}:
             raise
         result = _continuous_live(before, policy, upstream="retrying")

@@ -37,12 +37,13 @@
     },
     {
       "before_sha256": [
-        null
+        null,
+        "5715462be3ee1dd6aebe53e7bb59666f60e1b626fab6ece8962a154f6ca79b36"
       ],
-      "bytes": 4376,
+      "bytes": 4437,
       "mode": "0644",
       "path": "daemon/app/src/main/java/dev/xenoid/daemon/ProxyFailurePolicy.java",
-      "sha256": "5715462be3ee1dd6aebe53e7bb59666f60e1b626fab6ece8962a154f6ca79b36"
+      "sha256": "e4c3c39970b0a45e25457f521d81b9a16a1637c0e95a01b068b434bc47ad4cb4"
     },
     {
       "before_sha256": [
@@ -64,12 +65,13 @@
     },
     {
       "before_sha256": [
-        "345a24eaead312e130803e61e93164fa410b93a28ed15d5b913810c10ddf50cd"
+        "345a24eaead312e130803e61e93164fa410b93a28ed15d5b913810c10ddf50cd",
+        "2fdcfebcb49adfe9522992e08499615d1081f95fe55ff70e5829816c4b9660ed"
       ],
-      "bytes": 52887,
+      "bytes": 54043,
       "mode": "0644",
       "path": "daemon/app/src/test/java/dev/xenoid/daemon/ProxyStateStoreTest.java",
-      "sha256": "2fdcfebcb49adfe9522992e08499615d1081f95fe55ff70e5829816c4b9660ed"
+      "sha256": "b2aa36179cb67becdd10b838016bc6ef0de4973780dffb380aa56d1002cac8ea"
     },
     {
       "before_sha256": [
@@ -504,22 +506,24 @@
     },
     {
       "before_sha256": [
-        null
+        null,
+        "bb646f49ab879506655d4dbcb31bb039ef1380d181b14aadb33ce99ad4f4b414"
       ],
-      "bytes": 22474,
+      "bytes": 28510,
       "mode": "0755",
       "path": "scripts/test-proxy-continuity-engine.py",
-      "sha256": "bb646f49ab879506655d4dbcb31bb039ef1380d181b14aadb33ce99ad4f4b414"
+      "sha256": "8fca2c54241d9a4cf06fb12af5dbf09337a0050c8d0f3445c7d6bed86922693c"
     },
     {
       "before_sha256": [
         null,
-        "9751de1b14eabb26b340e133bd0e842e5020364060e6db92c0c0d9cb691e77f6"
+        "9751de1b14eabb26b340e133bd0e842e5020364060e6db92c0c0d9cb691e77f6",
+        "5d0b5df31cd159f646b6b8e481ac97559cace89ea36a52f9e68e00a83e1bd5f4"
       ],
-      "bytes": 19082,
+      "bytes": 19812,
       "mode": "0755",
       "path": "scripts/test-proxy-continuity.py",
-      "sha256": "5d0b5df31cd159f646b6b8e481ac97559cace89ea36a52f9e68e00a83e1bd5f4"
+      "sha256": "d6910ff39f4458987fe4723741202f64a58697c89d3ff38b4e02c75b0692ca32"
     },
     {
       "before_sha256": [
@@ -560,12 +564,13 @@
     {
       "before_sha256": [
         "24d05ead62f1fbfdd9cb91481c5d07fd51ac5468116775d375efacf98331bb5b",
-        "cdac3ca5c1446d814a8d7ed283ace3a0933c4d314156f03e1e06971adeae09f8"
+        "cdac3ca5c1446d814a8d7ed283ace3a0933c4d314156f03e1e06971adeae09f8",
+        "80433bfe6920c29782af958e6626b471167fe9faee54f849f1232fbe7afe0fe4"
       ],
-      "bytes": 96099,
+      "bytes": 98216,
       "mode": "0755",
       "path": "scripts/xenoid-proxy-agent.py",
-      "sha256": "80433bfe6920c29782af958e6626b471167fe9faee54f849f1232fbe7afe0fe4"
+      "sha256": "0ea144e92d22d1fa1f2397b13e01d14bccc68159f35d0bcd195a2140bec6d9eb"
     },
     {
       "before_sha256": [
@@ -647,12 +652,13 @@
     },
     {
       "before_sha256": [
-        "e5468602420b740f900c997dda9cb9d29b9fe4dd03894f2122a5a80e71ca4d6d"
+        "e5468602420b740f900c997dda9cb9d29b9fe4dd03894f2122a5a80e71ca4d6d",
+        "9cd3654fa66527227cdaf1dc8f41630da6188f57e04f284bf34b29c830b5f73f"
       ],
-      "bytes": 65229,
+      "bytes": 65254,
       "mode": "0644",
       "path": "src/xenoid/daemon_client.py",
-      "sha256": "9cd3654fa66527227cdaf1dc8f41630da6188f57e04f284bf34b29c830b5f73f"
+      "sha256": "234fc3412a1ffb145d18df3a35e4429c9bf9537126fbcc55e12e6fcc34a17c80"
     },
     {
       "before_sha256": [

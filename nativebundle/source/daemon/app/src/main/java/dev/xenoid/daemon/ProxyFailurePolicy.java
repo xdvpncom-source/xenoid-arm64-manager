@@ -49,7 +49,8 @@ final class ProxyFailurePolicy {
         String error = report.get("errorCode") instanceof String ? (String) report.get("errorCode") : "";
         return ("unknown".equals(upstream) && !verified && (error.isEmpty()
                     || "source_fetch_denied".equals(error) || "provider_empty".equals(error)
-                    || "worker_unavailable".equals(error) || "compiler_unavailable".equals(error)))
+                    || "worker_unavailable".equals(error) || "compiler_unavailable".equals(error)
+                    || "probe_path_unverified".equals(error)))
                 || ("retrying".equals(upstream) && !verified
                     && ("probe_timeout".equals(error) || "probe_failed".equals(error)
                         || "proxy_outbound_unavailable".equals(error)))

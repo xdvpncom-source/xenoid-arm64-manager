@@ -173,6 +173,22 @@ public final class ProxyStateStoreTest {
     }
 
     @Test
+    public void unprovenManualProbeDoesNotRevokeOwnedRoutingOrClaimInternet() throws Exception {
+        Fixture fixture = configuredFixture(); fixture.store.update(INSTANCE, true, withFailurePolicy());
+        ProxyManager manager = new ProxyManager(fixture.store);
+        String epoch = String.join("", Collections.nCopies(64, "a")); manager.bindRuntime(INSTANCE, epoch);
+        manager.acceptAgentReport(INSTANCE, epoch, continuousReport(manager, ""), 1L);
+        manager.check(Collections.emptyMap());
+        manager.acceptAgentReport(INSTANCE, epoch, continuousReport(manager, "probe_path_unverified"), 2L);
+        assertTrue(manager.healthReady()); assertEquals(false, manager.status().get("quarantined"));
+        Map<?, ?> report = (Map<?, ?>) manager.status().get("report");
+        assertEquals("unknown", report.get("upstreamState")); assertEquals(false, report.get("dataPlaneVerified"));
+        manager.acceptAgentReport(INSTANCE, epoch, continuousReport(manager, "data_plane_unverified"), 3L);
+        assertFalse(manager.healthReady()); assertEquals(true, manager.status().get("quarantined"));
+        manager.close();
+    }
+
+    @Test
     public void reportCannotEnableContinuousModeWithoutOwnedDesiredPolicy() throws Exception {
         Fixture fixture = configuredFixture(); ProxyManager manager = new ProxyManager(fixture.store);
         String epoch = String.join("", Collections.nCopies(64, "a")); manager.bindRuntime(INSTANCE, epoch);

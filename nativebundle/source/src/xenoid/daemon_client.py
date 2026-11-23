@@ -321,7 +321,7 @@ def proxy_routing_ready(status: Any, host: Any = None) -> bool:
         upstream = report.get("upstreamState")
         verified, code = report.get("dataPlaneVerified"), report.get("errorCode", "")
         ready = (report.get("failurePolicy") == "retry_proxy" and report.get("failurePolicyDigest") == _failure_policy_digest(policy)
-                 and ((upstream == "unknown" and verified is False and code in {"", "source_fetch_denied", "provider_empty", "worker_unavailable", "compiler_unavailable"})
+                 and ((upstream == "unknown" and verified is False and code in {"", "source_fetch_denied", "provider_empty", "worker_unavailable", "compiler_unavailable", "probe_path_unverified"})
                       or (upstream == "retrying" and verified is False and code in {"probe_timeout", "probe_failed", "proxy_outbound_unavailable"})
                       or (upstream == "online" and verified is True and code == "")))
     if not ready or host is None:

@@ -36,6 +36,13 @@ class Continuity(unittest.TestCase):
  def test_offline_and_unknown_have_structural_proof_without_fake_online(self):
   for upstream in('unknown','retrying'):
    s=state(upstream);self.assertTrue(proxy_routing_ready(s,host(s)));self.assertFalse(s['report']['dataPlaneVerified'])
+ def test_unproven_manual_probe_keeps_only_current_structurally_valid_route(self):
+  value=state();value['report']['errorCode']='probe_path_unverified'
+  self.assertTrue(proxy_routing_ready(value,host(value)));self.assertFalse(value['report']['dataPlaneVerified'])
+  for key,bad in [('upstreamState','retrying'),('dataPlaneVerified',True),('structuralApplied',False),('errorCode','data_plane_unverified')]:
+   broken=deepcopy(value);broken['report'][key]=bad;self.assertFalse(proxy_routing_ready(broken,host(broken)))
+  broken=host(value);broken['counters'].pop('ingress');self.assertFalse(proxy_routing_ready(value,broken))
+  broken=host(value);broken['counters']['ingress']=0;self.assertFalse(proxy_routing_ready(value,broken))
  def test_route_proof_does_not_wait_for_inflight_manual_diagnostic(self):
   s=state();s['checkId']+=1;self.assertTrue(proxy_routing_ready(s,host(s)))
  def test_wrong_generation_epoch_policy_and_counter_reset_remain_rejected(self):
