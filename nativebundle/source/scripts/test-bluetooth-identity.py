@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Runtime-free native Bluetooth target ownership and cold replay contracts."""
 from copy import deepcopy
+import ast
 import importlib.util
 import json
 import os
@@ -234,6 +235,21 @@ catch(IllegalArgumentException e){System.exit(2);} }}''')
     def test_invalid_input_never_becomes_shell(self):
         for text in ('bad',ADDRESS+';id',ADDRESS+'\nBAD'):
             r=self.invoke(text);self.assertEqual(r.returncode,2);self.assertEqual(r.stdout,'')
+
+    def test_publisher_uses_the_helper_deployed_by_bootstrap_and_cold_image(self):
+        tree=ast.parse((ROOT/'src/xenoid/backend.py').read_text())
+        assignment=next(node for node in tree.body if isinstance(node,ast.Assign)
+                        and any(isinstance(target,ast.Name)and target.id=='_CONVERGENCE_REMOTE_ARTIFACTS'
+                                for target in node.targets))
+        index=next(i for i,key in enumerate(assignment.value.keys)
+                   if isinstance(key,ast.Constant)and key.value=='profile')
+        source,destination,mode=ast.literal_eval(assignment.value.values[index])
+        self.assertEqual((source,mode),('native/xenoid-profile/xenoid-profile',0o755))
+        generator=(ROOT/'profiles/runtime-v1/scripts/make-runtime-context.sh').read_text()
+        self.assertIn('COPY payload/xenoid-profile-helper '+destination+'\n',generator)
+        r=self.invoke(ADDRESS);self.assertEqual(r.returncode,0)
+        self.assertIn(destination+' set-bluetooth-address ',r.stdout)
+        self.assertNotIn('/system/bin/xenoid-profile-helper',r.stdout)
 
 
 if __name__=='__main__':unittest.main()

@@ -10,13 +10,13 @@
     "sha256": "d611d1491339591e068f2cee43caf89c17517c96124568aa8a7068e4f1c6a4f2",
     "source_patch_sha256": "7c2ed6b3fdcfbebcca47bd5b5d9c31e2c3506a9716c32cf8c5348295b5398cac"
   },
-  "bluetooth_identity_tests_passed": 19,
+  "bluetooth_identity_tests_passed": 20,
   "canonical_cold_profile_directory_mode": "0700",
   "files": {
     "apply.py": "256b74a271241b407425d8e44547c363881d13125709dc4ef05e7cb2caa8e305",
     "artifacts.json": "3ec779fa7c96a3fcb65dcde685884d310b4849c1a3913c4aea6da20c3e99954b",
     "install_artifacts.py": "f22c34f69f2c79539139156d452acdeea4857195961d0484ddd906b1f72bb380",
-    "manifest.json": "00fcb145aaab046552ab2ebf49f6c453743be8765e12b23df25d543dd5eeabd0"
+    "manifest.json": "6d4a28aed90f5ad8420ce6258fa157028077fa6fe10f5a50ced6a5d1fe12c1c6"
   },
   "fresh_runtime_accepted": false,
   "loop_direct_io_fixture_passed": true,

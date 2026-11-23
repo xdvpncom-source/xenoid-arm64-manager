@@ -19,7 +19,7 @@ final class BluetoothIdentity {
         // All interpolated bytes are constrained to uppercase hex and colons.
         // The sidecar is published first: an interrupted setter must retain
         // this exact transaction target for reboot and idempotent replay.
-        return "set -eu; setprop vendor.bt.xenoid_address_ready 0; /system/bin/xenoid-profile-helper set-bluetooth-address '" + address + "'; "
+        return "set -eu; setprop vendor.bt.xenoid_address_ready 0; /data/local/tmp/xenoid-profile-helper set-bluetooth-address '" + address + "'; "
                 + "setprop persist.vendor.bt.rootcanal_mac_address '" + address + "'; "
                 + "setprop vendor.bt.rootcanal_mac_address '" + address + "'; "
                 + "test \"$(getprop persist.vendor.bt.rootcanal_mac_address)\" = '" + address + "'; "

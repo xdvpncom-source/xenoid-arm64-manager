@@ -8,12 +8,13 @@
     {
       "before_sha256": [
         null,
-        "f78aa0e6ec25fc6d41d55b990fb41a3ff0c7d6a86d9767695938e035e131fd79"
+        "f78aa0e6ec25fc6d41d55b990fb41a3ff0c7d6a86d9767695938e035e131fd79",
+        "2ea573360345ea257658bba72a5b32ebb249004af329b180de9d2c52bd2fccc5"
       ],
-      "bytes": 1576,
+      "bytes": 1580,
       "mode": "0644",
       "path": "daemon/app/src/main/java/dev/xenoid/daemon/BluetoothIdentity.java",
-      "sha256": "2ea573360345ea257658bba72a5b32ebb249004af329b180de9d2c52bd2fccc5"
+      "sha256": "6f69289eb3fa755e21f6f6c47475b016137887063b41b3ad2002ca42f10ea441"
     },
     {
       "before_sha256": [
@@ -317,12 +318,13 @@
       "before_sha256": [
         null,
         "73825f6c474623477b991681127e3ad5f873296bbeafc9686d5b6673d9cfec2e",
-        "09c6d4950e59d12bdd390c46a3a79712c61aabe88a1f661269ed85e894b9a72a"
+        "09c6d4950e59d12bdd390c46a3a79712c61aabe88a1f661269ed85e894b9a72a",
+        "b4479f300f7861c9e932fd9ff91c0d62ae3e147afc6f09e7f4dd3dbb91e7b354"
       ],
-      "bytes": 13802,
+      "bytes": 14908,
       "mode": "0755",
       "path": "scripts/test-bluetooth-identity.py",
-      "sha256": "b4479f300f7861c9e932fd9ff91c0d62ae3e147afc6f09e7f4dd3dbb91e7b354"
+      "sha256": "4f81284b6edfccce82cfa1126941483d4773f174962d8395b2cf915cef7a7a23"
     },
     {
       "before_sha256": [
