@@ -672,10 +672,24 @@ def native_touch_point(dump, profile, x, y):
         x, y = (logical_width - 1) // 2, (logical_height - 1) // 2
     if not 0 <= x < logical_width or not 0 <= y < logical_height:
         raise ValueError("Touch coordinates are outside the current logical display")
-    matrix = match(r"^        transform[^\n]*\n\s*(" + number + r")\s+(" + number + r")\s+(" + number +
-                   r")\n\s*(" + number + r")\s+(" + number + r")\s+(" + number + r")\n\s*(" + number +
-                   r")\s+(" + number + r")\s+(" + number + r")", section, "dispatcher matrix is missing")
-    a, b, tx, c, d, ty, u, v, w = map(float, matrix.groups())
+    transforms = list(re.finditer(r"^        transform[^\n]*$", section, re.M))
+    if len(transforms) != 1:
+        missing("dispatcher transform is missing or ambiguous")
+    transform = transforms[0]
+    header, tail = transform[0], section[transform.end():]
+    if header == "        transform (ROT_0) (IDENTITY)" and not tail.strip():
+        # Android omits numeric rows only for the identity transform. This is
+        # the same coordinate mapping, not an alternative input transport.
+        a, b, tx, c, d, ty, u, v, w = (1, 0, 0, 0, 1, 0, 0, 0, 1)
+    else:
+        if re.fullmatch(r"        transform \(ROT_(?:0|90|180|270)\) \((?:IDENTITY|(?:SCALE|TRANSLATE|ROTATE)(?: (?:SCALE|TRANSLATE|ROTATE))* ?)\)", header) is None:
+            missing("dispatcher transform format is unsupported")
+        matrix = re.fullmatch(r"\s*\n\s*(" + number + r")\s+(" + number + r")\s+(" + number +
+                              r")\n\s*(" + number + r")\s+(" + number + r")\s+(" + number + r")\n\s*(" + number +
+                              r")\s+(" + number + r")\s+(" + number + r")\s*", tail)
+        if matrix is None:
+            missing("dispatcher matrix is missing or ambiguous")
+        a, b, tx, c, d, ty, u, v, w = map(float, matrix.groups())
     if not all(math.isfinite(value) for value in (a, b, tx, c, d, ty, u, v, w)) or (u, v, w) != (0, 0, 1):
         missing("unsupported dispatcher projection")
     px, py = invert(a, b, tx, c, d, ty, x, y)
