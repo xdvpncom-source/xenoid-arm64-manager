@@ -55,6 +55,8 @@ class QADispatchTest(unittest.TestCase):
             events.append("qa")
             raise FLEET["FleetError"]("pending")
         class Proxy:
+            def initial_up_arguments(self):
+                return ["up", "--initial-proxy-file", "/fixture/private-source.conf"]
             def converge(self, *_args):
                 events.append("proxy")
         class Baseline:

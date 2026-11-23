@@ -22,7 +22,7 @@ from typing import Iterator
 
 
 NAME_PREFIX = "phone-"
-VERSION = "v0.1.29"
+VERSION = "v0.1.30"
 FRESH_CONFIG = Path("defaults/bluejay-linux-arm.json")
 BLUEJAY_GOOGLE_RELEASE = "microg-0.3.15.250932-phonesky-30.4.17-gsfproxy-0.1.0-bluejay"
 DEVICE_ID = re.compile(r"[1-9][0-9]{0,25}")
@@ -357,6 +357,8 @@ class ProxyDefault:
     udp_allowed: bool
     ipv6_allowed: bool
     allow_insecure_http: bool
+    selected_node: str = ""
+    enabled: bool = True
 
     @classmethod
     def load(cls) -> ProxyDefault | None:
@@ -377,11 +379,16 @@ class ProxyDefault:
         except (UnicodeError, ValueError):
             raise FleetError("Proxy default manifest is invalid JSON") from None
         flags = ("udpAllowed", "ipv6Allowed", "allowInsecureHttp")
-        if (not isinstance(manifest, dict) or set(manifest) != {"schema", "kind", "sha256", *flags}
+        required = {"schema", "kind", "sha256", *flags}
+        if (not isinstance(manifest, dict) or not required <= set(manifest)
+                or not set(manifest) <= required | {"selectedNode", "enabled"}
                 or manifest["schema"] != PROXY_DEFAULT_SCHEMA
                 or manifest["kind"] not in ("endpoint", "uri_list", "clash", "subscription")
                 or not isinstance(manifest["sha256"], str) or not ONE_SHA256.fullmatch(manifest["sha256"])
-                or not all(type(manifest[flag]) is bool for flag in flags)):
+                or not all(type(manifest[flag]) is bool for flag in flags)
+                or type(manifest.get("enabled", True)) is not bool
+                or not isinstance(manifest.get("selectedNode", ""), str)
+                or len(manifest.get("selectedNode", "")) > 128 or "\0" in manifest.get("selectedNode", "")):
             raise FleetError("Proxy default manifest does not match the expected schema")
         with private_baseline_file(directory / "source.conf", "Proxy default") as stream:
             source = stream.read(PROXY_SOURCE_LIMIT + 1)
@@ -393,7 +400,21 @@ class ProxyDefault:
             raise FleetError("Proxy default source is invalid UTF-8") from None
         if hashlib.sha256(source).hexdigest() != manifest["sha256"]:
             raise FleetError("Proxy default source SHA-256 mismatch")
-        return cls(source, manifest["kind"], *(manifest[flag] for flag in flags))
+        return cls(source, manifest["kind"], *(manifest[flag] for flag in flags),
+                   selected_node=manifest.get("selectedNode", ""), enabled=manifest.get("enabled", True))
+
+    def initial_up_arguments(self) -> list[str]:
+        """The durable native intent keeps first-boot DROP until authenticated import."""
+        arguments = ["up", "--initial-proxy-file", str(INSTALL_ROOT / "proxy-default/source.conf"),
+                     "--initial-proxy-sha256", hashlib.sha256(self.source).hexdigest(),
+                     "--initial-proxy-kind", self.kind,
+                     "--initial-proxy-name", self.selected_node,
+                     "--initial-proxy-enable" if self.enabled else "--no-initial-proxy-enable",
+                     "--initial-proxy-udp" if self.udp_allowed else "--no-initial-proxy-udp",
+                     "--initial-proxy-ipv6" if self.ipv6_allowed else "--no-initial-proxy-ipv6"]
+        if self.allow_insecure_http:
+            arguments.append("--initial-proxy-allow-insecure-http")
+        return arguments
 
     def converge(self, upstream: Upstream, device_id: str) -> None:
         status = self._request(upstream, device_id, ["status"], "could not read native proxy status")
@@ -405,15 +426,21 @@ class ProxyDefault:
             source = Path(staging) / "source.conf"
             with open(source, "xb", opener=private_open) as stream:
                 stream.write(self.source)
-            flags = ["--kind", self.kind, "--enable",
+            flags = ["--kind", self.kind, "--enable" if self.enabled else "--no-enable",
                      "--udp" if self.udp_allowed else "--no-udp",
                      "--ipv6" if self.ipv6_allowed else "--no-ipv6"]
+            if self.selected_node:
+                flags.extend(("--name", self.selected_node))
             if self.allow_insecure_http:
                 flags.append("--allow-insecure-http")
             verified = self._request(upstream, device_id, ["import", str(source), *flags],
                                      "native proxy default import failed")
-        proof = verified.get("checkCompleted") is True
-        if verified.get("failurePolicy") is not None:
+        proof = verified.get("checkCompleted") is True if self.enabled else (
+            verified.get("phase") == "off" and verified.get("agentAbsent") is True
+            and verified.get("routingAbsent") is True and verified.get("structuralApplied") is True)
+        if not self.enabled:
+            verified = self._request(upstream, device_id, ["status"], "could not verify the explicitly disabled proxy default")
+        if self.enabled and verified.get("failurePolicy") is not None:
             # Native convergence already proved the owned host route. Reuse its
             # desired-policy proof here without allocating an internet check.
             previous_path = list(sys.path)
@@ -425,9 +452,9 @@ class ProxyDefault:
                 proof = False
             finally:
                 sys.path[:] = previous_path
-        if (verified.get("configured") is not True or verified.get("enabled") is not True
+        if (verified.get("configured") is not True or verified.get("enabled") is not self.enabled
                 or verified.get("quarantined") is not False or not proof
-                or verified.get("sourceKind") != self.kind
+                or verified.get("sourceKind") != self.kind or verified.get("selectedNode", "") != self.selected_node
                 or verified.get("udpAllowed") is not self.udp_allowed
                 or verified.get("ipv6Allowed") is not self.ipv6_allowed
                 or verified.get("allowInsecureHttp") is not self.allow_insecure_http):
@@ -697,7 +724,8 @@ def create_device(upstream: Upstream, device_id: str, args: argparse.Namespace,
             upstream.require(device_id, ["config", "set", "--image", runtime.image])
         elif not getattr(args, "if_missing", False):
             upstream.recreate(device_id)
-    upstream.require(device_id, ["up"])
+    up_arguments = proxy_default.initial_up_arguments() if row is None and proxy_default is not None else ["up"]
+    upstream.require(device_id, up_arguments)
     if profile is not None:
         upstream.require(device_id, ["device", "apply", profile, "--instance-identity"])
     if proxy_default is not None:

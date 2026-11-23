@@ -95,12 +95,16 @@ class ProxyDefaultTest(unittest.TestCase):
         self.file.write_text(json.dumps(self.manifest))
         self.file.chmod(0o600)
 
-    def test_create_uses_native_import_after_up_and_profile(self):
+    def test_create_passes_pinned_initial_source_into_up_before_profile(self):
         instance = Instance()
-        FLEET["create_device"](instance, "1", Namespace(no_google_services=False), "/profile.json", None, PROXY.load())
+        default = PROXY.load()
+        FLEET["create_device"](instance, "1", Namespace(no_google_services=False), "/profile.json", None, default)
         self.assertEqual(instance.commands[1:4], [
-            ["up"], ["device", "apply", "/profile.json", "--instance-identity"], ["proxy", "status"],
+            default.initial_up_arguments(), ["device", "apply", "/profile.json", "--instance-identity"], ["proxy", "status"],
         ])
+        self.assertIn("--no-initial-proxy-udp", instance.commands[1])
+        self.assertIn(hashlib.sha256(SOURCE).hexdigest(), instance.commands[1])
+        self.assertNotIn(SOURCE.decode().strip(), instance.commands[1])
         self.assertEqual(instance.commands[-1], [
             "proxy", "import", str(instance.import_path), "--kind", "endpoint", "--enable", "--no-udp", "--ipv6",
         ])
@@ -108,6 +112,22 @@ class ProxyDefaultTest(unittest.TestCase):
         self.assertEqual(instance.import_bytes, SOURCE)
         self.assertFalse(instance.import_path.exists())
         self.assertNotIn("private-material", repr(PROXY.load()))
+
+    def test_optional_default_flags_keep_legacy_manifest_valid_and_capture_explicit_choices(self):
+        original = PROXY.load()
+        self.assertTrue(original.enabled)
+        self.assertEqual(original.selected_node, "")
+        self.manifest.update(selectedNode="saved-node", enabled=False)
+        self.write_manifest()
+        updated = PROXY.load()
+        command = updated.initial_up_arguments()
+        self.assertFalse(updated.enabled)
+        self.assertEqual(updated.selected_node, "saved-node")
+        self.assertIn("--no-initial-proxy-enable", command)
+        self.assertEqual(command[command.index("--initial-proxy-name") + 1], "saved-node")
+        self.manifest["enabled"] = 0
+        self.write_manifest()
+        with self.assertRaises(FLEET["FleetError"]): PROXY.load()
 
     def test_plain_up_retries_default_but_respects_configured_proxy(self):
         for configured in (False, True):

@@ -508,6 +508,15 @@
     },
     {
       "before_sha256": [
+        null
+      ],
+      "bytes": 13551,
+      "mode": "0755",
+      "path": "scripts/test-proxy-bootstrap.py",
+      "sha256": "1fa09a22d6511c6de3c16e2904e8fd981c05890dc7f02975b174c45106b039a2"
+    },
+    {
+      "before_sha256": [
         null,
         "bb646f49ab879506655d4dbcb31bb039ef1380d181b14aadb33ce99ad4f4b414"
       ],
@@ -616,22 +625,24 @@
         "c42b8f7cc122e6c597a44fd0cd1969d5e2b5f728e0366f7f0aa80387dd5b0ebc",
         "bde5de99741fcb1c0d40f683bfd55039960badd8fb310a78cdb5e1c73866c7ee",
         "991cfc59aa976065aee21b2ebb05602e8b31f8e01f277c1b03220bfa35648452",
-        "61da636815884a47da938e201176cb440e38d7971d412157b829aae6c6128327"
+        "61da636815884a47da938e201176cb440e38d7971d412157b829aae6c6128327",
+        "3de8128936bccd8dca4a0bbdc68264ccf7af72ff4da818a4ccb1682a7dfa918a"
       ],
-      "bytes": 592635,
+      "bytes": 602326,
       "mode": "0644",
       "path": "src/xenoid/backend.py",
-      "sha256": "3de8128936bccd8dca4a0bbdc68264ccf7af72ff4da818a4ccb1682a7dfa918a"
+      "sha256": "d796b9c3e527352d128c59a7c5e2f28eb97fcfa8914d008cf67e210d68ede0af"
     },
     {
       "before_sha256": [
         "3a3918eccce48cfdbbb1b075d0759227bed7d56b0ce83b928d7272974a16976f",
-        "f95001f6548551d9de8fe537b2349fc80c2d5e293262d380d03dbed4371bf5a7"
+        "f95001f6548551d9de8fe537b2349fc80c2d5e293262d380d03dbed4371bf5a7",
+        "2200f044b0ca27cf123ac024f3bbecddb794e42ee723ef868045be0c448604ef"
       ],
-      "bytes": 179014,
+      "bytes": 181858,
       "mode": "0644",
       "path": "src/xenoid/cli.py",
-      "sha256": "2200f044b0ca27cf123ac024f3bbecddb794e42ee723ef868045be0c448604ef"
+      "sha256": "9947933fa838454592e3621015ec3d22eed24a8aa7d2ee487888c4232bd245d5"
     },
     {
       "before_sha256": [
@@ -651,6 +662,15 @@
       "mode": "0644",
       "path": "src/xenoid/config.py",
       "sha256": "77d9fe801943151c2bb467de5301bba12a82e05dcf93df661a129f6cc134f1e6"
+    },
+    {
+      "before_sha256": [
+        "e5c0879ccfc96807fa95b54719d6c7e6255bbcfe6c3c88d6fa52016b8dfcf6ef"
+      ],
+      "bytes": 143421,
+      "mode": "0644",
+      "path": "src/xenoid/convergence.py",
+      "sha256": "fe72ddb67164c4e96d39dde697436b10394570072cb8414915aa545715bda0f7"
     },
     {
       "before_sha256": [
@@ -701,6 +721,15 @@
       "mode": "0644",
       "path": "src/xenoid/protection.py",
       "sha256": "8b45354d2df8edbda24922437a0a7444b1b5ea49537eb48200731165e99c4ffc"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 7114,
+      "mode": "0644",
+      "path": "src/xenoid/proxy_bootstrap.py",
+      "sha256": "99f1401641759e6d267765b79831342e6de07a3e684a777d5202f43fde97b911"
     },
     {
       "before_sha256": [

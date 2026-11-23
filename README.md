@@ -7,7 +7,7 @@ Install Xenoid on an ARM64 Ubuntu server and manage headless Android 13 instance
 Use an **ARM64 (aarch64) server running Ubuntu 24.04**, such as a Hetzner CAX server. The installer requires root access, outbound HTTPS, and free disk space for the build toolchain, container images, and Android data. Install and management commands use the same operator account and Xenoid registry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.29/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.30/install.sh | sudo -H bash -s -- --accept-android-licenses
 ```
 
 The `--accept-android-licenses` flag accepts the Android SDK licenses for the pinned build tools from Google. The installer prepares the host and creates fresh Pixel 6a devices up to the host’s reserved capacity. Allow tens of minutes for the first build on a small server. The CLI is installed as `/usr/local/bin/xenoid-fleet` and the managed checkout lives under `/opt/xenoid-fleet/upstream`. Rerunning the installer reuses the toolchain, creates missing IDs and converges existing matching Pixel 6a instances. An incompatible existing profile is rejected; deletion is a separate explicit operation.
@@ -25,7 +25,7 @@ sudo -H xenoid-fleet run 1 -- adb shell getprop sys.boot_completed
 Use `--install-only` to prepare the host before creating the first device or upgrade an existing installation without issuing a device start. Upgrades also refresh enabled proxies on already-running devices when their native control/process revision has not been verified.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.29/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.30/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
 ```
 
 ## Devices
@@ -57,9 +57,9 @@ For Chrome builds that require size seals on Android shared memory, use schema `
 
 ### Optional proxy default
 
-Create the root-owned directory `/opt/xenoid-fleet/proxy-default` with mode `0700`. Use the native `proxy export --out` command on a configured instance to create `source.conf`. Keep that file and `manifest.json` root-owned with mode `0600`. The manifest contains `schema` set to `dev.xenoid.fleet.proxy-default/v1`, the exported `kind`, the hex `sha256` of `source.conf`, and the Boolean policy fields `udpAllowed`, `ipv6Allowed`, and `allowInsecureHttp`.
+Create the root-owned directory `/opt/xenoid-fleet/proxy-default` with mode `0700`. Use the native `proxy export --out` command on a configured instance to create `source.conf`. Keep that file and `manifest.json` root-owned with mode `0600`. The manifest contains `schema` set to `dev.xenoid.fleet.proxy-default/v1`, the exported `kind`, the hex `sha256` of `source.conf`, and the Boolean policy fields `udpAllowed`, `ipv6Allowed`, and `allowInsecureHttp`. Optional `selectedNode` and `enabled` fields default to an empty selection and `true`; older manifests remain valid.
 
-After startup, Fleet imports this source through the native Xenoid CLI on unconfigured devices. Fresh defaults select the versioned `retry_proxy` policy: startup requires a valid owned transparent route, while internet reachability is an optional diagnostic. Existing saved policies without that opt-in retain legacy strict data-plane checks. Create, recreate, and plain `up` keep the configured source, node and UDP/IPv6 flags through native reconciliation.
+On fresh creation with this default, Fleet binds a credential-free initial-proxy intent to the new instance and data UUID before native `up`. The existing startup DROP remains until the authenticated source import and native routing proof complete. The journal records the source file SHA and all flags, selected node and retry policy, so an interrupted import resumes from the same intent; a missing or changed file keeps the boot fence in place. A completed initial intent does not override a later administrator OFF action. Explicit `enabled=false` permits the normal verified OFF path; an absent default preserves the generic no-proxy behavior. Existing configured devices keep their normal reconciliation path. Fresh defaults select the versioned `retry_proxy` policy: startup requires a valid owned transparent route, while internet reachability is an optional diagnostic. Existing saved policies without that opt-in retain legacy strict data-plane checks. Create, recreate, and plain `up` keep the configured source, node and UDP/IPv6 flags through native reconciliation.
 
 Native acceptance reads current host ownership, process, rules, generation and runtime epoch. A continuity report must also match the daemon-owned encrypted failure policy digest. Structural routing readiness does not claim internet availability; only an actual explicit diagnostic can set `dataPlaneVerified=true`.
 
@@ -231,8 +231,8 @@ devices, so changing ad selectors or timing does not require a Fleet upgrade.
 `qa/vpn-cycle.py` is the release-time reference protected by the installer
 manifest. The current panel workflow is also mirrored in
 [`examples/current-vpn-cycle.py`](examples/current-vpn-cycle.py) and exported as
-the [`vpn-cycle-v19.py` release asset](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.29/vpn-cycle-v19.py)
-with a [SHA-256 sidecar](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.29/vpn-cycle-v19.py.sha256).
+the [`vpn-cycle-v19.py` release asset](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.30/vpn-cycle-v19.py)
+with a [SHA-256 sidecar](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.30/vpn-cycle-v19.py.sha256).
 The historical v0.1.17 `vpn-cycle-v14.py`, v0.1.16 `vpn-cycle-v14.py`, v0.1.15 `vpn-cycle-v13.py`, v0.1.14 `vpn-cycle-v13.py`, v0.1.13 `vpn-cycle-v12.py` and v0.1.12 `vpn-cycle-v11.py` assets remain unchanged. Updating the
 editable workflow never rewrites an existing release tag or its installer pins.
 

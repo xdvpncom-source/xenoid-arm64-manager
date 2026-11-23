@@ -16,9 +16,23 @@
     "apply.py": "256b74a271241b407425d8e44547c363881d13125709dc4ef05e7cb2caa8e305",
     "artifacts.json": "3ec779fa7c96a3fcb65dcde685884d310b4849c1a3913c4aea6da20c3e99954b",
     "install_artifacts.py": "f22c34f69f2c79539139156d452acdeea4857195961d0484ddd906b1f72bb380",
-    "manifest.json": "121685dcb51477a66ee9a165a941fb658127d3242ff251da69d5fb34c468aef1"
+    "manifest.json": "fa99c8bd9b0c74b26118b25589599b2fdaf479e7c2066bfd21da0eda98639923"
   },
   "fresh_runtime_accepted": false,
+  "initial_proxy_bootstrap": {
+    "compiled_artifact_sources_changed": false,
+    "credential_free_intent": true,
+    "daemon_artifact_changed": false,
+    "fresh_boot_packet_gate_passed": false,
+    "host_only": true,
+    "image_context_inputs_changed": false,
+    "integration_tests_passed": 10,
+    "journal_executor_tests_passed": 11,
+    "later_administrator_off_preserved": true,
+    "schema": "dev.xenoid.proxy-bootstrap/v1",
+    "source_change_fails_closed": true,
+    "stock_convergence_tests_passed": 41
+  },
   "loop_direct_io_fixture_passed": true,
   "loop_direct_io_mock_cases": 7,
   "native_focused_tests": 98,
@@ -45,6 +59,6 @@
     "0700",
     "0755"
   ],
-  "source_files": 76,
+  "source_files": 79,
   "unit_tests_passed": 16
 }

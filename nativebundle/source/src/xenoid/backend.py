@@ -3759,6 +3759,163 @@ cat >/dev/null
             return prepared
         return self._proxy_root_json("failure-policy")
 
+    def _proxy_bootstrap_binding(self, state: Mapping[str, Any], intent: Mapping[str, Any]) -> None:
+        """Prove the same fresh final runtime before any bootstrap publication."""
+        from .proxy_bootstrap import ProxyBootstrapError
+
+        def need(ok: bool) -> None:
+            if not ok:
+                raise ProxyBootstrapError("proxy_bootstrap_binding_conflict")
+
+        need(state.get("instanceId") == intent["instanceId"] == self.context.instance_id
+             and state.get("oldContainerId") is None)
+        storage = StorageStateStore(self.context, self.lease).load()
+        need(isinstance(storage, Mapping) and storage.get("state") == "committed"
+             and storage.get("source") == "fresh" and storage.get("instanceId") == self.context.instance_id
+             and storage.get("resourceTag") == self.context.resource_tag
+             and storage.get("filesystemUuid") == intent["dataUuid"])
+        owned, _ = self._owned_container_record(timeout=8)
+        need(isinstance(owned, Mapping) and self._container_has_lease_owner(owned)
+             and owned.get("Id") == state.get("newContainerId")
+             and owned.get("State", {}).get("Running") is True)
+        labels = owned.get("Config", {}).get("Labels", {})
+        need(labels.get(_RUNTIME_INPUT_LABEL) == state.get("selectedImageInputSha256")
+             and labels.get(_RUNTIME_BOOT_INPUT_LABEL) == state.get("selectedImageBootInputSha256"))
+        network, _ = self._inspect_docker_object("network", self.lease.network_name, timeout=8)
+        volume, _ = self._inspect_docker_object("volume", self.lease.volume_name, timeout=8)
+        need(isinstance(network, dict) and self._network_matches_lease(network)
+             and isinstance(volume, dict) and self._volume_matches_lease(volume))
+
+    def _proxy_bootstrap_export_matches(
+        self, client: Any, status: Mapping[str, Any], intent: Mapping[str, Any]
+    ) -> bool:
+        """Inspect the authenticated admin export without retaining source text."""
+        exported = client.proxy_export()
+        source = exported.get("source") if isinstance(exported, dict) else None
+        try:
+            bootstrap = client.bootstrap_status()
+            return bool(
+                isinstance(source, dict) and exported.get("ok") is True
+                and exported.get("instanceId") == status.get("instanceId") == self.context.instance_id
+                and exported.get("generation") == status.get("generation")
+                and exported.get("enabled") is status.get("enabled") is intent["enabled"]
+                and status.get("configured") is True and status.get("stateReadable") is True
+                and isinstance(bootstrap, dict) and isinstance(status.get("runtimeEpoch"), str)
+                and status.get("runtimeEpoch") and bootstrap.get("runtimeEpoch") == status.get("runtimeEpoch")
+                and isinstance(source.get("value"), str)
+                and hashlib.sha256(source["value"].encode("utf-8")).hexdigest() == intent["sourceSha256"]
+                and source.get("kind") == intent["kind"] and source.get("selectedNode") == intent["selectedNode"]
+                and all(source.get(key) is intent[key] for key in ("udpAllowed", "ipv6Allowed", "allowInsecureHttp"))
+                and source.get("failurePolicy") == status.get("failurePolicy") == intent["failurePolicy"]
+            )
+        finally:
+            if isinstance(source, dict):
+                source.clear()
+            if isinstance(exported, dict):
+                exported.clear()
+
+    def recover_proxy_bootstrap_checkpoint(
+        self, journal_state: Mapping[str, Any], observation: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Recover only a proven initial desired-state commit, never route readiness."""
+        from .convergence import ConvergenceJournal
+        from .proxy_bootstrap import ProxyBootstrapError, read_source, validate_intent
+
+        try:
+            raw = journal_state.get("proxyBootstrap")
+            if raw is None:
+                return {"ok": True, "recovered": False}
+            intent = validate_intent(raw)
+            if intent["phase"] == "applied":
+                return {"ok": True, "recovered": False}
+            generation = observation.get("components", {}).get("proxy", {}).get("generation")
+            if generation is None or generation == journal_state.get("proxyGeneration"):
+                return {"ok": True, "recovered": False}
+            self._proxy_bootstrap_binding(journal_state, intent)
+            read_source(intent)
+            expected = journal_state.get("proxyGeneration")
+            expected = 0 if expected is None else expected
+            if type(generation) is not int or generation != expected + 1:
+                raise ProxyBootstrapError("proxy_bootstrap_generation_conflict")
+            client = self.daemon_client()
+            status = client.proxy_status()
+            if status.get("generation") != generation or not self._proxy_bootstrap_export_matches(client, status, intent):
+                raise ProxyBootstrapError("proxy_bootstrap_source_conflict")
+            journal = ConvergenceJournal.for_manager(self)
+            if journal.load() != dict(journal_state):
+                raise ProxyBootstrapError("proxy_bootstrap_journal_conflict")
+            journal.checkpoint_proxy_bootstrap(generation)
+            return {"ok": True, "recovered": True}
+        except ProxyBootstrapError as exc:
+            self.proxy_quarantine()
+            return self._proxy_failure(exc.code)
+        except Exception:
+            self.proxy_quarantine()
+            return self._proxy_failure("proxy_bootstrap_checkpoint_failed")
+
+    def _reconcile_initial_proxy_bootstrap(self, client: Any, controller: Any) -> Optional[dict[str, Any]]:
+        """Import the authorized initial source while the startup DROP remains."""
+        from .convergence import ConvergenceJournal
+        from .daemon_client import proxy_routing_ready
+        from .proxy_bootstrap import ProxyBootstrapError, read_source, validate_intent
+
+        journal = ConvergenceJournal.for_manager(self)
+        state = journal.load()
+        if not isinstance(state, dict) or state.get("proxyBootstrap") is None:
+            return None
+        intent = validate_intent(state["proxyBootstrap"])
+        if intent["phase"] == "applied":
+            # The one initial publication is complete. Later explicit admin
+            # choices are owned by the normal desired-state controller.
+            return None
+        applied = False
+        try:
+            guarded = controller._quarantine_for_mutation()
+            if guarded.get("ok") is not True:
+                return guarded
+            self._proxy_bootstrap_binding(state, intent)
+            value = read_source(intent)
+            host = self.proxy_failure_policy()
+            if host.get("ok") is not True or host.get("failurePolicy") != intent["failurePolicy"]:
+                raise ProxyBootstrapError("proxy_bootstrap_policy_conflict")
+            status = client.proxy_status()
+            if status.get("ok") is not True or status.get("stateReadable") is not True:
+                raise ProxyBootstrapError("proxy_bootstrap_state_unavailable")
+            if status.get("configured") is True:
+                if not self._proxy_bootstrap_export_matches(client, status, intent):
+                    raise ProxyBootstrapError("proxy_bootstrap_source_conflict")
+            elif (status.get("configured") is False and status.get("enabled") is False
+                  and status.get("generation") == 0 and self._pending_proxy_restore is None):
+                self._pending_proxy_restore = (intent["kind"], bytearray(value.encode("utf-8")), intent["enabled"], intent["selectedNode"],
+                    intent["udpAllowed"], intent["allowInsecureHttp"], intent["ipv6Allowed"])
+            else:
+                raise ProxyBootstrapError("proxy_bootstrap_source_conflict")
+            restored = self._restore_proxy_desired_after_update(controller)
+            if restored.get("ok") is not True:
+                return restored
+            result = controller.reconcile_desired()
+            routing_proven = proxy_routing_ready(result) if intent["enabled"] else (
+                result.get("phase") == "off" and result.get("enabled") is False
+                and result.get("structuralApplied") is True and result.get("dataPlaneVerified") is True
+                and result.get("agentAbsent") is True and result.get("routingAbsent") is True)
+            if result.get("ok") is not True or not routing_proven:
+                return result if result.get("ok") is not True else self._proxy_failure("proxy_bootstrap_route_unverified")
+            read_source(intent)
+            self._proxy_bootstrap_binding(state, intent)
+            current = client.proxy_status()
+            if current.get("generation") != result.get("generation") or not self._proxy_bootstrap_export_matches(client, current, intent):
+                raise ProxyBootstrapError("proxy_bootstrap_source_conflict")
+            journal.apply_proxy_bootstrap(result["generation"])
+            applied = True
+            return result
+        except ProxyBootstrapError as exc:
+            return self._proxy_failure(exc.code)
+        finally:
+            # Failure never traverses the disabled/direct reconciliation path.
+            if not applied:
+                self._discard_pending_proxy_restore()
+                self.proxy_quarantine()
+
     def reconcile_proxy_desired(self) -> dict[str, Any]:
         """Converge this instance's daemon desired state before runtime acceptance."""
         try:
@@ -3772,6 +3929,10 @@ cat >/dev/null
                 self,
                 client,
             )
+            with controller._mutation_scope():
+                initial = self._reconcile_initial_proxy_bootstrap(client, controller)
+            if initial is not None:
+                return initial
             status = client.proxy_status()
             if status.get("stateReadable") is False:
                 code = status.get("stateError")

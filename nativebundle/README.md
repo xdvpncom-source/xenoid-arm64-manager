@@ -137,3 +137,26 @@ Legacy policy absence keeps strict acceptance, and unreadable state, ownership,
 configuration and runtime mismatches remain guarded. These source changes require
 a coordinated update-compatible daemon/host-control deployment; local unit tests
 do not replace the real outage and recovery acceptance gate.
+
+## Initial proxy boot fence
+
+Fleet v0.1.30 supplies an optional initial proxy intent to the existing native
+convergence journal before a fresh instance boots. Startup retains the existing
+host DROP while the authenticated daemon imports the private source and the
+owned proxy route becomes structurally ready. Reachability remains diagnostic
+in `retry_proxy` mode; upstream failure does not release a DIRECT route.
+
+The journal contains the source path and SHA, instance/data UUIDs, selected node,
+all source flags and failure policy, never the source credentials. It validates
+the root-owned mode0600 source again on resume. If the daemon committed the
+source before a crash, authenticated export plus the exact generation, runtime
+and storage binding recover that checkpoint without importing a second time. A
+missing or changed source, identity or policy leaves the startup fence active.
+
+Once the initial intent is applied, later administrator OFF remains authoritative.
+An explicit disabled default uses the existing verified OFF path; generic native
+instances without an initial intent keep their previous no-proxy behavior. This
+is host Python orchestration only: daemon APK, compiled native artifacts and
+image context inputs are unchanged. Runtime-free regression tests cover import
+ordering, offline readiness, crash/resume and context identity. A fresh boot
+with packet observation is still required before fleet creation.

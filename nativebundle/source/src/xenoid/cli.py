@@ -397,7 +397,44 @@ def _prepare_google_assets_for_up(args: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
+def _initial_proxy_bootstrap(args: argparse.Namespace) -> Optional[dict[str, Any]]:
+    from .proxy_bootstrap import ProxyBootstrapError, make_request
+    from .proxy_source import load_proxy_routing_policy
+
+    path = getattr(args, "initial_proxy_file", None)
+    kind = getattr(args, "initial_proxy_kind", None)
+    pin = getattr(args, "initial_proxy_sha256", None)
+    udp = getattr(args, "initial_proxy_udp", True)
+    ipv6 = getattr(args, "initial_proxy_ipv6", True)
+    insecure = getattr(args, "initial_proxy_allow_insecure_http", False)
+    enabled = getattr(args, "initial_proxy_enable", True)
+    name = getattr(args, "initial_proxy_name", "")
+    if path is None:
+        if kind is not None or pin is not None or not udp or not ipv6 or insecure or not enabled or name:
+            raise ProxyBootstrapError("proxy_bootstrap_file_required")
+        return None
+    if kind is None or not isinstance(pin, str) or re.fullmatch("[0-9a-f]{64}", pin) is None:
+        raise ProxyBootstrapError("proxy_bootstrap_source_pin_required")
+    try:
+        policy = load_proxy_routing_policy().get("failure_policy")
+    except (OSError, ValueError, TypeError) as error:
+        raise ProxyBootstrapError("proxy_bootstrap_policy_invalid") from error
+    request = make_request(args.context.instance_id, Path(path), kind=kind,
+        udp_allowed=udp, ipv6_allowed=ipv6, allow_insecure_http=insecure, failure_policy=policy,
+        enabled=enabled, selected_node=name)
+    if request["sourceSha256"] != pin:
+        raise ProxyBootstrapError("proxy_bootstrap_source_changed")
+    return request
+
+
 def cmd_up(args: argparse.Namespace) -> int:
+    from .proxy_bootstrap import ProxyBootstrapError
+
+    try:
+        initial_proxy = _initial_proxy_bootstrap(args)
+    except ProxyBootstrapError as exc:
+        print_json({"command": "up", "ok": False, "code": exc.code, "error": exc.code})
+        return 1
     manager = runtime(args)
     engine = (
         {"ok": manager.engine_reachable(), "started": False, "error": "engine_unavailable"}
@@ -431,6 +468,8 @@ def cmd_up(args: argparse.Namespace) -> int:
         except IdentityError as exc:
             return _regeneration_exception_result(args.context, exc), None
         if regeneration is not None:
+            if initial_proxy is not None:
+                return {"ok": False, "error": "proxy_bootstrap_not_fresh"}, None
             if bool(args.dry_run):
                 return _regeneration_dry_run_result(regeneration), None
             try:
@@ -449,12 +488,11 @@ def cmd_up(args: argparse.Namespace) -> int:
         )
         executor = ConvergenceExecutor(manager)
         with command_timeout(_UP_TIMEOUT_SECONDS):
-            return executor.run(
-                progress=_write_up_progress,
-                skip_build=bool(args.skip_build),
-                dry_run=bool(args.dry_run),
-                regeneration_capability=capability,
-            ), None
+            options = {"progress": _write_up_progress, "skip_build": bool(args.skip_build),
+                       "dry_run": bool(args.dry_run), "regeneration_capability": capability}
+            if initial_proxy is not None:
+                options["proxy_bootstrap"] = initial_proxy
+            return executor.run(**options), None
 
     # The journal decision and any resume must share the operation lock even
     # for a dry run: a concurrent regeneration could otherwise prepare and
@@ -4130,6 +4168,14 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("up", help="converge the complete Xenoid production runtime")
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--skip-build", action="store_true", help="validate and use existing artifact records without compiling")
+    s.add_argument("--initial-proxy-file", type=Path, help="private persistent source for a fresh runtime; imported before startup egress is released")
+    s.add_argument("--initial-proxy-sha256", help="exact SHA-256 of the initial private source")
+    s.add_argument("--initial-proxy-kind", choices=("endpoint", "uri_list", "clash", "subscription"))
+    s.add_argument("--initial-proxy-udp", action=argparse.BooleanOptionalAction, default=True)
+    s.add_argument("--initial-proxy-ipv6", action=argparse.BooleanOptionalAction, default=True)
+    s.add_argument("--initial-proxy-allow-insecure-http", action="store_true")
+    s.add_argument("--initial-proxy-enable", action=argparse.BooleanOptionalAction, default=True)
+    s.add_argument("--initial-proxy-name", default="")
     s.set_defaults(func=cmd_up)
 
 
