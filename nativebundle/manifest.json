@@ -508,12 +508,13 @@
     },
     {
       "before_sha256": [
-        null
+        null,
+        "1fa09a22d6511c6de3c16e2904e8fd981c05890dc7f02975b174c45106b039a2"
       ],
-      "bytes": 13551,
+      "bytes": 22545,
       "mode": "0755",
       "path": "scripts/test-proxy-bootstrap.py",
-      "sha256": "1fa09a22d6511c6de3c16e2904e8fd981c05890dc7f02975b174c45106b039a2"
+      "sha256": "b5b2ff7c4293a46825482d9ad3bf79f4c1eef480a3af574e8a44af44318ed9a7"
     },
     {
       "before_sha256": [
@@ -626,12 +627,13 @@
         "bde5de99741fcb1c0d40f683bfd55039960badd8fb310a78cdb5e1c73866c7ee",
         "991cfc59aa976065aee21b2ebb05602e8b31f8e01f277c1b03220bfa35648452",
         "61da636815884a47da938e201176cb440e38d7971d412157b829aae6c6128327",
-        "3de8128936bccd8dca4a0bbdc68264ccf7af72ff4da818a4ccb1682a7dfa918a"
+        "3de8128936bccd8dca4a0bbdc68264ccf7af72ff4da818a4ccb1682a7dfa918a",
+        "d796b9c3e527352d128c59a7c5e2f28eb97fcfa8914d008cf67e210d68ede0af"
       ],
-      "bytes": 602326,
+      "bytes": 604796,
       "mode": "0644",
       "path": "src/xenoid/backend.py",
-      "sha256": "d796b9c3e527352d128c59a7c5e2f28eb97fcfa8914d008cf67e210d68ede0af"
+      "sha256": "ec3b086bd3727813f4e10ee1c70cbc2cb9bca9d8e6c330c33c7d2c7265d0cc12"
     },
     {
       "before_sha256": [
@@ -665,12 +667,13 @@
     },
     {
       "before_sha256": [
-        "e5c0879ccfc96807fa95b54719d6c7e6255bbcfe6c3c88d6fa52016b8dfcf6ef"
+        "e5c0879ccfc96807fa95b54719d6c7e6255bbcfe6c3c88d6fa52016b8dfcf6ef",
+        "fe72ddb67164c4e96d39dde697436b10394570072cb8414915aa545715bda0f7"
       ],
-      "bytes": 143421,
+      "bytes": 143674,
       "mode": "0644",
       "path": "src/xenoid/convergence.py",
-      "sha256": "fe72ddb67164c4e96d39dde697436b10394570072cb8414915aa545715bda0f7"
+      "sha256": "2f5a4cfb310e53fb709555dac701479aab828b3e5b9188cb0e7c7653dc8eb68a"
     },
     {
       "before_sha256": [

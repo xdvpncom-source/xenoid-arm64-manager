@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import tempfile
 from pathlib import Path
-from typing import Any, BinaryIO, Iterator, Mapping, Optional
+from typing import Any, BinaryIO, Callable, Iterator, Mapping, Optional
 
 from .artifacts import (
     CONSUMER_TARGETS,
@@ -102,6 +102,7 @@ from .util import bounded_timeout, host_info, run, validate_release_version, whi
 
 
 _DAEMON_TRANSPORT_TIMEOUT_SECONDS = 30.0
+_DAEMON_START_TRANSPORT_TIMEOUT_SECONDS = 120.0
 _ROOTD_PROVISION_TIMEOUT_SECONDS = 30.0
 _BOOTSTRAP_SEQUENCE_TIMEOUT_SECONDS = 300.0
 _SOFT_REBOOT_TIMEOUT_SECONDS = 180.0
@@ -5692,6 +5693,7 @@ cat >/dev/null
         allow_journaled_spec_drift: bool = False,
         expected_image_input_sha256: Optional[str] = None,
         expected_image_boot_input_sha256: Optional[str] = None,
+        allow_daemon_activity_launch: bool = False,
     ) -> dict[str, Any]:
         """Start one already-created container and establish bounded transports."""
         self.ensure_instance_lease()
@@ -5915,8 +5917,8 @@ cat >/dev/null
             # container must also establish the bounded daemon transport before
             # later phases observe daemon-owned state (storage sentinel, gates).
             result["daemonTransport"] = self.wait_daemon_transport(
-                max(1.0, min(120.0, deadline - time.monotonic())),
-                allow_activity_launch=False,
+                max(1.0, min(_DAEMON_START_TRANSPORT_TIMEOUT_SECONDS, deadline - time.monotonic())),
+                allow_activity_launch=allow_daemon_activity_launch,
             )
             if result["daemonTransport"].get("ok") is not True:
                 return {
@@ -6138,6 +6140,8 @@ cat >/dev/null
         *,
         expected_data_uuid: Optional[str] = None,
         operation_id: Optional[str] = None,
+        expected_seed_container_id: Optional[str] = None,
+        record_seed_container: Optional[Callable[[str], Mapping[str, Any]]] = None,
     ) -> dict[str, Any]:
         """Create/start the one explicit fresh-data seed runtime."""
         try:
@@ -6174,14 +6178,35 @@ cat >/dev/null
         )
         if storage.get("ok") is not True:
             return storage
-        created = self.create_owned_container(
-            image_record=image_record,
-            expected_data_uuid=str(boot_seed_target.get("dataUuid") or "") or None,
-            expected_rootfs_uuid=str(boot_seed_target.get("rootfsUuid") or "") or None,
-            adopt_stopped_only=True,
-        )
+        if expected_seed_container_id is None:
+            created = self.create_owned_container(
+                image_record=image_record,
+                expected_data_uuid=str(boot_seed_target.get("dataUuid") or "") or None,
+                expected_rootfs_uuid=str(boot_seed_target.get("rootfsUuid") or "") or None,
+                adopt_stopped_only=True,
+            )
+        else:
+            # Only the convergence journal supplies this identity. A recorded
+            # seed may already be running after an interrupted transport wait;
+            # the general create/adoption path remains stopped-only.
+            owned, _ = self._owned_container_record()
+            if (not isinstance(owned, Mapping)
+                    or owned.get("Id") != expected_seed_container_id
+                    or not self._container_matches_lease(owned)):
+                return {"ok": False, "error": "convergence_state_conflict"}
+            created = {"ok": True, "alreadyCreated": True,
+                       "containerId": expected_seed_container_id}
         if created.get("ok") is not True:
             return created
+        if record_seed_container is not None:
+            # Persist creation before starting Android or waiting for its app.
+            # A failed checkpoint must leave the created container stopped.
+            try:
+                recorded = record_seed_container(str(created.get("containerId") or ""))
+                if recorded.get("seedContainerId") != created.get("containerId"):
+                    raise ValueError("seed checkpoint mismatch")
+            except Exception:
+                return {"ok": False, "error": "seed_runtime_checkpoint_failed"}
         quarantined = self.quarantine_proxy_for_lifecycle(
             expected_data_uuid,
             operation_id,
@@ -6191,6 +6216,12 @@ cat >/dev/null
         started = self.start_owned_container(
             expected_container_id=str(created.get("containerId") or ""),
             wait=True,
+            expected_image_input_sha256=str(image_record.get("inputSha256") or ""),
+            expected_image_boot_input_sha256=str(image_record.get("bootInputSha256") or ""),
+            # BOOT_COMPLETED delivery can trail sys.boot_completed by more
+            # than the transport budget. Use the existing owning bootstrap
+            # launch rather than depending on that asynchronous broadcast.
+            allow_daemon_activity_launch=True,
         )
         return {
             **started,
@@ -10157,8 +10188,13 @@ cat >/dev/null
         allow_activity_launch: bool = True,
     ) -> dict[str, Any]:
         """Bind and prove the listener without consulting aggregate health."""
+        if type(timeout) not in (int, float) or not math.isfinite(timeout):
+            return {"ok": False, "code": "daemon_transport_budget_invalid",
+                    "error": "daemon_transport_budget_invalid", "transportReady": False}
         started = time.monotonic()
-        deadline = started + max(0.0, min(timeout, _DAEMON_TRANSPORT_TIMEOUT_SECONDS))
+        requested_timeout = max(0.0, min(timeout, _DAEMON_START_TRANSPORT_TIMEOUT_SECONDS))
+        parent_timeout = bounded_timeout(requested_timeout)
+        deadline = started + (requested_timeout if parent_timeout is None else parent_timeout)
         midpoint = started + (deadline - started) / 2.0
         client = self.daemon_client(timeout=2.0)
         attempts = 0

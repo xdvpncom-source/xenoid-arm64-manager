@@ -159,6 +159,125 @@ class IntentBoundary(unittest.TestCase):
    target=root/'runtime/redroid/fresh-bluejay-render.py';target.write_bytes(target.read_bytes()+b'\n# image input positive control\n')
    after=keys();self.assertNotEqual(after[0],before[0]);self.assertNotEqual(after[1],before[1])
 
+
+class SeedTransport(unittest.TestCase):
+ def transport(self,timeout,*,ready_at=45,parent_limit=None,launch=False):
+  clock=types.SimpleNamespace(now=0.0)
+  manager=types.SimpleNamespace()
+  manager.forward_daemon_port=lambda**kw:{'ok':True}
+  manager.daemon_client=lambda**kw:types.SimpleNamespace(transport=lambda**kw:{'ok':clock.now>=ready_at})
+  launches=[];manager.launch_daemon_activity_once=lambda**kw:(launches.append(clock.now)or{'ok':True})
+  manager.adb=lambda*args,**kw:None
+  def sleep(seconds):clock.now+=seconds
+  with patch.object(b.time,'monotonic',lambda:clock.now),patch.object(b.time,'sleep',sleep),\
+       patch.object(b,'bounded_timeout',lambda requested:requested if parent_limit is None else min(requested,parent_limit)):
+   result=b.RuntimeManager.wait_daemon_transport(manager,timeout,allow_activity_launch=launch)
+  return result,clock.now,launches
+ def test_explicit_seed_budget_covers_delayed_bootreceiver_without_global_default_change(self):
+  result,elapsed,_=self.transport(120);self.assertTrue(result['ok']);self.assertEqual(elapsed,45)
+  result,elapsed,_=self.transport(b._DAEMON_TRANSPORT_TIMEOUT_SECONDS);self.assertFalse(result['ok']);self.assertEqual(elapsed,30)
+ def test_parent_deadline_still_bounds_explicit_transport_budget(self):
+  result,elapsed,_=self.transport(120,parent_limit=20);self.assertFalse(result['ok']);self.assertEqual(elapsed,20)
+ def test_existing_activity_bootstrap_is_explicit_and_not_a_readiness_bypass(self):
+  result,elapsed,launches=self.transport(120,ready_at=2,launch=True)
+  self.assertTrue(result['ok']);self.assertEqual(launches,[0.0]);self.assertGreaterEqual(result['attempts'],2)
+ def test_transport_rejects_nonfinite_and_retains_existing_startup_ceiling(self):
+  for value in(float('inf'),float('nan'),True):
+   with self.subTest(value=value):
+    result=b.RuntimeManager.wait_daemon_transport(types.SimpleNamespace(),value)
+    self.assertEqual(result['error'],'daemon_transport_budget_invalid')
+  result,elapsed,_=self.transport(1000,ready_at=150)
+  self.assertFalse(result['ok']);self.assertEqual(elapsed,b._DAEMON_START_TRANSPORT_TIMEOUT_SECONDS)
+
+
+@contextlib.contextmanager
+def seed_backend_fixture():
+ from xenoid import location
+ with fixture()as(m,d,request,source,executor,storage):
+  m.cfg.network_dns_servers=[];m.google_runtime_spec=lambda*args,**kw:None
+  m.converge_storage=lambda**kw:{'ok':True,'dataUuid':stock.TARGET_DATA_UUID,'rootfsUuid':stock.TARGET_ROOTFS_UUID}
+  m._container_matches_lease=lambda owned:True
+  original_create=m.create_owned_container;original_start=m.start_owned_container
+  events=[];attempts=[];fail=types.SimpleNamespace(transport=True)
+  def create(**kwargs):
+   state=c.ConvergenceJournal(m).load()
+   if state and state['seedContainerId']is None and 'seed_initialized'not in state['completed']:
+    events.append('seed-create');m.snapshot['runtime'].update(containerId=stock.SEED_CONTAINER,state='stopped')
+    return {'ok':True,'containerId':stock.SEED_CONTAINER}
+   return original_create(**{key:kwargs[key]for key in('image_record','expected_data_uuid','expected_rootfs_uuid')})
+  def start(expected_container_id,**kwargs):
+   if expected_container_id!=stock.SEED_CONTAINER:return original_start(expected_container_id,wait=kwargs.get('wait',True))
+   state=c.ConvergenceJournal(m).load();assert state['seedContainerId']==stock.SEED_CONTAINER
+   assert 'seed_runtime_started'not in state['completed']
+   assert kwargs['allow_daemon_activity_launch']is True
+   assert kwargs['expected_image_input_sha256']==state['selectedImageInputSha256']
+   assert kwargs['expected_image_boot_input_sha256']==state['selectedImageBootInputSha256']
+   events.append('checkpoint-before-start');attempts.append(expected_container_id)
+   m.snapshot['runtime'].update(containerId=stock.SEED_CONTAINER,state='running')
+   if fail.transport:fail.transport=False;return {'ok':False,'error':'daemon_transport_timeout','containerId':expected_container_id}
+   return {'ok':True,'containerId':expected_container_id}
+  m.create_owned_container=create;m.start_owned_container=start
+  m.start_seed_runtime=types.MethodType(b.RuntimeManager.start_seed_runtime,m)
+  fake_location=types.SimpleNamespace(ensure=lambda*args:({'pending':True},None),set_desired=lambda*args:None)
+  with patch.object(location,'LocationStateStore',lambda*args:fake_location):yield m,d,request,executor,events,attempts,fail
+
+
+class SeedJournalIntegration(unittest.TestCase):
+ def test_failed_wait_keeps_exact_created_CID_and_resumes_without_second_create(self):
+  with seed_backend_fixture()as(m,d,request,executor,events,attempts,fail):
+   first=executor().run(proxy_bootstrap=request);self.assertFalse(first['ok']);self.assertEqual(first['error'],'daemon_transport_timeout')
+   journal=c.ConvergenceJournal(m);state=journal.load();operation=state['operationId'];intent=copy.deepcopy(state['proxyBootstrap']);target=copy.deepcopy(state['bootSeedTarget'])
+   self.assertEqual(state['seedContainerId'],stock.SEED_CONTAINER);self.assertNotIn('seed_runtime_started',state['completed']);self.assertEqual(m.snapshot['runtime']['state'],'running')
+   second=executor().run();self.assertTrue(second['ok'],second)
+   self.assertEqual(events.count('seed-create'),1);self.assertEqual(attempts,[stock.SEED_CONTAINER]*2);self.assertIsNone(journal.load())
+   self.assertEqual(len(operation),32);self.assertEqual(intent['phase'],'pending');self.assertEqual(target['dataUuid'],stock.TARGET_DATA_UUID)
+   self.assertEqual(m.events.count('authenticated-set-source'),1);self.assertNotIn('explicit-OFF',m.events)
+ def test_checkpoint_failure_never_starts_created_seed(self):
+  with seed_backend_fixture()as(m,d,request,executor,events,attempts,fail):
+   original=c.ConvergenceJournal.bind_runtime_id
+   def broken(journal,field,value):
+    if field=='seedContainerId':raise OSError('simulated durable checkpoint failure')
+    return original(journal,field,value)
+   with patch.object(c.ConvergenceJournal,'bind_runtime_id',broken):result=executor().run(proxy_bootstrap=request)
+   self.assertFalse(result['ok']);self.assertEqual(result['error'],'seed_runtime_checkpoint_failed');self.assertFalse(attempts)
+   self.assertEqual(m.snapshot['runtime']['state'],'stopped');self.assertEqual(events,['seed-create'])
+   state=c.ConvergenceJournal(m).load();self.assertIsNone(state['seedContainerId']);self.assertEqual(state['proxyBootstrap']['phase'],'pending')
+ def test_recorded_seed_CID_mismatch_preserves_journal_and_never_starts_other_runtime(self):
+  with seed_backend_fixture()as(m,d,request,executor,events,attempts,fail):
+   self.assertFalse(executor().run(proxy_bootstrap=request)['ok']);journal=c.ConvergenceJournal(m);before=journal.path.read_bytes()
+   m.snapshot['runtime']['containerId']=stock.NEW_CONTAINER
+   result=executor().run();self.assertFalse(result['ok']);self.assertEqual(journal.path.read_bytes(),before);self.assertEqual(len(attempts),1)
+
+ def test_legacy_unrecorded_running_seed_requires_owning_stop_before_same_journal_resume(self):
+  class LegacyExecutor(c.ConvergenceExecutor):
+   def _phase_call(self,phase,method_name,reporter,outer_deadline,**kwargs):
+    if method_name=='start_seed_runtime':kwargs.pop('record_seed_container',None)
+    return super()._phase_call(phase,method_name,reporter,outer_deadline,**kwargs)
+  with seed_backend_fixture()as(m,d,request,executor,events,attempts,fail):
+   # Model the historical create/start-before-journal boundary. The actual
+   # backend method is unchanged; only the old missing checkpoint is modeled.
+   original=m.start_owned_container
+   def old_start(expected_container_id,**kwargs):
+    if expected_container_id==stock.SEED_CONTAINER:
+     m.snapshot['runtime'].update(containerId=expected_container_id,state='running')
+     fail.transport=False
+     return {'ok':False,'error':'daemon_transport_timeout','containerId':expected_container_id}
+    return original(expected_container_id,**kwargs)
+   m.start_owned_container=old_start
+   old=LegacyExecutor(m,artifact_builder=stock.FakeArtifacts(m),live_acceptance=Acceptance(m))
+   self.assertFalse(old.run(proxy_bootstrap=request)['ok']);journal=c.ConvergenceJournal(m);before=journal.path.read_bytes();state=journal.load()
+   self.assertIsNone(state['seedContainerId']);self.assertEqual(m.snapshot['runtime']['state'],'running')
+   self.assertFalse(executor().run()['ok']);self.assertEqual(journal.path.read_bytes(),before)
+   # Existing owning quiesce preserves the exact container/storage/journal;
+   # generic adoption is still stopped-only and binds before startup.
+   m.quiesce_owned_container(expected_container_id=stock.SEED_CONTAINER);self.assertEqual(journal.path.read_bytes(),before)
+   m.start_owned_container=original
+   result=executor().run();self.assertTrue(result['ok'],result);self.assertEqual(events.count('seed-create'),1)
+   self.assertEqual(attempts,[stock.SEED_CONTAINER]);self.assertIsNone(journal.load());self.assertNotIn('explicit-OFF',m.events)
+
+
+class IntentMetadataBoundary(unittest.TestCase):
+
  def test_source_permissions_links_and_public_redaction(self):
   with fixture()as(m,d,request,source,executor,storage):
    intent=p.bind_request(request,stock.TARGET_DATA_UUID);self.assertEqual(p.read_source(intent),TEXT)

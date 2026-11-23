@@ -1943,6 +1943,10 @@ class ConvergenceExecutor:
                     boot_seed_target=journal_state["bootSeedTarget"],
                     expected_data_uuid=journal_state["observedDataUuid"],
                     operation_id=journal_state["operationId"],
+                    expected_seed_container_id=journal_state["seedContainerId"],
+                    record_seed_container=lambda container_id: self.journal.bind_runtime_id(
+                        "seedContainerId", container_id
+                    ),
                 )
                 container_id = _result_container_id(result)
                 journal_state = self.journal.advance(

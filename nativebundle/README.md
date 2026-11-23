@@ -140,6 +140,16 @@ do not replace the real outage and recovery acceptance gate.
 
 ## Initial proxy boot fence
 
+Fresh seed startup explicitly launches the existing daemon bootstrap activity
+after Android transport is ready. It does not depend on queued `BOOT_COMPLETED`
+delivery. The caller's transport budget remains bounded by the owning phase;
+ordinary callers keep their thirty-second default. Convergence durably records
+the created seed container before starting it or waiting for its daemon, so an
+interrupted wait resumes that exact instance, storage and container. A failed
+checkpoint leaves the created container stopped. General adoption remains
+stopped-only; older unrecorded seed attempts use the existing owning stop and
+journal-resume path.
+
 Fleet v0.1.30 supplies an optional initial proxy intent to the existing native
 convergence journal before a fresh instance boots. Startup retains the existing
 host DROP while the authenticated daemon imports the private source and the
