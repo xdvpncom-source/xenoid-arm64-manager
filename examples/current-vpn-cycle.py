@@ -234,7 +234,54 @@ def is_crash_dialog(window):
     return crash_text and (platform or (bluetooth and native_controls)) and text_contains(window, CRASH_CLOSE_WORDS)
 
 
+def ump_consent_groups(window):
+    """Recognize the observed consent sheet, never a general privacy footer."""
+    if window.get("stable") is not True:
+        return ()
+    groups = {}
+    for control in window.get("controls", ()):
+        if (not bounds(control) or control.get("window_active") is False or control.get("window_focused") is False
+                or control.get("package", window.get("package")) != window.get("package")):
+            continue
+        key = (control.get("package", window.get("package")),
+               control.get("window_id"), control.get("display_id"))
+        groups.setdefault(key, []).append(control)
+    matches = []
+    for items in groups.values():
+        observed = set().union(*(labels(control) for control in items))
+        title = any("asks for your consent to use your personal data" in value for value in observed)
+        if title and {"consent", "do not consent", "manage options"} <= observed:
+            matches.append(items)
+    return matches
+
+
+def ump_consent_controls(window):
+    groups = ump_consent_groups(window)
+    return groups[0] if len(groups) == 1 else ()
+
+
+def is_ump_consent(window):
+    return bool(ump_consent_groups(window))
+
+
+def ump_decline_control(window):
+    items = ump_consent_controls(window)
+    context = [control for control in items if labels(control) & {"consent", "do not consent", "manage options"}
+               or any("asks for your consent to use your personal data" in value for value in labels(control))]
+    if not context or any(type(control.get("window_id")) is not int or control["window_id"] < 0
+                          or type(control.get("display_id")) is not int or control["display_id"] < 0
+                          or control.get("window_active") is not True or control.get("window_focused") is not True
+                          for control in context):
+        return None
+    return choose_unique([(1, control) for control in items
+                          if control.get("enabled") is True and labels(control) == {"do not consent"}
+                          and (control.get("clickable") is True
+                               or control.get("class_name", "").rsplit(".", 1)[-1] == "Button")])
+
+
 def is_terms(window):
+    if is_ump_consent(window):
+        return True
     strong = {"data collection disclosure", "شفافیت جمع آوری داده"}
     if text_contains(window, strong):
         return True
@@ -262,11 +309,15 @@ def is_ad_activity(window):
 
 
 def is_ad(window):
+    if is_ump_consent(window):
+        return False
     return (is_ad_activity(window)
             or text_contains(window, {"advertisement", "sponsored", "test ad", "تبلیغ"}))
 
 
 def is_loading(window, package):
+    if is_ump_consent(window):
+        return False
     return (window.get("package") == package
             and text_contains(window, {normalized(word) for word in LOADING_DIALOG_WORDS if normalized(word)}))
 
@@ -680,6 +731,13 @@ class Cycle:
                                           if labels(control) & {"allow", "اجازه دادن", "مجاز"}])
             if selected:
                 return self.tap(selected, "allow notification permission")
+            return False
+        if is_ump_consent(window):
+            if window.get("package") != self.package:
+                return False
+            selected = ump_decline_control(window)
+            if selected:
+                return self.tap(selected, "decline UMP personal-data consent")
             return False
         if is_terms(window):
             selected = self.terms_close_control(window)
