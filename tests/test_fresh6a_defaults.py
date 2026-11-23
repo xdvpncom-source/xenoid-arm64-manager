@@ -200,6 +200,7 @@ class NativeReadbackTests(unittest.TestCase):
         self.broker = types.SimpleNamespace(container_id=self.cid, native_display_exec=read,
             native_interaction_snapshot=lambda manager, deadline: {'ready': True, 'mapping': {'logical_size': [1080, 2400]}})
         self.native_module = types.ModuleType('xenoid.cold_profile')
+        self.native_module.template_from_live = deepcopy
         self.native_module.expected_properties = lambda value: self.expected
 
     def verify(self):
@@ -215,6 +216,30 @@ class NativeReadbackTests(unittest.TestCase):
         self.assertNotIn('proxy', got)
         self.assertTrue(all(argv[0] in {'cat', 'getprop', 'wm', 'dumpsys', 'sha256sum'} for argv in self.commands))
         self.assertTrue(all(len(argv) == 2 for argv in self.commands if argv[0] == 'wm'))
+
+    def test_live_native_ids_use_real_cold_template_contract_without_mutating_them(self):
+        native_path = ROOT / 'nativebundle/source/src/xenoid/cold_profile.py'
+        spec = importlib.util.spec_from_file_location('fresh6a_native_contract', native_path)
+        native = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(native)
+        live = json.loads((ROOT / 'nativebundle/source/examples/fingerprints/pixel-bluejay-android13.json').read_text())
+        live['ids'].update(android_id='1234567890abcdef', serial='TESTNATIVE01',
+                           imei='351804610000018', imeisv='01',
+                           boot_id='12345678-1234-4234-8234-123456789abc')
+        live['usb']['serial'] = live['ids']['serial']
+        before = deepcopy(live)
+        with self.assertRaisesRegex(ValueError, 'cold_profile_must_not_contain_device_ids'):
+            native.expected_properties(live)
+        self.native_module = native
+        self.expected = native.expected_properties(native.template_from_live(live))
+        self.responses[('cat', '/data/local/tmp/xenoid-profile/effective.json')] = json.dumps(live)
+        self.responses[('getprop',)] = '\n'.join('[' + k + ']: [' + v + ']' for k, v in self.expected.items())
+        result = self.verify()
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['build_properties_verified'], 191)
+        self.assertEqual(live, before)
+        self.assertEqual(native.template_from_live(live)['ids']['android_id'], native.SENTINEL)
+        self.assertEqual(live['ids']['android_id'], '1234567890abcdef')
 
     def test_wrong_geometry_property_artifact_contract_or_actual_caps_never_pass(self):
         for command, wrong in [(('wm', 'density'), 'Physical density: 420\nOverride density: 72'),

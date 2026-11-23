@@ -173,8 +173,8 @@ def verify_runtime(broker, manager, *, deadline):
     resources = verify_actual_caps(owned)
     profile = json.loads(read(["cat", "/data/local/tmp/xenoid-profile/effective.json"]))
     validate_profile_contract(profile)
-    from xenoid.cold_profile import expected_properties
-    expected_map = expected_properties(profile)
+    from xenoid.cold_profile import expected_properties, template_from_live
+    expected_map = expected_properties(template_from_live(profile))
     _require(len(expected_map) == 191, "fresh6a_build_property_contract_changed")
     selected = {}
     for line in read(["getprop"]).splitlines():
