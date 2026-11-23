@@ -47,12 +47,13 @@
     },
     {
       "before_sha256": [
-        "a5188f175d43e0dd801ae03c5404a11aa666d64de4181d258ec6a9150f567ccc"
+        "a5188f175d43e0dd801ae03c5404a11aa666d64de4181d258ec6a9150f567ccc",
+        "55639722ad17a0693e536839e2154024e5cc7920acc9034482b9ff06d372f2b9"
       ],
-      "bytes": 67899,
+      "bytes": 67925,
       "mode": "0644",
       "path": "daemon/app/src/main/java/dev/xenoid/daemon/ProxyManager.java",
-      "sha256": "55639722ad17a0693e536839e2154024e5cc7920acc9034482b9ff06d372f2b9"
+      "sha256": "ff05892518d421feaf4344396e1dfa1bdd278c0ffb6d1ed51a4b323f477ee91d"
     },
     {
       "before_sha256": [
@@ -66,12 +67,13 @@
     {
       "before_sha256": [
         "345a24eaead312e130803e61e93164fa410b93a28ed15d5b913810c10ddf50cd",
-        "2fdcfebcb49adfe9522992e08499615d1081f95fe55ff70e5829816c4b9660ed"
+        "2fdcfebcb49adfe9522992e08499615d1081f95fe55ff70e5829816c4b9660ed",
+        "b2aa36179cb67becdd10b838016bc6ef0de4973780dffb380aa56d1002cac8ea"
       ],
-      "bytes": 54043,
+      "bytes": 59844,
       "mode": "0644",
       "path": "daemon/app/src/test/java/dev/xenoid/daemon/ProxyStateStoreTest.java",
-      "sha256": "b2aa36179cb67becdd10b838016bc6ef0de4973780dffb380aa56d1002cac8ea"
+      "sha256": "0e155a3c25a645c898c6688954dc1ac7fa077c17d48670eb3c6077e87da5c2c4"
     },
     {
       "before_sha256": [

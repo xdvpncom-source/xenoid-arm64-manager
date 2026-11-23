@@ -16,7 +16,7 @@
     "apply.py": "256b74a271241b407425d8e44547c363881d13125709dc4ef05e7cb2caa8e305",
     "artifacts.json": "3ec779fa7c96a3fcb65dcde685884d310b4849c1a3913c4aea6da20c3e99954b",
     "install_artifacts.py": "f22c34f69f2c79539139156d452acdeea4857195961d0484ddd906b1f72bb380",
-    "manifest.json": "ba36a13b2df4253b52cd2cf2f22bd6fa9f274ead33e0b642612426fd51e0be8b"
+    "manifest.json": "121685dcb51477a66ee9a165a941fb658127d3242ff251da69d5fb34c468aef1"
   },
   "fresh_runtime_accepted": false,
   "loop_direct_io_fixture_passed": true,
@@ -28,13 +28,14 @@
     "core_python_tests_passed": 19,
     "default_mode": "retry_proxy",
     "diagnostic_dispatch_tests_passed": 9,
+    "encrypted_channel_cleanup_tests_passed": true,
     "engine_agent_tests_passed": 42,
     "explicit_opt_in_required_for_legacy": true,
     "live_outage_tested": false,
     "manual_check_releases_owner_lock": true,
     "manual_diagnostics_only": true,
     "schema": "dev.xenoid.proxy-failure-policy/v1",
-    "store_manager_jvm_tests_passed": 22,
+    "store_manager_jvm_tests_passed": 24,
     "unproven_manual_probe_retains_valid_route": true
   },
   "public_private_marker_count": 0,

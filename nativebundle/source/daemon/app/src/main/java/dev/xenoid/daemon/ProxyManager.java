@@ -179,7 +179,7 @@ public final class ProxyManager {
                 "runtimeEpoch", runtimeEpoch,
                 "report", deepCopyMap(lastEngineReport),
                 "probe", deepCopyMap(lastProbe));
-        if (source != null && source.failurePolicy != null) result.put("failurePolicy", source.failurePolicy);
+        if (source != null && source.failurePolicy != null) result.put("failurePolicy", deepCopyMap(source.failurePolicy));
         return result;
     }
 
@@ -779,7 +779,7 @@ public final class ProxyManager {
                 "udpAllowed", desired.udpAllowed,
                 "allowInsecureHttp", desired.allowInsecureHttp,
                 "ipv6Allowed", desired.ipv6Allowed);
-        if (desired != null && desired.failurePolicy != null) source.put("failurePolicy", desired.failurePolicy);
+        if (desired != null && desired.failurePolicy != null) source.put("failurePolicy", deepCopyMap(desired.failurePolicy));
         return map(
                 "schemaVersion", SCHEMA_VERSION,
                 "instanceId", current.instanceId == null ? "" : current.instanceId,

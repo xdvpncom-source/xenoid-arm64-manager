@@ -188,6 +188,83 @@ public final class ProxyStateStoreTest {
         manager.close();
     }
 
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> encryptedChannelCall(ProxyAgentChannel channel,
+            Map<String, Object> bootstrap, String epoch, long sequence, String operation,
+            Map<String, Object> body) throws Exception {
+        String session = "0123456789abcdef0123456789abcdef";
+        String requestId = String.format(java.util.Locale.ROOT, "%032x", sequence);
+        byte[] master = Base64.getDecoder().decode((String) bootstrap.get("masterKey"));
+        java.lang.reflect.Method derive = ProxyAgentChannel.class.getDeclaredMethod(
+                "deriveDirectionKey", byte[].class, String.class, String.class, byte[].class);
+        derive.setAccessible(true);
+        byte[] c2s = (byte[]) derive.invoke(null, master, INSTANCE, epoch,
+                "xenoid-proxy-agent/c2s".getBytes(StandardCharsets.UTF_8));
+        byte[] s2c = (byte[]) derive.invoke(null, master, INSTANCE, epoch,
+                "xenoid-proxy-agent/s2c".getBytes(StandardCharsets.UTF_8));
+        Map<String, Object> inner = new LinkedHashMap<>(); inner.put("operation", operation);
+        inner.put("timestamp", System.currentTimeMillis() / 1000L); inner.put("body", body);
+        java.lang.reflect.Method seal = ProxyAgentChannel.class.getDeclaredMethod("seal",
+                byte[].class, String.class, String.class, String.class, String.class,
+                long.class, String.class, int.class, byte[].class);
+        java.lang.reflect.Method open = ProxyAgentChannel.class.getDeclaredMethod("open",
+                byte[].class, String.class, String.class, String.class, String.class,
+                long.class, String.class, int.class, byte[].class);
+        seal.setAccessible(true); open.setAccessible(true);
+        byte[] encrypted = (byte[]) seal.invoke(null, c2s, "c2s", INSTANCE, epoch, session,
+                sequence, requestId, 0, ProxyAgentChannel.canonicalJson(inner).getBytes(StandardCharsets.UTF_8));
+        Map<String, Object> envelope = new LinkedHashMap<>(); envelope.put("version", 1L);
+        envelope.put("instanceId", INSTANCE); envelope.put("runtimeEpoch", epoch);
+        envelope.put("session", session); envelope.put("seq", sequence);
+        envelope.put("requestId", requestId); envelope.put("ciphertext", Base64.getEncoder().encodeToString(encrypted));
+        Map<String, Object> response = channel.handle(envelope);
+        assertEquals(200, response.get("status"));
+        byte[] plaintext = (byte[]) open.invoke(null, s2c, "s2c", INSTANCE, epoch, session,
+                sequence, requestId, 200, Base64.getDecoder().decode((String) response.get("ciphertext")));
+        Map<String, Object> decoded = ProxyManager.parseObject(new String(plaintext, StandardCharsets.UTF_8), 65536);
+        assertEquals(true, decoded.get("ok"));
+        Arrays.fill(master, (byte) 0); Arrays.fill(c2s, (byte) 0); Arrays.fill(s2c, (byte) 0);
+        Arrays.fill(encrypted, (byte) 0); Arrays.fill(plaintext, (byte) 0);
+        return (Map<String, Object>) decoded.get("body");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void encryptedChannelDesiredAndReportCleanupPreserveImmutablePolicy() throws Exception {
+        Fixture fixture = configuredFixture(); fixture.store.update(INSTANCE, true, withFailurePolicy());
+        ProxyManager manager = new ProxyManager(fixture.store); ProxyAgentChannel channel = new ProxyAgentChannel(manager);
+        String epoch = String.join("", Collections.nCopies(64, "a"));
+        Map<String, Object> request = new LinkedHashMap<>(); request.put("instanceId", INSTANCE); request.put("runtimeEpoch", epoch);
+        Map<String, Object> bootstrap = channel.bootstrap(request);
+        assertTrue(channel.authorizedAgentToken((String) bootstrap.get("agentToken")));
+        assertFalse(channel.authorizedAgentToken("invalid"));
+        Map<String, Object> desired = encryptedChannelCall(channel, bootstrap, epoch, 1L, "desired", new LinkedHashMap<>());
+        Map<String, Object> policy = (Map<String, Object>) ((Map<String, Object>) desired.get("source")).get("failurePolicy");
+        assertEquals(withFailurePolicy().failurePolicy, ProxyFailurePolicy.normalize(policy));
+        encryptedChannelCall(channel, bootstrap, epoch, 2L, "report", continuousReport(manager, ""));
+        assertTrue(manager.healthReady());
+        Map<String, Object> again = encryptedChannelCall(channel, bootstrap, epoch, 3L, "desired", new LinkedHashMap<>());
+        assertEquals(withFailurePolicy().failurePolicy,
+                ProxyFailurePolicy.normalize(((Map<String, Object>) again.get("source")).get("failurePolicy")));
+        assertEquals(withFailurePolicy().failurePolicy, fixture.restart().load().source.failurePolicy);
+        manager.close();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void administratorResponsesCannotMutateTheAuthoritativePolicy() throws Exception {
+        Fixture fixture = configuredFixture(); fixture.store.update(INSTANCE, true, withFailurePolicy());
+        ProxyManager manager = new ProxyManager(fixture.store);
+        Map<String, Object> statusPolicy = (Map<String, Object>) manager.status().get("failurePolicy");
+        ((List<Object>) statusPolicy.get("retry_delays_seconds")).clear(); statusPolicy.clear();
+        Map<String, Object> source = (Map<String, Object>) manager.exportDesired().get("source");
+        Map<String, Object> exportedPolicy = (Map<String, Object>) source.get("failurePolicy");
+        ((List<Object>) exportedPolicy.get("retry_delays_seconds")).clear(); exportedPolicy.clear();
+        assertEquals(withFailurePolicy().failurePolicy, manager.status().get("failurePolicy"));
+        assertEquals(withFailurePolicy().failurePolicy, fixture.restart().load().source.failurePolicy);
+        manager.close();
+    }
+
     @Test
     public void reportCannotEnableContinuousModeWithoutOwnedDesiredPolicy() throws Exception {
         Fixture fixture = configuredFixture(); ProxyManager manager = new ProxyManager(fixture.store);
