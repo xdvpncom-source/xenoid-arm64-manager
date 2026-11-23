@@ -130,20 +130,27 @@ download_amd64_zlib() {
 }
 
 ensure_amd64_compatibility() {
-  local package library
+  local package library audit
   local handler=/proc/sys/fs/binfmt_misc/qemu-x86_64
   local cross_ld=$amd64_library_dir/ld-linux-x86-64.so.2
   local -a missing_packages=()
+  local layout_helper
+  layout_helper=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scripts/repair-merged-lib64.py
+  [[ -f $layout_helper ]] || die 'missing the Fleet usr-merged loader layout helper'
+  python3 "$layout_helper" --execute || die 'unsupported ARM64 loader layout'
   # Android's pinned Linux SDK/NDK executables use a glibc x86-64 loader.
   for package in qemu-user-static libc6-amd64-cross libgcc-s1-amd64-cross libstdc++6-amd64-cross; do
     if [[ $(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null || true) != installed ]]; then
       missing_packages+=("$package")
     fi
   done
-  if [[ ${#missing_packages[@]} -ne 0 ]]; then
+  audit=$(dpkg --audit)
+  if [[ ${#missing_packages[@]} -ne 0 || -n $audit ]]; then
     note 'Installing Ubuntu x86-64 userspace compatibility for the Android SDK tools'
     apt-get -o APT::Update::Error-Mode=any update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing_packages[@]}"
+    DEBIAN_FRONTEND=noninteractive apt-get install --fix-broken --no-remove -y --no-install-recommends ${missing_packages[@]+"${missing_packages[@]}"}
+    audit=$(dpkg --audit)
+    [[ -z $audit ]] || die 'package configuration remains incomplete after dependency repair'
   fi
   if [[ ! -r $handler ]] || ! grep -qx enabled "$handler"; then
     systemctl restart systemd-binfmt.service || die 'could not start the system binfmt registration service'
@@ -151,7 +158,7 @@ ensure_amd64_compatibility() {
   [[ -r $handler ]] && grep -qx enabled "$handler" || die 'qemu-x86_64 binfmt handler is unavailable'
   is_amd64_elf "$cross_ld" || die 'Ubuntu amd64 cross loader is unavailable'
 
-  if [[ ! -d /lib64 ]]; then install -d -m 0755 /lib64; fi
+  [[ -L /lib64 && $(readlink -f -- /lib64) == /usr/lib* ]] || die 'the amd64 loader directory must remain usr-merged'
   if [[ ! -e /lib64/ld-linux-x86-64.so.2 && ! -L /lib64/ld-linux-x86-64.so.2 ]]; then
     ln -s -- "$cross_ld" /lib64/ld-linux-x86-64.so.2
   fi

@@ -61,7 +61,12 @@ if command == ["status"]:
     print(json.dumps({"ok": ok, "running": name != "phone-2", "recommendedAction": "no-op"}))
     sys.exit(0 if ok else 1)
 elif command == ["config", "show"]:
-    print(json.dumps({"ok": True, "config": {"google_services_provider": "microg"}}))
+    config = {"google_services_provider": "microg",
+              "google_services_release": "microg-0.3.15.250932-phonesky-30.4.17-gsfproxy-0.1.0-bluejay",
+              "cold_profile": {"build": {"product": "bluejay", "model": "Pixel 6a"}}}
+    if os.environ.get("FLEET_LEGACY"):
+        config.pop("cold_profile")
+    print(json.dumps({"ok": True, "config": config}))
 else:
     print(json.dumps({"ok": True, "args": command}))
 '''
@@ -193,11 +198,12 @@ class FleetTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls()
         self.assertEqual(calls[1], ["--instance", "phone-1", "init", "--config",
-                                    str(self.upstream / "examples/config-linux-arm.json")])
+                                    str(MANAGER.parent / "defaults/bluejay-linux-arm.json")])
         self.assertEqual(calls[2], ["--instance", "phone-1", "up"])
-        self.assertEqual(calls[5:7], [["--instance", "phone-2", "start", "--recreate", "--no-wait"],
+        self.assertEqual(calls[5], ["--instance", "phone-2", "config", "show"])
+        self.assertEqual(calls[6:8], [["--instance", "phone-2", "start", "--recreate", "--no-wait"],
                                       ["--instance", "phone-2", "up"]])
-        for index in (3, 7):
+        for index in (3, 8):
             self.assertEqual(calls[index][2:4], ["device", "apply"])
             self.assertEqual(calls[index][-1], "--instance-identity")
             self.assertEqual(self.records()[index]["profile"], profile_data)
@@ -225,11 +231,19 @@ class FleetTest(unittest.TestCase):
                 commands = [args[2:] for args in self.calls() if args[:2] == ["--instance", "phone-2"]]
                 if code == "resource_conflict":
                     self.assertEqual(result.returncode, 1)
-                    self.assertEqual(commands, [["start", "--recreate", "--no-wait"]])
+                    self.assertEqual(commands, [["config", "show"], ["start", "--recreate", "--no-wait"]])
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
                     recreate = ["start", "--recreate", "--no-wait"]
-                    self.assertEqual(commands, [recreate, ["up"], recreate, ["up"]])
+                    self.assertEqual(commands, [["config", "show"], recreate, ["up"], recreate, ["up"]])
+
+    def test_legacy_profile_requires_explicit_delete_without_mutating_device(self):
+        self.set_instances("phone-2")
+        self.env["FLEET_LEGACY"] = "1"
+        result = self.call("create", "2")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("explicitly delete", result.stderr)
+        self.assertEqual(self.calls(), [["instance", "list"], ["--instance", "phone-2", "config", "show"]])
 
     def test_provider_change_refused_for_existing_instance(self) -> None:
         self.set_instances("phone-2")
@@ -260,7 +274,7 @@ class FleetTest(unittest.TestCase):
             self.assertEqual(first.returncode, 0, first_stderr)
         self.assertEqual(second.returncode, 0, second.stderr)
         phases = [args[2:] for args in self.calls() if args[:2] == ["--instance", "phone-5"]]
-        self.assertEqual([phase[0] for phase in phases], ["init", "up", "start", "up"])
+        self.assertEqual([phase[0] for phase in phases], ["init", "up", "config", "start", "up"])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,37 @@
+{
+  "artifact_install": {
+    "idempotent": true,
+    "no_bytecode_source_pollution": true,
+    "qualified_hal_loaded": true
+  },
+  "bluetooth_identity": {
+    "boot_replay_no_identity_generation": true,
+    "cold_readiness_gate": true,
+    "current_hal_binary_unchanged": true,
+    "durable_fixed_path_writer": true,
+    "initial_native_identity_derivation": true,
+    "profile_helper_sha256": "b85dbec875779d23d21ab5f468693145661d5ded69bad714b5f798017cb3c009",
+    "tests": 14
+  },
+  "canonical_gui_sha256": "2eff4cbc1db60740d4398bb894a86c3c42b0386bf9f4f11cee5960cf187879e8",
+  "canonical_swift_sha256": "edee7f38701151b0af135c60bd167a45b1c456b2e2d7aaa87a96ef91509c9b13",
+  "fresh_runtime_verified": false,
+  "google_payload_included": false,
+  "pacer_rebuilt_sha256": "88005262499f3daa6e0ed58fbd333be75fc0b2fe211f7c0a3e5851d865526ffa",
+  "runtime_actions_performed": false,
+  "schema": "xenoid.native-source-bundle-validation/v1",
+  "source_install": {
+    "idempotent": true,
+    "interrupted_publication_resumed": true,
+    "stock_apply": true,
+    "unknown_sources_rejected": true
+  },
+  "unit_tests": {
+    "bundle_and_render": 16,
+    "native_focused_tests": 98,
+    "native_optional_skips": 11,
+    "native_tests_non_skipped_passed": 87,
+    "pacer_asan_ubsan": true,
+    "pacer_cpp": true
+  }
+}

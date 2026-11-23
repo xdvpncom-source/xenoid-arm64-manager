@@ -1,0 +1,91 @@
+diff --git a/system/test/rootcanal/Android.bp b/system/test/rootcanal/Android.bp
+index 0df5132..d6aae65 100644
+--- a/system/test/rootcanal/Android.bp
++++ b/system/test/rootcanal/Android.bp
+@@ -25,6 +25,7 @@ package {
+ cc_binary {
+     name: "android.hardware.bluetooth@1.1-service.sim",
+     defaults: [
++      "rootcanal_lmp_defaults",
+       "gd_defaults",
+       "libchrome_support_defaults"
+     ],
+@@ -78,6 +79,7 @@ cc_binary {
+ cc_library_shared {
+     name: "android.hardware.bluetooth@1.1-impl-sim",
+     defaults: [
++      "rootcanal_lmp_defaults",
+       "gd_defaults",
+       "libchrome_support_defaults"
+     ],
+diff --git a/tools/rootcanal/Android.bp b/tools/rootcanal/Android.bp
+index d0f6f51..9b68c28 100644
+--- a/tools/rootcanal/Android.bp
++++ b/tools/rootcanal/Android.bp
+@@ -13,9 +13,18 @@ package {
+     ],
+ }
+ 
++// LinkLayerController's public layout depends on this option. Share it with
++// every library/client that instantiates that class, including the HIDL HAL.
++cc_defaults {
++    name: "rootcanal_lmp_defaults",
++    cflags: ["-DROOTCANAL_LMP"],
++    include_dirs: ["packages/modules/Bluetooth/tools/rootcanal/lmp/include"],
++}
++
+ cc_defaults {
+     name: "rootcanal_defaults",
+     defaults: [
++        "rootcanal_lmp_defaults",
+         "fluoride_common_options",
+         "gd_defaults",
+         "gd_clang_tidy",
+@@ -23,7 +32,6 @@ cc_defaults {
+     ],
+     cflags: [
+         "-fvisibility=hidden",
+-        "-DROOTCANAL_LMP",
+     ],
+     local_include_dirs: [
+         "include",
+@@ -166,6 +174,7 @@ cc_test_host {
+ cc_test_host {
+     name: "rootcanal_test_host",
+     defaults: [
++        "rootcanal_lmp_defaults",
+         "fluoride_common_options",
+         "clang_file_coverage",
+         "clang_coverage_bin",
+diff --git a/tools/rootcanal/model/controller/link_layer_controller.cc b/tools/rootcanal/model/controller/link_layer_controller.cc
+index d03651c..796d2da 100644
+--- a/tools/rootcanal/model/controller/link_layer_controller.cc
++++ b/tools/rootcanal/model/controller/link_layer_controller.cc
+@@ -44,6 +44,18 @@ using namespace std::literals;
+ 
+ namespace rootcanal {
+ 
++#ifdef ROOTCANAL_LMP
++namespace {
++// Keep the address-taken deleter in the C++ CFI domain. The Rust export has
++// C linkage but is not emitted with Clang's indirect-call type metadata.
++// Calling it directly preserves Rust's ownership contract and CFI checking
++// at every C++ indirect call without changing the unique_ptr representation.
++void DeleteLinkManager(const LinkManager* manager) {
++  link_manager_destroy(manager);
++}
++}  // namespace
++#endif
++
+ constexpr uint16_t kNumCommandPackets = 0x01;
+ 
+ constexpr milliseconds kNoDelayMs(0);
+@@ -1362,7 +1374,7 @@ LinkLayerController::LinkLayerController(const Address& address,
+                                          const ControllerProperties& properties)
+     : address_(address),
+       properties_(properties),
+-      lm_(nullptr, link_manager_destroy) {
++      lm_(nullptr, DeleteLinkManager) {
+   ops_ = {
+       .user_pointer = this,
+       .get_handle =

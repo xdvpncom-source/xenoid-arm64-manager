@@ -301,6 +301,19 @@ def _fixed_display_only(policy, selected):
             and not set(selected) - set(DISPLAY_PRESET_FIELDS))
 
 
+def _fresh_contract(resource, actual, policy, previous=None):
+    if resource.get("render_fps") is None:
+        return
+    from qa_fresh6a import validate_profile_contract, validate_policy_contract
+    try:
+        validate_profile_contract(actual)
+        if previous is not None:
+            validate_profile_contract(previous)
+        validate_policy_contract(policy, actual)
+    except ValueError as error:
+        raise ProfilePending("fresh6a_profile_policy_incompatible") from error
+
+
 def capture_plan(broker, manager, binding, deadline, *, config_path=CONFIG, resource_path=RESOURCE_CONFIG):
     """Pin settings and the device's current effective JSON before GEN starts."""
     if not Path(config_path).exists():
@@ -327,6 +340,7 @@ def capture_plan(broker, manager, binding, deadline, *, config_path=CONFIG, reso
     for axis, value in (("x", display["size"][0]), ("y", display["size"][1])):
         previous["input"][axis] = {"minimum": 0, "maximum": value - 1}
     validate_profile(previous)
+    _fresh_contract(resource, actual, policy, previous)
     capacities = _property_capacities(capacity_properties)
     preflight = _preflight_profile(policy, actual, previous, resource, capacities)
     return {"schema": PLAN_SCHEMA, "enabled": True, "binding": copy.deepcopy(binding), "policy": policy,
@@ -348,6 +362,7 @@ def _plan(receipt):
             raise ProfilePending("profile_plan_digest_mismatch")
     validate_profile(plan["base_profile"]); validate_profile(plan["previous_profile"])
     validate_policy(plan["policy"], [plan["base_profile"], plan["previous_profile"]])
+    _fresh_contract(plan["resource_config"], plan["base_profile"], plan["policy"], plan["previous_profile"])
     return plan
 
 
@@ -825,7 +840,11 @@ def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=S
     _verify_core(broker, manager, cli, receipt, deadline)
     fps = int(target["display"]["defaultRefreshRateHz"])
     timeout = 0 if deadline is None else max(1, int(deadline - time.monotonic()))
-    broker.set_frame_rate(fps, timeout=timeout)
+    if plan.get("resource_config", {}).get("render_fps") is not None:
+        from qa_fresh6a import verify_runtime
+        verify_runtime(broker, manager, deadline=deadline)
+    else:
+        broker.set_frame_rate(fps, timeout=timeout)
     period = _display_period(broker, manager, deadline)
     if abs(period - 1000000000 // fps) > 1:
         raise ProfilePending("profile_frame_rate_readback_mismatch")

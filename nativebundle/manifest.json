@@ -1,0 +1,596 @@
+{
+  "artifact_descriptor": "artifacts.json",
+  "canonical_profile": "examples/fingerprints/pixel-bluejay-android13.json",
+  "excluded_managed_outputs": [
+    "native/xenoid-proxy-sandbox/xenoid-proxy-sandbox"
+  ],
+  "files": [
+    {
+      "before_sha256": [
+        null,
+        "f78aa0e6ec25fc6d41d55b990fb41a3ff0c7d6a86d9767695938e035e131fd79"
+      ],
+      "bytes": 1576,
+      "mode": "0644",
+      "path": "daemon/app/src/main/java/dev/xenoid/daemon/BluetoothIdentity.java",
+      "sha256": "2ea573360345ea257658bba72a5b32ebb249004af329b180de9d2c52bd2fccc5"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 2643,
+      "mode": "0644",
+      "path": "daemon/app/src/main/java/dev/xenoid/daemon/BuildMetadata.java",
+      "sha256": "dcdeabd538e9eb0c680646dad63a86011cebaa48c7118a35e75c73a694886d62"
+    },
+    {
+      "before_sha256": [
+        "2606c505fe265c7aba731e6ea7bd5c8e9678ca742d17de27315f471c993087f1",
+        "66a2980ce1143bbade7a952b1b4c6aefb571a05c8eb75412b8eec35a5edba046"
+      ],
+      "bytes": 49899,
+      "mode": "0644",
+      "path": "daemon/app/src/main/java/dev/xenoid/daemon/DeviceProfileManager.java",
+      "sha256": "c84fdad5938098d2bbb93cf66f1da959e726ee09a01b5db74723da32b030268a"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 7790,
+      "mode": "0644",
+      "path": "data/google-services/microg-0.3.15.250932-phonesky-30.4.17-gsfproxy-0.1.0-bluejay.json",
+      "sha256": "26af903266f861ca2335e0c87991996495d398d1ceac6829484d15dc82acce69"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 13577,
+      "mode": "0644",
+      "path": "examples/fingerprints/pixel-bluejay-android13.json",
+      "sha256": "81cbb51c545b57f955d68a6dbd728a92f721ea263387f2c05f3eefd4eae16702"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 1847,
+      "mode": "0644",
+      "path": "native/xenoid-frame-pacer/mock_gui.cpp",
+      "sha256": "07073ea7875f81e06d84eaa104c0c47740f191a7a65e4faec9a54d0c2c6a6c13"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 9612,
+      "mode": "0644",
+      "path": "native/xenoid-frame-pacer/pacer.cpp",
+      "sha256": "aa8b8fc2002a95a71fc686299afa8fb08975b24b614db248aee061f7a0f6e76a"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 415,
+      "mode": "0755",
+      "path": "native/xenoid-frame-pacer/test.sh",
+      "sha256": "3cbffeef59587ea1a7c6860ebcc29d2aa08dcc5cfa38969226b5b7f68d67b2d0"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 2814,
+      "mode": "0644",
+      "path": "native/xenoid-frame-pacer/test_pacer.cpp",
+      "sha256": "1d1728b294feeccaba6dac52590b058291bf7368493dae83e8ba95fe053eaa7b"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 854,
+      "mode": "0755",
+      "path": "native/xenoid-pivot/test.sh",
+      "sha256": "1e1557869d4ce974318f6f0e841152c7b79174a58e667e82de73431d8eac9f98"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 2456,
+      "mode": "0644",
+      "path": "native/xenoid-pivot/test_loop_direct_io.c",
+      "sha256": "1c8e31ced9da67d43816a4fd463b50550d33fe17c7a76b9fe7ee4f6da3ea1af9"
+    },
+    {
+      "before_sha256": [
+        "87456a417fc7ee2f3e3dfa2a002cdbe5c49d4e0189149788175a158138541143"
+      ],
+      "bytes": 8304,
+      "mode": "0644",
+      "path": "native/xenoid-pivot/xenoid_pivot.c",
+      "sha256": "974918e4951c673bbd8ce0c1cd67c52b8f028d4a7766fe272f6ce9ebdd84454b"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 19378,
+      "mode": "0644",
+      "path": "native/xenoid-profile-runtime/cold_seed.c",
+      "sha256": "e456bfb60b0299108814207470791ac8a091c252981efc4b2f7a810b8dc11b89"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 25724,
+      "mode": "0644",
+      "path": "native/xenoid-profile-runtime/hwcomposer_wrapper.c",
+      "sha256": "a1f20b4c141cf1498e08afcf7671099271b7bb853562f0669b1e9b740dbeddab"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 48529,
+      "mode": "0644",
+      "path": "native/xenoid-profile-runtime/xenoid_shim.c",
+      "sha256": "4fdb7c907101700b5321adfb1ccede8028267a04841b70360928d4e67f9d39da"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 14657,
+      "mode": "0644",
+      "path": "native/xenoid-profile-runtime/xenoid_zygote.c",
+      "sha256": "03c93b84862415bb28e655f1c2228afe0c43851b7a7e2cffef197cd5317f1e8c"
+    },
+    {
+      "before_sha256": [
+        "ce78a0e4a3b49a54ecba71bdbef3a9f05229695b90bf35e28dfa197c2af659ce",
+        "5676e7433314e7f936f0893ead3da02312ecc94ea50881f5dfb16f8d9ea2a144"
+      ],
+      "bytes": 8575,
+      "mode": "0644",
+      "path": "native/xenoid-profile/xenoid_profile.c",
+      "sha256": "2feb7797fe2e2d3009b92a278170d0017fed91a0d9ed03665b97c1be81345d73"
+    },
+    {
+      "before_sha256": [
+        "8fd896bc7834963dfbcc284a2b5cae1fa2f495002f0460d05e064a47994a59ea"
+      ],
+      "bytes": 38135,
+      "mode": "0644",
+      "path": "native/xenoid-ril/xenoid_ril.c",
+      "sha256": "ac7b97f82e81bb1ca5f940146c12de0b19d76760783fe18c8637bcd59c26576b"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 46843,
+      "mode": "0755",
+      "path": "profiles/runtime-v1/scripts/make-runtime-context.sh",
+      "sha256": "6e0df372dba0f9d08b8750af0d96580f8e2dd4ea0afd3f764d8a41543f8789e3"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 8430,
+      "mode": "0755",
+      "path": "profiles/runtime-v1/scripts/patch-runtime-props.py",
+      "sha256": "b745c5422160c6f5af9b469045639341ea685f20f30a3f4f2ec16be8a652a782"
+    },
+    {
+      "before_sha256": [
+        null,
+        "d3ec8ae799a577a6076df9093a1cad97d060387c239990dc2e064b39541811d3"
+      ],
+      "bytes": 6715,
+      "mode": "0755",
+      "path": "runtime/redroid/fresh-bluejay-render.py",
+      "sha256": "0fc3592ca3bc8ee8fc4ef2d914024ee7a57dff17411691bb5d607c6a25b8f3db"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 4149,
+      "mode": "0755",
+      "path": "runtime/redroid/profile-gui-dependency.py",
+      "sha256": "f2374eba64935ca36f71f73447c4a43d8d0804a41a245e90f811924be3ce0f95"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 13303,
+      "mode": "0644",
+      "path": "runtime/redroid/source-built-bluetooth.py",
+      "sha256": "54591960e0dd7259aa1a9804e1b31275c8fb6b2b06437f93d91887fc8871a2d8"
+    },
+    {
+      "before_sha256": [
+        null,
+        "7edba1cc2bb69ffc5b6f6724ec016c6cba7b6d3a87f293409003f40176aab305",
+        "17818b142a69b5c0e2947627187487cb0044af63468090af01fffa8bbe6fcc74"
+      ],
+      "bytes": 1784,
+      "mode": "0755",
+      "path": "runtime/redroid/xenoid-bluetooth-address.sh",
+      "sha256": "c76da05e806bc855d64cb1fbd686ef417dd3dc0b37d2b6b72f6e2f067f88c87f"
+    },
+    {
+      "before_sha256": [
+        "631a3bbde36aa1649b59e3c442747ae2856bd6fe727dd4c87d19da98477b4310",
+        "6b9b997dfb7ee24a36a5a9accf51754cf501258d4e4626047955873c4e16ee25",
+        "7adc0a6ae1a73fb9c23b8d7653e1d956dbb0a47c5b0b47515db4e4d69376b663"
+      ],
+      "bytes": 3165,
+      "mode": "0755",
+      "path": "scripts/build-daemon-standalone.sh",
+      "sha256": "6b9b997dfb7ee24a36a5a9accf51754cf501258d4e4626047955873c4e16ee25"
+    },
+    {
+      "before_sha256": [
+        "0fc5ae8f0700b0f1185d7708fc86eac900bd947abdb433626506585c296a8efd",
+        "1c2d04373b676de7df2df80a49455b88eb328db989ba19bf5bbd6cd4b5c01b40"
+      ],
+      "bytes": 10196,
+      "mode": "0755",
+      "path": "scripts/build-keymint.sh",
+      "sha256": "1c2d04373b676de7df2df80a49455b88eb328db989ba19bf5bbd6cd4b5c01b40"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 1877,
+      "mode": "0755",
+      "path": "scripts/build-profile-hwcomposer.sh",
+      "sha256": "b4c58de2205b1b38a2846616823d1a3f174b4cf2d14e1ce4b536d61f2bd3c403"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 1102,
+      "mode": "0755",
+      "path": "scripts/build-profile-pacer.sh",
+      "sha256": "9d493bfea08b628eb4800ad35fd31597f257136fc7bc43712dc62e2d5396d5c0"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 1383,
+      "mode": "0755",
+      "path": "scripts/build-profile-zygote.sh",
+      "sha256": "dede1f37d5344761e0aabbee385aa5bb37dfa915f9f24fbeff33bd75e0cc67de"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 8067,
+      "mode": "0644",
+      "path": "scripts/ensure-android-tun.py",
+      "sha256": "e2839ad8c785a4b83d5f3216f99475e897046afd74d2838b58cb8ac4492a62da"
+    },
+    {
+      "before_sha256": [
+        null,
+        "d6a2d3547574c436305fd17fcf1d9a076992aa872064cdb1465c96925c39b17b",
+        "234f0a9ba75e9076b1a26e08277ae670d967348a94cfa90bd76a76d42024da07"
+      ],
+      "bytes": 19576,
+      "mode": "0755",
+      "path": "scripts/seed-cold-profile.py",
+      "sha256": "6beb351b9516da11c51aa5f7f43f99d050f2f05f589f69b6d87fad19ec099afd"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 8037,
+      "mode": "0755",
+      "path": "scripts/seed-profile-boot-id.py",
+      "sha256": "d5a963bf5852c4dc13360a515f0b5f38f787e3a3da3718f41169e6ba43e161e8"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 6368,
+      "mode": "0644",
+      "path": "scripts/test-android-tun.py",
+      "sha256": "6de1da4480e91874e8ea3642f35484794cdae2aa1dfe9d84d89e0531a7c17b3f"
+    },
+    {
+      "before_sha256": [
+        null,
+        "73825f6c474623477b991681127e3ad5f873296bbeafc9686d5b6673d9cfec2e",
+        "09c6d4950e59d12bdd390c46a3a79712c61aabe88a1f661269ed85e894b9a72a"
+      ],
+      "bytes": 13802,
+      "mode": "0755",
+      "path": "scripts/test-bluetooth-identity.py",
+      "sha256": "b4479f300f7861c9e932fd9ff91c0d62ae3e147afc6f09e7f4dd3dbb91e7b354"
+    },
+    {
+      "before_sha256": [
+        "fbdfb6c9ba90a938501a69093d307e01bbc3a315ff83998f919ff9d178b9db0c"
+      ],
+      "bytes": 40587,
+      "mode": "0755",
+      "path": "scripts/test-bootstrap-contract.py",
+      "sha256": "a790a9ce0cc7df54013bdcdff0571838d3c7b25a3b6e0446351dada4bf570eef"
+    },
+    {
+      "before_sha256": [
+        "584292ac26762512229100cb001c57fa70a9d1bc847bae88e85e5ca662fda183"
+      ],
+      "bytes": 45374,
+      "mode": "0755",
+      "path": "scripts/test-build-contract.py",
+      "sha256": "9bd5709d7513b79f5b30ab71902f66341c5e260ffc8a154552ab69dcea4f5d56"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 6836,
+      "mode": "0755",
+      "path": "scripts/test-build-metadata.py",
+      "sha256": "e0b9a402f0c2dc27abae3c283dd4c12fb03fa1868219376f009417f58f4db8ec"
+    },
+    {
+      "before_sha256": [
+        null,
+        "ae3cf039b788e4479fa7d7b0464c4b1ab64aa65da1c45c9cb81575e6999a1e95",
+        "b81ccc6f3b52ea5a09c84a003796bb62483cee85646c6789cc04fa1e3ba48452",
+        "0ad026c0de7468127b14cc7613685f4a5786bd49efd7ab4e5cdc924333e9fccf"
+      ],
+      "bytes": 16052,
+      "mode": "0755",
+      "path": "scripts/test-cold-profile-defaults.py",
+      "sha256": "ca41e3bb31f72cb07b370036634bb766ac42503bcb0c76401d39633454030b14"
+    },
+    {
+      "before_sha256": [
+        null,
+        "a36576be4376e6e4e4bf70fce3f3413b96c97cc93aeaf965ec5ed7f2c9cbd35c",
+        "78a944d9878a9c9c21332727c8cba906c302cfe3ce7615517e695e8a64df51e2"
+      ],
+      "bytes": 13944,
+      "mode": "0755",
+      "path": "scripts/test-cold-profile.py",
+      "sha256": "49f291fb1c98bbba56e428d5d7c5db663a7d9df86f9e50d04765f606aede6b6a"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 11540,
+      "mode": "0644",
+      "path": "scripts/test-cold-seed-native.py",
+      "sha256": "599e40c4523e9ac06708255b065a39a4201fb33b8524717e00b8da0b9c2515f7"
+    },
+    {
+      "before_sha256": [
+        "dc40e79806de84f9ec9929487df56aa0bc342dfd62f9166d9d39a8962a4aa1a3"
+      ],
+      "bytes": 118877,
+      "mode": "0755",
+      "path": "scripts/test-convergence.py",
+      "sha256": "6c1e5a26c25c7beecb234703b87f8bdab3a014f3477169f0f6b26ba584b8bbfe"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 12328,
+      "mode": "0644",
+      "path": "scripts/test-google-bluejay.py",
+      "sha256": "723743b850e9dae00a2c8ceb176cdd3d6767fee6ed865450079ce32ccbfc4bf3"
+    },
+    {
+      "before_sha256": [
+        "22ac84a94519185155cb72ade72e323a3738f3428adee6a484ef36d420eb9e77"
+      ],
+      "bytes": 18435,
+      "mode": "0755",
+      "path": "scripts/test-google-provider-cutover.py",
+      "sha256": "55662b7cad5f00d321d5013846dcb73ddd0087937e1edcbae03e29dac8ae7e69"
+    },
+    {
+      "before_sha256": [
+        "0bbe56b804f4e50ee7c595a3b4d577ec8b1027dbfb9e5caf900ac4efed2f6803"
+      ],
+      "bytes": 60280,
+      "mode": "0755",
+      "path": "scripts/test-google-services.py",
+      "sha256": "1665fa94fd0f01e203c2a0af48efc228dfd1569d9a03b9855965e6336874f0c5"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 3534,
+      "mode": "0755",
+      "path": "scripts/test-profile-boot-id.py",
+      "sha256": "eeaffa5e0752c2c3281ad5ce4a20aa4a63745e5e21a9ec00fb05b167cabc1ebd"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 12583,
+      "mode": "0644",
+      "path": "scripts/test-proxy-android-underlay.py",
+      "sha256": "53efe08e65b419a5fd225f10682b3f8de515a49ac773cf6f50628ac81b890465"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 2139,
+      "mode": "0644",
+      "path": "scripts/test-regeneration-device-name.py",
+      "sha256": "1dfed88f43e14c6839ea03d678e392aaa6085df4bed54953b03217b2e33e8a11"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 11297,
+      "mode": "0755",
+      "path": "scripts/test-soft-reboot.py",
+      "sha256": "8e054b3db887e116d342d6cd2e564b8b37ec7e53dbeb508d41e69059f9b5c075"
+    },
+    {
+      "before_sha256": [
+        "24d05ead62f1fbfdd9cb91481c5d07fd51ac5468116775d375efacf98331bb5b",
+        "cdac3ca5c1446d814a8d7ed283ace3a0933c4d314156f03e1e06971adeae09f8"
+      ],
+      "bytes": 85301,
+      "mode": "0755",
+      "path": "scripts/xenoid-proxy-agent.py",
+      "sha256": "cdac3ca5c1446d814a8d7ed283ace3a0933c4d314156f03e1e06971adeae09f8"
+    },
+    {
+      "before_sha256": [
+        "775ad1d7506708b9f5e9f39932ae107486ed2d0789b9da7f464af091e96f17f1",
+        "9a3457d73560b557b265971867fdf685dcfb300960baeaec3308a396a59e65a7",
+        "9e24b7237b1d3d515205d8a0392174aba0cb017ad6f5686835e2d6eb5279b918",
+        "dc1a4123373420694f9abbb7bea1340de2f82b4560ec4e76984c47126c5d1798"
+      ],
+      "bytes": 133529,
+      "mode": "0755",
+      "path": "scripts/xenoid-proxy-engine.py",
+      "sha256": "44e8415ffd0a579843ff3afa3c5689a9052b3c05f3dc904645e7c9fc594b671c"
+    },
+    {
+      "before_sha256": [
+        "917435af5976f243a4a33b3bff81a7ce55049be20b75fe1cb88259c336ae917e"
+      ],
+      "bytes": 96165,
+      "mode": "0644",
+      "path": "src/xenoid/artifacts.py",
+      "sha256": "dfea030abad4106df627a78fe2fdf454e1d9324479dd61afbfcb94e9fdd00053"
+    },
+    {
+      "before_sha256": [
+        "058475fbda896302e89cd9904877a7c16ae8791ae918061cab154e109f18d864",
+        "46e5a44a328ef3d6e401d4f9f7e7a88e3082d3f5ef730f3e2b5926e8d029d74f",
+        "83918807ab247bae02ad7848b4d7bc2c0ed3788207201617aa1260895f2d0e9e",
+        "b376893a531eb54ad03e05ff419af55e0a4ea3ea5daaaab9f79affe6123e7e4c",
+        "b606554e66162113485d11c0841de038c6f290a9dc7c6e7c111956c512bc2d77",
+        "c090c9a4c3796d0a63d073d17cc33fabcc8b0ba831958dcb687004812ffc7acb",
+        "c42b8f7cc122e6c597a44fd0cd1969d5e2b5f728e0366f7f0aa80387dd5b0ebc",
+        "bde5de99741fcb1c0d40f683bfd55039960badd8fb310a78cdb5e1c73866c7ee",
+        "991cfc59aa976065aee21b2ebb05602e8b31f8e01f277c1b03220bfa35648452"
+      ],
+      "bytes": 591114,
+      "mode": "0644",
+      "path": "src/xenoid/backend.py",
+      "sha256": "61da636815884a47da938e201176cb440e38d7971d412157b829aae6c6128327"
+    },
+    {
+      "before_sha256": [
+        "3a3918eccce48cfdbbb1b075d0759227bed7d56b0ce83b928d7272974a16976f"
+      ],
+      "bytes": 177289,
+      "mode": "0644",
+      "path": "src/xenoid/cli.py",
+      "sha256": "f95001f6548551d9de8fe537b2349fc80c2d5e293262d380d03dbed4371bf5a7"
+    },
+    {
+      "before_sha256": [
+        null,
+        "9b558d0ed7f2121af564ba0f9978f29f03bee1fc83abf6da2020e03514081296"
+      ],
+      "bytes": 23801,
+      "mode": "0644",
+      "path": "src/xenoid/cold_profile.py",
+      "sha256": "89b876063a212ccb55aa22c0d2929f2e21872b484418951dd1243acb6df64da7"
+    },
+    {
+      "before_sha256": [
+        "15b908abb0d53d71fc5228c701404722471a4afe91eabc946eeee017a17aa681"
+      ],
+      "bytes": 52739,
+      "mode": "0644",
+      "path": "src/xenoid/config.py",
+      "sha256": "77d9fe801943151c2bb467de5301bba12a82e05dcf93df661a129f6cc134f1e6"
+    },
+    {
+      "before_sha256": [
+        "f62cf48fb2f0deea99a613abfe1b24180a55889872a3fb88bbadb6dc43a3a6c6"
+      ],
+      "bytes": 130881,
+      "mode": "0644",
+      "path": "src/xenoid/google_services.py",
+      "sha256": "e9f1e8492024c990b8d690c162bcb508a2d4ad1096fa30a8a78c58350e61eaa6"
+    },
+    {
+      "before_sha256": [
+        "12e5f659f17118ca7f9a4bb704c6d56aa69756bdd516706ca2c845a39a91b05b",
+        "3f359f93657f28f5b892005ecf69571c5522429b2399d768b35c0f403479546f",
+        "b8e409b67b2605c89dd451da233e9d1252fbb05df3ae0608c8b0cb153e91d868"
+      ],
+      "bytes": 47591,
+      "mode": "0644",
+      "path": "src/xenoid/live_observe.py",
+      "sha256": "d6e7d26129b2fda1bb15c9253415fb6af031e245a8944d04b0a406b797b158a2"
+    },
+    {
+      "before_sha256": [
+        "8b45354d2df8edbda24922437a0a7444b1b5ea49537eb48200731165e99c4ffc",
+        "dc63322c50768a8f21501669d55ea586e0329aae6a5f3a2cf769b97914768d1f"
+      ],
+      "bytes": 88445,
+      "mode": "0644",
+      "path": "src/xenoid/protection.py",
+      "sha256": "8b45354d2df8edbda24922437a0a7444b1b5ea49537eb48200731165e99c4ffc"
+    },
+    {
+      "before_sha256": [
+        "4c199ef4de2e26ef39990389b8d42127c662a6e0c19832f35f7508bae7a9707f",
+        "def4ca54910af27b3b913f53611c315e92de98258d4993fbc965c981d8d2e57d",
+        "e52b4603891adad4f27c4b2b996a7cf21615dffbe6f6e635bd89f6fe9b85ada0"
+      ],
+      "bytes": 90382,
+      "mode": "0644",
+      "path": "src/xenoid/proxy_source.py",
+      "sha256": "4c199ef4de2e26ef39990389b8d42127c662a6e0c19832f35f7508bae7a9707f"
+    },
+    {
+      "before_sha256": [
+        "280e724c5bc47b8795bd67e0f694b8a215a414746fd4eb57f95b22430874baa7"
+      ],
+      "bytes": 113408,
+      "mode": "0644",
+      "path": "src/xenoid/runtime_image.py",
+      "sha256": "047874ffafdeca20e93f651b2082d00395d7cab87d517cdba10e75064a01b020"
+    }
+  ],
+  "google_release": "microg-0.3.15.250932-phonesky-30.4.17-gsfproxy-0.1.0-bluejay",
+  "public_source_only": true,
+  "render_contract": "/system/etc/xenoid/fresh-bluejay-render.json",
+  "runtime_limits": {
+    "cpus": 1,
+    "memory_bytes": 2147483648,
+    "swap_bytes": 536870912
+  },
+  "schema": "dev.xenoid.fleet.native-source-bundle/v1",
+  "upstream_repository": "https://github.com/Umiade/xenoid.git",
+  "upstream_revision": "c07e56b4aef8cd7e4d56eed11c84781369d29997"
+}

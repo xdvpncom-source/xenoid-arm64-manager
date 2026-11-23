@@ -1,0 +1,2610 @@
+from __future__ import annotations
+
+import ast
+import contextlib
+import dataclasses
+import fcntl
+import gzip
+import hashlib
+import io
+import json
+import os
+import platform
+import re
+import secrets
+import shutil
+import stat
+import tarfile
+import tempfile
+import time
+import xml.etree.ElementTree as ET
+import zlib
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from pathlib import Path, PurePosixPath
+from typing import Any
+from threading import Event
+
+from .artifacts import ArtifactBuilder, ArtifactError, ArtifactSnapshot, CONSUMER_TARGETS, PROFILE_RUNTIME_TARGETS
+from .process import run_bounded
+from .util import android_sdk_dir
+from .cold_profile import (PROFILE_ARTIFACT_OUTPUTS, canonical as cold_canonical,
+                           normalize_cold_profile, profile_digest, validate_google_profile)
+
+
+RUNTIME_IMAGE_SCHEMA = "dev.xenoid.runtime-image/v1"
+RUNTIME_INPUT_SCHEMA = "dev.xenoid.runtime-image-input/v1"
+RUNTIME_CONTEXT_SCHEMA = "dev.xenoid.runtime-context/v1"
+RUNTIME_SCHEMA_LABEL = "dev.xenoid.runtime_schema"
+RUNTIME_INPUT_LABEL = "dev.xenoid.runtime_input_sha256"
+RUNTIME_BOOT_INPUT_LABEL = "dev.xenoid.runtime_boot_input_sha256"
+RUNTIME_BASE_IMAGE_LABEL = "dev.xenoid.runtime_base_image_id"
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_MODE_RE = re.compile(r"^0[0-7]{3}$")
+_BUILDX_VERSION_RE = re.compile(
+    r"(?:^|\s)v?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?(?:\s|$)"
+)
+_SAFE_REPOSITORY_COMPONENT_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
+_MAX_RECORD_BYTES = 4 * 1024 * 1024
+_MAX_IMAGE_ARCHIVE_BYTES = 16 * 1024 * 1024 * 1024
+_COPY_CHUNK = 1024 * 1024
+_MAX_IMAGE_LAYERS = 256
+_MAX_IMAGE_ARCHIVE_MEMBERS = 1024
+_MAX_LAYER_MEMBERS = 1000000
+_MAX_LAYER_DECOMPRESSED_BYTES = 64 * 1024 * 1024 * 1024
+_MAX_LAYER_METADATA_BYTES = 4 * 1024 * 1024
+# Payload-verification contract mixed into inputSha256 and bootInputSha256:
+# bumping it retires every content label minted before the verifier gained a
+# check, so cached or already-running images can never bypass newly added
+# payload proof.
+_PAYLOAD_VERIFICATION_CONTRACT = "layer-replay/v5"
+_LAYER_TAR_MODES = {
+    "application/vnd.docker.image.rootfs.diff.tar.gzip": "r|gz",
+    "application/vnd.oci.image.layer.v1.tar": "r|",
+    "application/vnd.oci.image.layer.v1.tar+gzip": "r|gz",
+}
+_LAYER_MEDIA_TYPES = frozenset(_LAYER_TAR_MODES)
+
+
+def _go_json_fold_name(name: str) -> str:
+    """Return encoding/json's folded spelling for an ASCII schema name."""
+    folded: list[str] = []
+    for character in name:
+        if "a" <= character <= "z":
+            folded.append(chr(ord(character) - (ord("a") - ord("A"))))
+        elif character == "\N{LATIN SMALL LETTER LONG S}":
+            folded.append("S")
+        elif character == "\N{KELVIN SIGN}":
+            folded.append("K")
+        else:
+            folded.append(character)
+    return "".join(folded)
+
+
+def _go_json_fields(*fields: str) -> dict[str, str]:
+    return {_go_json_fold_name(field): field for field in fields}
+
+
+_OCI_LAYOUT_FIELDS = _go_json_fields("imageLayoutVersion")
+_OCI_INDEX_FIELDS = _go_json_fields(
+    "schemaVersion",
+    "mediaType",
+    "artifactType",
+    "manifests",
+    "subject",
+    "annotations",
+)
+_OCI_DESCRIPTOR_FIELDS = _go_json_fields(
+    "mediaType",
+    "digest",
+    "size",
+    "urls",
+    "annotations",
+    "platform",
+    "artifactType",
+    "data",
+)
+_OCI_PLATFORM_FIELDS = _go_json_fields(
+    "architecture",
+    "os",
+    "os.version",
+    "os.features",
+    "variant",
+)
+_OCI_MANIFEST_FIELDS = _go_json_fields(
+    "schemaVersion",
+    "mediaType",
+    "artifactType",
+    "config",
+    "layers",
+    "subject",
+    "annotations",
+)
+_IMAGE_CONFIG_FIELDS = _go_json_fields(
+    "id",
+    "parent",
+    "comment",
+    "created",
+    "container",
+    "container_config",
+    "docker_version",
+    "author",
+    "config",
+    "architecture",
+    "variant",
+    "os",
+    "Size",
+    "rootfs",
+    "history",
+    "os.version",
+    "os.features",
+)
+_IMAGE_RUN_CONFIG_FIELDS = _go_json_fields(
+    "Hostname",
+    "Domainname",
+    "User",
+    "AttachStdin",
+    "AttachStdout",
+    "AttachStderr",
+    "ExposedPorts",
+    "Tty",
+    "OpenStdin",
+    "StdinOnce",
+    "Env",
+    "Cmd",
+    "Healthcheck",
+    "ArgsEscaped",
+    "Image",
+    "Volumes",
+    "WorkingDir",
+    "Entrypoint",
+    "NetworkDisabled",
+    "MacAddress",
+    "OnBuild",
+    "Labels",
+    "StopSignal",
+    "StopTimeout",
+    "Shell",
+)
+_IMAGE_HEALTHCHECK_FIELDS = _go_json_fields(
+    "Test",
+    "Interval",
+    "Timeout",
+    "StartPeriod",
+    "StartInterval",
+    "Retries",
+)
+_IMAGE_ROOTFS_FIELDS = _go_json_fields("type", "diff_ids")
+_IMAGE_HISTORY_FIELDS = _go_json_fields(
+    "created",
+    "author",
+    "created_by",
+    "comment",
+    "empty_layer",
+)
+_DOCKER_MANIFEST_ENTRY_FIELDS = _go_json_fields(
+    "Config",
+    "RepoTags",
+    "Layers",
+    "Parent",
+    "LayerSources",
+)
+_APKTOOL_NAME = "APKTOOL_SHA256"
+_CONTEXT_INPUT_PATHS = (
+    "scripts/make-runtime-context.sh",
+    "scripts/smoke-hardware-features.py",
+    "scripts/patch-runtime-props.py",
+    "scripts/patch-app-process-needed.py",
+    "scripts/patch-servicemanager-needed.py",
+    "scripts/patch-runtime-libselinux.py",
+    "scripts/patch-services-runtime.py",
+    "scripts/patch-telephony-legacy-lte-band.py",
+    "scripts/xenoid_archive.py",
+    "examples/fingerprints/pixel-raven-android13.json",
+)
+
+
+class _BoundedTarInfo(tarfile.TarInfo):
+    """Reject extended tar metadata before tarfile buffers it in memory.
+
+    Budget and format failures must raise RuntimeImageError, never
+    tarfile.InvalidHeaderError: TarFile.next() swallows InvalidHeaderError
+    raised past the first member and reports a silent end-of-archive, which
+    would truncate a layer parse at the poisoned record and let any later
+    (stale) entries escape verification entirely.
+    """
+
+    @staticmethod
+    def _consume_metadata(archive: tarfile.TarFile, size: int) -> None:
+        if size <= 0 or size > _MAX_LAYER_METADATA_BYTES:
+            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+        counter = getattr(archive, "_xenoid_metadata_counter", None)
+        fileobj = archive.fileobj
+        while counter is None and fileobj is not None:
+            counter = getattr(fileobj, "_xenoid_metadata_counter", None)
+            fileobj = getattr(fileobj, "fileobj", None)
+        if counter is not None:
+            counter[0] += size
+            if counter[0] > _MAX_LAYER_METADATA_BYTES:
+                raise RuntimeImageError("runtime_image_archive_layout_invalid")
+
+    def _proc_pax(self, archive: tarfile.TarFile) -> tarfile.TarInfo:
+        self._consume_metadata(archive, self.size)
+        if self.type == tarfile.XGLTYPE:
+            # Go archive/tar ignores global PAX headers, while tarfile applies
+            # their fields to later members. Accepting one would let verifier
+            # replay paths that the OCI loader never observes.
+            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+        try:
+            result = super()._proc_pax(archive)
+        except tarfile.InvalidHeaderError as exc:
+            raise RuntimeImageError("runtime_image_archive_layout_invalid") from exc
+        # Known sparse variants already raised via the overrides below; any
+        # remaining GNU.sparse key (unknown version, bare realsize, a global
+        # header) has no bounded interpretation, so fail closed as well.
+        for headers in (archive.pax_headers, result.pax_headers):
+            if any(key.startswith("GNU.sparse") for key in headers):
+                raise RuntimeImageError("runtime_image_archive_layout_invalid")
+        return result
+
+    def _proc_gnulong(self, archive: tarfile.TarFile) -> tarfile.TarInfo:
+        self._consume_metadata(archive, self.size)
+        return super()._proc_gnulong(archive)
+
+    def _proc_sparse(self, archive: tarfile.TarFile) -> tarfile.TarInfo:
+        # Old-GNU sparse headers claim logical bytes the archive never
+        # carries; there is no safely bounded replay of that, so reject.
+        raise RuntimeImageError("runtime_image_archive_layout_invalid")
+
+    def _proc_gnusparse_00(self, next: tarfile.TarInfo, raw_headers: Any) -> None:
+        raise RuntimeImageError("runtime_image_archive_layout_invalid")
+
+    def _proc_gnusparse_01(self, next: tarfile.TarInfo, pax_headers: Any) -> None:
+        raise RuntimeImageError("runtime_image_archive_layout_invalid")
+
+    def _proc_gnusparse_10(self, next: tarfile.TarInfo, pax_headers: Any, archive: tarfile.TarFile) -> None:
+        raise RuntimeImageError("runtime_image_archive_layout_invalid")
+
+
+class _BoundedOuterTarFile(tarfile.TarFile):
+    """Install the cumulative outer-metadata budget before firstmember parse."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._xenoid_metadata_counter: list[int] = [0]
+        super().__init__(*args, **kwargs)
+
+class _LayerDecompressedReader:
+    """Bound every decompressed byte, including tar parser metadata reads.
+
+    The budget is cumulative across one archive replay: every layer's reader
+    receives the same mutable ``counter`` so many individually under-cap
+    layers cannot multiply the decompression work bound.
+    """
+
+    def __init__(self, raw: Any, *, check: Callable[[], None], counter: list[int]) -> None:
+        self._raw = raw
+        self._check = check
+        self._counter = counter
+
+    def read(self, size: int = -1) -> bytes:
+        self._check()
+        remaining = _MAX_LAYER_DECOMPRESSED_BYTES - self._counter[0]
+        requested = min(_COPY_CHUNK, remaining + 1)
+        if size >= 0:
+            requested = min(size, requested)
+        block = self._raw.read(requested)
+        if block:
+            self._counter[0] += len(block)
+            if self._counter[0] > _MAX_LAYER_DECOMPRESSED_BYTES:
+                raise RuntimeImageError("runtime_image_archive_layout_invalid")
+        self._check()
+        return block
+
+
+class _LayerBlobReader:
+    """Count/hash layer bytes and enforce progress budgets on every read."""
+
+    def __init__(
+        self,
+        raw: Any,
+        *,
+        expected_size: int,
+        check: Callable[[], None],
+    ) -> None:
+        self._raw = raw
+        self._expected_size = expected_size
+        self._check = check
+        self._state = hashlib.sha256()
+        self.count = 0
+
+    def read(self, size: int = -1) -> bytes:
+        self._check()
+        block = self._raw.read(size)
+        if block:
+            self._state.update(block)
+            self.count += len(block)
+            if self.count > self._expected_size:
+                raise RuntimeImageError("runtime_image_archive_layout_invalid")
+        self._check()
+        return block
+
+    def close(self) -> None:
+        self._raw.close()
+
+    def digest(self) -> str:
+        return self._state.hexdigest()
+
+
+_DAEMON_DESTINATION = "/system/priv-app/XenoidDaemon/XenoidDaemon.apk"
+_RECORD_FIELDS = frozenset(
+    {
+        "schema",
+        "inputSha256",
+        "bootInputSha256",
+        "derivedTag",
+        "imageId",
+        "architecture",
+        "baseImageId",
+        "baseRepoDigests",
+        "artifactManifestSha256",
+        "artifactTuples",
+        "contextInputs",
+        "googleInputs",
+        "toolInputs",
+        "builderInputs",
+        "daemonSeedContract",
+        "labels",
+        "contextManifestSha256",
+    }
+)
+
+
+class RuntimeImageError(RuntimeError):
+    """A stable runtime-image failure with no private diagnostic payload."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+@dataclasses.dataclass(frozen=True)
+class _RunResult:
+    returncode: int
+    stdout: bytes
+    stderr: bytes
+
+
+@dataclasses.dataclass(frozen=True)
+class _BaseImage:
+    reference: str
+    image_id: str
+    repo_digests: tuple[str, ...]
+    architecture: str
+
+
+@dataclasses.dataclass(frozen=True)
+class _PreparedInput:
+    public: Mapping[str, Any]
+    snapshot: ArtifactSnapshot
+    base: _BaseImage
+
+
+def _canonical_json(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+
+
+def _reject_duplicate_archive_json_names(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for name, member in pairs:
+        if name in value:
+            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+        value[name] = member
+    return value
+
+
+def _require_exact_archive_json_fields(
+    value: Any,
+    consumed_fields: Mapping[str, str],
+) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise RuntimeImageError("runtime_image_archive_layout_invalid")
+    for name in value:
+        exact = consumed_fields.get(_go_json_fold_name(name))
+        if exact is not None and name != exact:
+            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+    return value
+
+
+def _require_exact_archive_descriptor(value: Any) -> Mapping[str, Any]:
+    descriptor = _require_exact_archive_json_fields(
+        value, _OCI_DESCRIPTOR_FIELDS
+    )
+    platform = descriptor.get("platform")
+    if isinstance(platform, Mapping):
+        _require_exact_archive_json_fields(platform, _OCI_PLATFORM_FIELDS)
+    return descriptor
+
+
+def _require_exact_archive_image_config(value: Any) -> Mapping[str, Any]:
+    image = _require_exact_archive_json_fields(value, _IMAGE_CONFIG_FIELDS)
+    for field in ("config", "container_config"):
+        run_config = image.get(field)
+        if not isinstance(run_config, Mapping):
+            continue
+        run_config = _require_exact_archive_json_fields(
+            run_config, _IMAGE_RUN_CONFIG_FIELDS
+        )
+        healthcheck = run_config.get("Healthcheck")
+        if isinstance(healthcheck, Mapping):
+            _require_exact_archive_json_fields(
+                healthcheck, _IMAGE_HEALTHCHECK_FIELDS
+            )
+    rootfs = image.get("rootfs")
+    if isinstance(rootfs, Mapping):
+        _require_exact_archive_json_fields(rootfs, _IMAGE_ROOTFS_FIELDS)
+    history = image.get("history")
+    if isinstance(history, list):
+        for entry in history:
+            if isinstance(entry, Mapping):
+                _require_exact_archive_json_fields(
+                    entry, _IMAGE_HISTORY_FIELDS
+                )
+    return image
+
+
+def _require_exact_docker_manifest_entry(value: Any) -> Mapping[str, Any]:
+    entry = _require_exact_archive_json_fields(
+        value, _DOCKER_MANIFEST_ENTRY_FIELDS
+    )
+    layer_sources = entry.get("LayerSources")
+    if isinstance(layer_sources, Mapping):
+        for descriptor in layer_sources.values():
+            if isinstance(descriptor, Mapping):
+                _require_exact_archive_descriptor(descriptor)
+    return entry
+
+
+def _digest(value: Any) -> str:
+    return hashlib.sha256(_canonical_json(value)).hexdigest()
+
+
+def _require_sha256(value: Any, code: str = "runtime_image_input_invalid") -> str:
+    if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
+        raise RuntimeImageError(code)
+    return value
+
+
+def _normalize_daemon_seed_contract(value: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+    try:
+        package_name = str(value["packageName"])
+        shared_user = value.get("sharedUserId")
+        destination = str(value["systemDestination"])
+        version_code = int(value["versionCode"])
+        apk_sha256 = _require_sha256(value["apkSha256"], "runtime_image_daemon_seed_invalid")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeImageError("runtime_image_daemon_seed_invalid") from exc
+    if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)+", package_name):
+        raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+    if shared_user is not None:
+        shared_user = str(shared_user)
+        if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)+", shared_user):
+            raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+    if destination != _DAEMON_DESTINATION or version_code < 0:
+        raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+
+    raw_lineage = value.get("signingLineage")
+    if raw_lineage is None:
+        lineage_sha = _require_sha256(value.get("signingLineageSha256"), "runtime_image_daemon_seed_invalid")
+        lineage: list[str] | None = None
+    else:
+        if not isinstance(raw_lineage, Sequence) or isinstance(raw_lineage, (str, bytes)):
+            raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+        lineage = sorted({_require_sha256(item, "runtime_image_daemon_seed_invalid") for item in raw_lineage})
+        if not lineage:
+            raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+        lineage_sha = _digest(lineage)
+        supplied = value.get("signingLineageSha256")
+        if supplied is not None and supplied != lineage_sha:
+            raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+
+    permissions_value = value.get("privilegedPermissions", ())
+    if not isinstance(permissions_value, Sequence) or isinstance(permissions_value, (str, bytes)):
+        raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+    permissions = sorted({str(item) for item in permissions_value})
+    if any(re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)+", item) is None for item in permissions):
+        raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+    allowlist_sha = _digest(permissions)
+    supplied_allowlist = value.get("privilegedAllowlistSha256")
+    if supplied_allowlist is not None and supplied_allowlist != allowlist_sha:
+        raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+
+    boot_contract = {
+        "packageName": package_name,
+        "sharedUserId": shared_user,
+        "systemDestination": destination,
+        "signingLineageSha256": lineage_sha,
+        "privilegedAllowlistSha256": allowlist_sha,
+        "privilegedPermissions": permissions,
+    }
+    contract_sha = _digest(boot_contract)
+    supplied_contract = value.get("contractSha256") or value.get("daemonSeedContractSha256")
+    if supplied_contract is not None and supplied_contract != contract_sha:
+        raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+    result: dict[str, Any] = dict(boot_contract)
+    result.update(
+        {
+            "contractSha256": contract_sha,
+            "apkSha256": apk_sha256,
+            "versionCode": version_code,
+        }
+    )
+    if lineage is not None:
+        result["signingLineage"] = lineage
+    return result
+
+
+def _normalize_artifact_tuples(value: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in value:
+        if not isinstance(raw, Mapping):
+            raise RuntimeImageError("runtime_image_artifact_snapshot_invalid")
+        try:
+            target = str(raw["target"])
+            input_sha = _require_sha256(raw["inputSha256"], "runtime_image_artifact_snapshot_invalid")
+            tool_sha = _require_sha256(raw["toolSha256"], "runtime_image_artifact_snapshot_invalid")
+            raw_outputs = raw["outputs"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeImageError("runtime_image_artifact_snapshot_invalid") from exc
+        if not target or target in seen or not isinstance(raw_outputs, Sequence):
+            raise RuntimeImageError("runtime_image_artifact_snapshot_invalid")
+        seen.add(target)
+        outputs: list[dict[str, Any]] = []
+        output_names: set[str] = set()
+        for output in raw_outputs:
+            if not isinstance(output, Mapping):
+                raise RuntimeImageError("runtime_image_artifact_snapshot_invalid")
+            try:
+                path = str(output["path"])
+                mode_value = output["mode"]
+                mode = f"0{mode_value:03o}" if isinstance(mode_value, int) else str(mode_value)
+                size = int(output["size"])
+                sha256 = _require_sha256(output["sha256"], "runtime_image_artifact_snapshot_invalid")
+            except (KeyError, TypeError, ValueError) as exc:
+                raise RuntimeImageError("runtime_image_artifact_snapshot_invalid") from exc
+            if (
+                not path
+                or PurePosixPath(path).is_absolute()
+                or ".." in PurePosixPath(path).parts
+                or path in output_names
+                or _MODE_RE.fullmatch(mode) is None
+                or size < 0
+            ):
+                raise RuntimeImageError("runtime_image_artifact_snapshot_invalid")
+            output_names.add(path)
+            outputs.append({"path": path, "mode": mode, "size": size, "sha256": sha256})
+        outputs.sort(key=lambda item: item["path"].encode("utf-8"))
+        normalized.append(
+            {
+                "target": target,
+                "inputSha256": input_sha,
+                "toolSha256": tool_sha,
+                "outputs": outputs,
+            }
+        )
+    normalized.sort(key=lambda item: item["target"].encode("utf-8"))
+    return normalized
+
+
+def _normalize_digest_mapping(value: Mapping[str, Any], code: str = "runtime_image_input_invalid") -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise RuntimeImageError(code)
+    # Values are deliberately restricted to canonical, path-free public identity data.
+    def normalize(item: Any) -> Any:
+        if item is None or isinstance(item, (bool, int)):
+            return item
+        if isinstance(item, str):
+            if len(item.encode("utf-8")) > 4096 or "\x00" in item:
+                raise RuntimeImageError(code)
+            return item
+        if isinstance(item, Mapping):
+            return {str(key): normalize(item[key]) for key in sorted(item, key=lambda key: str(key).encode("utf-8"))}
+        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+            return [normalize(element) for element in item]
+        raise RuntimeImageError(code)
+
+    return normalize(value)
+
+
+def compute_input_record(
+    *,
+    base_image_id: str,
+    artifact_tuples: Sequence[Mapping[str, Any]],
+    context_inputs: Mapping[str, Any],
+    google_inputs: Mapping[str, Any],
+    tool_inputs: Mapping[str, Any],
+    builder_inputs: Mapping[str, Any],
+    daemon_seed_contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Purely compute canonical full and boot runtime-image identities.
+
+    The boot projection replaces the complete daemon artifact tuple with the
+    integration seed contract. Consequently ordinary daemon APK/version/source
+    changes affect the full identity but not boot compatibility. The payload
+    verifier contract is part of both payloads: a verifier change invalidates
+    boot compatibility too, so a running container or seeded rootfs minted
+    under weaker payload proof cannot survive the migration.
+    """
+
+    if _IMAGE_ID_RE.fullmatch(base_image_id) is None:
+        raise RuntimeImageError("runtime_image_base_identity_invalid")
+    artifacts = _normalize_artifact_tuples(artifact_tuples)
+    context = _normalize_digest_mapping(context_inputs)
+    google = _normalize_digest_mapping(google_inputs)
+    tools = _normalize_digest_mapping(tool_inputs)
+    builder = _normalize_digest_mapping(builder_inputs)
+    daemon = _normalize_daemon_seed_contract(daemon_seed_contract)
+    if not any(item["target"] == "daemon" for item in artifacts):
+        raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+
+    full_payload = {
+        "schema": RUNTIME_INPUT_SCHEMA,
+        "baseImageId": base_image_id,
+        "artifactTuples": artifacts,
+        "contextInputs": context,
+        "googleInputs": google,
+        "toolInputs": tools,
+        "builderInputs": builder,
+        "daemonSeedContract": daemon,
+        "payloadVerification": _PAYLOAD_VERIFICATION_CONTRACT,
+    }
+    boot_artifacts: list[dict[str, Any]] = []
+    for item in artifacts:
+        if item["target"] == "daemon":
+            boot_artifacts.append(
+                {
+                    "target": "daemon",
+                    "daemonSeedContractSha256": daemon["contractSha256"],
+                }
+            )
+        else:
+            boot_artifacts.append(item)
+    boot_daemon = {
+        key: daemon[key]
+        for key in (
+            "packageName",
+            "sharedUserId",
+            "systemDestination",
+            "signingLineageSha256",
+            "privilegedAllowlistSha256",
+            "privilegedPermissions",
+            "contractSha256",
+        )
+    }
+    boot_payload = {
+        "schema": RUNTIME_INPUT_SCHEMA,
+        "baseImageId": base_image_id,
+        "artifactTuples": boot_artifacts,
+        "contextInputs": context,
+        "googleInputs": google,
+        "toolInputs": tools,
+        "builderInputs": builder,
+        "daemonSeedContract": boot_daemon,
+        "payloadVerification": _PAYLOAD_VERIFICATION_CONTRACT,
+    }
+    return {
+        "schema": RUNTIME_INPUT_SCHEMA,
+        "inputSha256": _digest(full_payload),
+        "bootInputSha256": _digest(boot_payload),
+        "baseImageId": base_image_id,
+        "artifactTuples": artifacts,
+        "contextInputs": context,
+        "googleInputs": google,
+        "toolInputs": tools,
+        "builderInputs": builder,
+        "daemonSeedContract": daemon,
+    }
+
+
+def _repository_from_configured_tag(configured_tag: str) -> str:
+    if not isinstance(configured_tag, str) or not configured_tag or len(configured_tag) > 255:
+        raise RuntimeImageError("runtime_image_tag_invalid")
+    if configured_tag != configured_tag.strip() or "@" in configured_tag or any(ord(char) < 33 for char in configured_tag):
+        raise RuntimeImageError("runtime_image_tag_invalid")
+    last_slash = configured_tag.rfind("/")
+    last_colon = configured_tag.rfind(":")
+    repository = configured_tag[:last_colon] if last_colon > last_slash else configured_tag
+    if not repository or repository.startswith("/") or repository.endswith("/") or "//" in repository:
+        raise RuntimeImageError("runtime_image_tag_invalid")
+    components = repository.split("/")
+    for index, component in enumerate(components):
+        if not component:
+            raise RuntimeImageError("runtime_image_tag_invalid")
+        if index == 0 and (":" in component or component == "localhost"):
+            host, separator, port = component.rpartition(":")
+            if separator:
+                if not host or not port.isdigit() or not 1 <= int(port) <= 65535:
+                    raise RuntimeImageError("runtime_image_tag_invalid")
+                host_parts = host.split(".")
+            else:
+                host_parts = component.split(".")
+            if any(_SAFE_REPOSITORY_COMPONENT_RE.fullmatch(part) is None for part in host_parts):
+                raise RuntimeImageError("runtime_image_tag_invalid")
+        elif _SAFE_REPOSITORY_COMPONENT_RE.fullmatch(component) is None:
+            raise RuntimeImageError("runtime_image_tag_invalid")
+    return repository
+
+
+def derive_tag(configured_tag: str, input_sha256: str) -> str:
+    return f"{_repository_from_configured_tag(configured_tag)}:xenoid-{_require_sha256(input_sha256)[:32]}"
+
+
+def _validate_repo_digest(value: Any, code: str) -> str:
+    if not isinstance(value, str) or value.count("@") != 1:
+        raise RuntimeImageError(code)
+    repository, digest = value.rsplit("@sha256:", 1)
+    if not repository or _SHA256_RE.fullmatch(digest) is None:
+        raise RuntimeImageError(code)
+    try:
+        if _repository_from_configured_tag(repository) != repository:
+            raise RuntimeImageError(code)
+    except RuntimeImageError as exc:
+        raise RuntimeImageError(code) from exc
+    return value
+
+
+def validate_record(value: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != _RECORD_FIELDS or value.get("schema") != RUNTIME_IMAGE_SCHEMA:
+        raise RuntimeImageError("runtime_image_record_invalid")
+    result = dict(value)
+    input_sha = _require_sha256(result["inputSha256"], "runtime_image_record_invalid")
+    _require_sha256(result["bootInputSha256"], "runtime_image_record_invalid")
+    if result["derivedTag"] != derive_tag(str(result["derivedTag"]), input_sha):
+        # derive_tag accepts a derived tag as namespace input and reproduces it.
+        raise RuntimeImageError("runtime_image_record_invalid")
+    if _IMAGE_ID_RE.fullmatch(str(result["imageId"])) is None or _IMAGE_ID_RE.fullmatch(str(result["baseImageId"])) is None:
+        raise RuntimeImageError("runtime_image_record_invalid")
+    if result["architecture"] != "arm64":
+        raise RuntimeImageError("runtime_image_record_invalid")
+    repo_digests = result["baseRepoDigests"]
+    if (
+        not isinstance(repo_digests, list)
+        or repo_digests != sorted(set(repo_digests))
+        or any(_validate_repo_digest(item, "runtime_image_record_invalid") != item for item in repo_digests)
+    ):
+        raise RuntimeImageError("runtime_image_record_invalid")
+    _require_sha256(result["artifactManifestSha256"], "runtime_image_record_invalid")
+    _normalize_artifact_tuples(result["artifactTuples"])
+    _normalize_digest_mapping(result["contextInputs"], "runtime_image_record_invalid")
+    _normalize_digest_mapping(result["googleInputs"], "runtime_image_record_invalid")
+    _normalize_digest_mapping(result["toolInputs"], "runtime_image_record_invalid")
+    _normalize_digest_mapping(result["builderInputs"], "runtime_image_record_invalid")
+    _normalize_daemon_seed_contract(result["daemonSeedContract"])
+    labels = result["labels"]
+    if not isinstance(labels, Mapping) or labels != _expected_labels(input_sha, result["bootInputSha256"], result["baseImageId"]):
+        raise RuntimeImageError("runtime_image_record_invalid")
+    context_manifest = result["contextManifestSha256"]
+    if context_manifest is not None:
+        _require_sha256(context_manifest, "runtime_image_record_invalid")
+    return result
+
+
+def _expected_labels(input_sha: str, boot_sha: str, base_id: str) -> dict[str, str]:
+    return {
+        RUNTIME_SCHEMA_LABEL: "1",
+        RUNTIME_INPUT_LABEL: input_sha,
+        RUNTIME_BOOT_INPUT_LABEL: boot_sha,
+        RUNTIME_BASE_IMAGE_LABEL: base_id,
+    }
+
+
+class RuntimeImageBuilder:
+    def __init__(
+        self,
+        project_root: str | os.PathLike[str],
+        docker_argv: Sequence[str],
+        docker_env: Mapping[str, str],
+        *,
+        artifact_builder: ArtifactBuilder | None = None,
+        runner: Callable[..., Any] | None = None,
+        engine_lock: Any = None,
+        cold_profile: Mapping[str, Any] | None = None,
+    ) -> None:
+        try:
+            root = Path(project_root).expanduser().resolve(strict=True)
+            root_info = root.stat()
+        except (OSError, RuntimeError) as exc:
+            raise ValueError("runtime_image_project_root_invalid") from exc
+        if not stat.S_ISDIR(root_info.st_mode):
+            raise ValueError("runtime_image_project_root_invalid")
+        argv = tuple(str(item) for item in docker_argv)
+        if not argv or any(not item or "\x00" in item for item in argv):
+            raise ValueError("runtime_image_docker_argv_invalid")
+        self.project_root = root
+        self.docker_argv = argv
+        self.docker_env = {str(key): str(value) for key, value in docker_env.items()}
+        self.artifact_builder = artifact_builder or ArtifactBuilder(root)
+        self._runner = runner
+        self._engine_lock = engine_lock
+        self._cold_profile = normalize_cold_profile(cold_profile)
+        self._cache_root = root / ".xenoid" / "cache" / "runtime-images"
+        self._local_lock_root = root / ".xenoid" / "locks" / "runtime-images"
+        self._ensure_private_directory(self._cache_root)
+        self._ensure_private_directory(self._local_lock_root)
+        self._deadline = time.monotonic() + 3600.0
+        self._cancelled: Event | Callable[[], bool] | None = None
+
+    def input_record(
+        self,
+        base_image: str,
+        google_spec: Any = None,
+        *,
+        configured_tag: str | None = None,
+    ) -> dict[str, Any]:
+        if isinstance(google_spec, str) and configured_tag is None:
+            configured_tag = google_spec
+            google_spec = None
+        prepared = self._prepare_input(base_image, google_spec)
+        result = dict(prepared.public)
+        result["baseRepoDigests"] = list(prepared.base.repo_digests)
+        if configured_tag is not None:
+            result["derivedTag"] = derive_tag(configured_tag, result["inputSha256"])
+        return result
+
+    def lookup(self, input_sha256: str) -> dict[str, Any] | None:
+        input_sha = _require_sha256(input_sha256, "runtime_image_record_invalid")
+        path = self._cache_root / f"{input_sha}.json"
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise RuntimeImageError("runtime_image_record_invalid") from exc
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or stat.S_ISLNK(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_nlink != 1
+            or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_size > _MAX_RECORD_BYTES
+        ):
+            raise RuntimeImageError("runtime_image_record_invalid")
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(path, flags)
+            try:
+                payload = _read_bounded(descriptor, _MAX_RECORD_BYTES)
+            finally:
+                os.close(descriptor)
+            value = json.loads(payload)
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise RuntimeImageError("runtime_image_record_invalid") from exc
+        record = validate_record(value)
+        if record["inputSha256"] != input_sha:
+            raise RuntimeImageError("runtime_image_record_invalid")
+        return record
+
+    def materialize_context(
+        self,
+        base_image: str,
+        google_spec: Any = None,
+        destination: str | os.PathLike[str] | None = None,
+    ) -> dict[str, Any]:
+        prepared = self._prepare_input(base_image, google_spec)
+        if destination is None:
+            owner_root = Path(tempfile.mkdtemp(prefix="context-", dir=self._cache_root))
+            os.chmod(owner_root, 0o700)
+            context_path = owner_root / "runtime-context"
+        else:
+            context_path = Path(destination).expanduser()
+            if not context_path.is_absolute():
+                context_path = self.project_root / context_path
+            if context_path.exists() or context_path.is_symlink():
+                raise RuntimeImageError("runtime_context_destination_exists")
+            context_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        input_sha = prepared.public["inputSha256"]
+        base_tag = self._base_tag(input_sha)
+        lock_name = self._runtime_input_lock_name(input_sha)
+        with self._acquire_engine_lock(lock_name):
+            tagged = False
+            try:
+                self._docker_checked(
+                    ("image", "tag", prepared.base.image_id, base_tag),
+                    "runtime_image_base_tag_failed",
+                )
+                tagged = True
+                manifest_sha = self._generate_context(
+                    prepared,
+                    base_tag,
+                    context_path,
+                    google_spec,
+                )
+                current_base = self._resolve_base(base_image)
+                if current_base.image_id != prepared.base.image_id:
+                    raise RuntimeImageError("base_image_changed_during_build")
+                return {
+                    "schema": RUNTIME_CONTEXT_SCHEMA,
+                    "inputSha256": input_sha,
+                    "bootInputSha256": prepared.public["bootInputSha256"],
+                    "baseImageId": prepared.base.image_id,
+                    "contextManifestSha256": manifest_sha,
+                    "contextPath": str(context_path),
+                }
+            except Exception:
+                self._remove_tree_if_owned(context_path)
+                raise
+            finally:
+                if tagged:
+                    self._docker_remove_tag(base_tag)
+
+    def ensure(
+        self,
+        base_image: str,
+        configured_tag: str,
+        google_spec: Any = None,
+        *,
+        deadline: float | None = None,
+        cancelled: Event | Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        self._deadline = deadline if deadline is not None else time.monotonic() + 3600.0
+        self._cancelled = cancelled
+        prepared = self._prepare_input(base_image, google_spec)
+        input_sha = prepared.public["inputSha256"]
+        boot_sha = prepared.public["bootInputSha256"]
+        derived_tag = derive_tag(configured_tag, input_sha)
+        labels = _expected_labels(input_sha, boot_sha, prepared.base.image_id)
+        lock_name = self._runtime_input_lock_name(input_sha)
+        with self._acquire_engine_lock(lock_name):
+            existing = self._inspect_image(derived_tag, required=False)
+            if existing is not None:
+                self._verify_published_image(existing, labels, collision=True)
+                cached = self.lookup(input_sha)
+                if cached is None or cached["imageId"] != existing["Id"]:
+                    record = self._record_value(
+                        prepared,
+                        derived_tag,
+                        existing["Id"],
+                        labels,
+                        context_manifest_sha256=None,
+                    )
+                    self._publish_record(record)
+                return {
+                    "schema": RUNTIME_IMAGE_SCHEMA,
+                    "inputSha256": input_sha,
+                    "bootInputSha256": boot_sha,
+                    "derivedTag": derived_tag,
+                    "imageId": existing["Id"],
+                    "reused": True,
+                }
+
+            work_root = Path(tempfile.mkdtemp(prefix="build-", dir=self._cache_root))
+            os.chmod(work_root, 0o700)
+            context_path = work_root / "context"
+            archive_path = work_root / "image.tar"
+            base_tag = self._base_tag(input_sha)
+            temporary_tag = self._temporary_tag("build", input_sha)
+            base_tagged = False
+            built = False
+            published = False
+            built_id: str | None = None
+            try:
+                self._docker_checked(("image", "tag", prepared.base.image_id, base_tag), "runtime_image_base_tag_failed")
+                base_tagged = True
+                context_manifest_sha = self._generate_context(prepared, base_tag, context_path, google_spec)
+                build_command: list[str] = [
+                    "buildx",
+                    "build",
+                    "--platform=linux/arm64",
+                    "--provenance=false",
+                    "--sbom=false",
+                    "--no-cache",
+                    "--build-arg",
+                    "SOURCE_DATE_EPOCH=0",
+                ]
+                for key, value in sorted(labels.items()):
+                    build_command.extend(("--label", f"{key}={value}"))
+                build_command.extend(
+                    (
+                        "--output",
+                        "type=docker,dest=image.tar,rewrite-timestamp=true",
+                        "--tag",
+                        temporary_tag,
+                        str(context_path),
+                    )
+                )
+                self._docker_checked(
+                    tuple(build_command),
+                    "runtime_image_build_failed",
+                    cwd=work_root,
+                )
+                self._validate_image_archive(archive_path)
+                self._verify_archive_payload(archive_path, context_path)
+                self._docker_checked(
+                    ("image", "load", "--input", str(archive_path)),
+                    "runtime_image_load_failed",
+                )
+                built = True
+                built_image = self._inspect_image(temporary_tag, required=True)
+                self._verify_published_image(built_image, labels, collision=False)
+                built_id = built_image["Id"]
+
+                current_base = self._resolve_base(base_image)
+                if current_base.image_id != prepared.base.image_id:
+                    raise RuntimeImageError("base_image_changed_during_build")
+                current = self._prepare_input(base_image, google_spec)
+                if current.public["inputSha256"] != input_sha or current.public["bootInputSha256"] != boot_sha:
+                    raise RuntimeImageError("runtime_image_input_changed")
+                occupied = self._inspect_image(derived_tag, required=False)
+                if occupied is not None:
+                    raise RuntimeImageError("runtime_image_cache_conflict")
+
+                self._docker_checked(("image", "tag", temporary_tag, derived_tag), "runtime_image_publish_failed")
+                published = True
+                final_image = self._inspect_image(derived_tag, required=True)
+                self._verify_published_image(final_image, labels, collision=False)
+                if final_image["Id"] != built_id:
+                    raise RuntimeImageError("runtime_image_publish_failed")
+                record = self._record_value(
+                    prepared,
+                    derived_tag,
+                    built_id,
+                    labels,
+                    context_manifest_sha256=context_manifest_sha,
+                )
+                self._publish_record(record)
+                return {
+                    "schema": RUNTIME_IMAGE_SCHEMA,
+                    "inputSha256": input_sha,
+                    "bootInputSha256": boot_sha,
+                    "derivedTag": derived_tag,
+                    "imageId": built_id,
+                    "reused": False,
+                }
+            except Exception:
+                if published and built_id is not None:
+                    self._remove_tag_if_image(derived_tag, built_id)
+                raise
+            finally:
+                if built:
+                    self._docker_remove_tag(temporary_tag)
+                if base_tagged:
+                    self._docker_remove_tag(base_tag)
+                self._remove_tree_if_owned(work_root)
+
+    def _prepare_input(self, base_image: str, google_spec: Any) -> _PreparedInput:
+        validate_google_profile(getattr(self, "_cold_profile", None), google_spec)
+        base = self._resolve_base(base_image)
+        try:
+            snapshot = self.artifact_builder.snapshot(
+                (*CONSUMER_TARGETS["runtimeContext"], *PROFILE_RUNTIME_TARGETS)
+                if getattr(self, "_cold_profile", None) is not None else "runtimeContext"
+            )
+        except ArtifactError as exc:
+            raise RuntimeImageError("runtime_image_artifact_snapshot_invalid") from exc
+        if not isinstance(snapshot, ArtifactSnapshot):
+            raise RuntimeImageError("runtime_image_artifact_snapshot_invalid")
+        artifact_tuples = [
+            {
+                "target": record.target,
+                "inputSha256": record.input_sha256,
+                "toolSha256": record.tool_sha256,
+                "outputs": [output.as_dict() for output in record.outputs],
+            }
+            for record in snapshot.records
+        ]
+        seed_contract = self._daemon_seed_contract(snapshot, artifact_tuples)
+        context_inputs = self._context_inputs()
+        google_inputs = self._google_inputs(google_spec)
+        tool_inputs, builder_inputs = self._tool_and_builder_inputs()
+        computed = compute_input_record(
+            base_image_id=base.image_id,
+            artifact_tuples=artifact_tuples,
+            context_inputs=context_inputs,
+            google_inputs=google_inputs,
+            tool_inputs=tool_inputs,
+            builder_inputs=builder_inputs,
+            daemon_seed_contract=seed_contract,
+        )
+        computed["artifactManifestSha256"] = _require_sha256(
+            snapshot.manifest_sha256, "runtime_image_artifact_snapshot_invalid"
+        )
+        return _PreparedInput(computed, snapshot, base)
+
+    def _resolve_base(self, reference: str) -> _BaseImage:
+        if not isinstance(reference, str) or not reference or reference != reference.strip() or "\x00" in reference:
+            raise RuntimeImageError("runtime_image_base_reference_invalid")
+        inspected = self._inspect_image(reference, required=True)
+        image_id = str(inspected.get("Id", ""))
+        architecture = str(inspected.get("Architecture", ""))
+        if _IMAGE_ID_RE.fullmatch(image_id) is None:
+            raise RuntimeImageError("runtime_image_base_identity_invalid")
+        if architecture != "arm64":
+            raise RuntimeImageError("runtime_image_base_architecture_invalid")
+        raw_repo_digests = inspected.get("RepoDigests") or []
+        if not isinstance(raw_repo_digests, list):
+            raise RuntimeImageError("runtime_image_base_identity_invalid")
+        repo_digests = tuple(
+            sorted(
+                {
+                    _validate_repo_digest(item, "runtime_image_base_identity_invalid")
+                    for item in raw_repo_digests
+                }
+            )
+        )
+        if "@sha256:" in reference:
+            repository, digest = reference.rsplit("@sha256:", 1)
+            if not repository or _SHA256_RE.fullmatch(digest) is None:
+                raise RuntimeImageError("runtime_image_base_reference_invalid")
+            expected = f"{repository}@sha256:{digest}"
+            if expected not in repo_digests:
+                raise RuntimeImageError("runtime_image_base_digest_mismatch")
+        elif "@" in reference:
+            raise RuntimeImageError("runtime_image_base_reference_invalid")
+        return _BaseImage(reference, image_id, repo_digests, architecture)
+
+    def _inspect_image(self, reference: str, *, required: bool) -> dict[str, Any] | None:
+        result = self._run(self.docker_argv + ("image", "inspect", reference), env=self._command_env(), cwd=self.project_root)
+        if result.returncode != 0:
+            if required:
+                raise RuntimeImageError("runtime_image_base_unavailable")
+            return None
+        try:
+            payload = json.loads(result.stdout)
+        except (ValueError, UnicodeError) as exc:
+            raise RuntimeImageError("runtime_image_inspect_invalid") from exc
+        if isinstance(payload, list):
+            if len(payload) != 1 or not isinstance(payload[0], Mapping):
+                raise RuntimeImageError("runtime_image_inspect_invalid")
+            payload = payload[0]
+        if not isinstance(payload, Mapping):
+            raise RuntimeImageError("runtime_image_inspect_invalid")
+        return dict(payload)
+
+    def _verify_published_image(self, image: Mapping[str, Any], labels: Mapping[str, str], *, collision: bool) -> None:
+        code = "runtime_image_cache_conflict" if collision else "runtime_image_verification_failed"
+        if _IMAGE_ID_RE.fullmatch(str(image.get("Id", ""))) is None or image.get("Architecture") != "arm64":
+            raise RuntimeImageError(code)
+        config = image.get("Config")
+        rootfs = image.get("RootFS")
+        if not isinstance(config, Mapping) or not isinstance(rootfs, Mapping):
+            raise RuntimeImageError(code)
+        actual_labels = config.get("Labels")
+        if not isinstance(actual_labels, Mapping) or any(actual_labels.get(key) != value for key, value in labels.items()):
+            raise RuntimeImageError(code)
+        layers = rootfs.get("Layers")
+        if not isinstance(layers, list) or not layers or any(_IMAGE_ID_RE.fullmatch(str(layer)) is None for layer in layers):
+            raise RuntimeImageError(code)
+
+    def _context_inputs(self) -> dict[str, Any]:
+        files: list[dict[str, Any]] = []
+        for relative in _CONTEXT_INPUT_PATHS:
+            path = self.project_root / relative
+            files.append({"path": relative, "sha256": _hash_regular_file(path)})
+        runtime_root = self.project_root / "runtime" / "redroid"
+        try:
+            root_info = runtime_root.lstat()
+        except OSError as exc:
+            raise RuntimeImageError("runtime_image_input_unavailable") from exc
+        if not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode):
+            raise RuntimeImageError("runtime_image_input_unavailable")
+        for current, dirnames, filenames in os.walk(runtime_root, topdown=True, followlinks=False):
+            base = Path(current)
+            dirnames.sort(key=lambda item: item.encode("utf-8"))
+            filenames.sort(key=lambda item: item.encode("utf-8"))
+            for dirname in dirnames:
+                info = (base / dirname).lstat()
+                if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                    raise RuntimeImageError("runtime_image_input_unavailable")
+            for filename in filenames:
+                path = base / filename
+                relative = path.relative_to(self.project_root).as_posix()
+                files.append({"path": relative, "sha256": _hash_regular_file(path)})
+        files.sort(key=lambda item: item["path"].encode("utf-8"))
+        result = {"files": files}
+        if getattr(self, "_cold_profile", None) is not None:
+            result["coldProfile"] = {
+                "templateSha256": profile_digest(self._cold_profile),
+                "version": "profile-runtime/v1",
+                "generatorFiles": [
+                    {"path": relative, "sha256": _hash_regular_file(self.project_root / relative)}
+                    for relative in (
+                        "profiles/runtime-v1/scripts/make-runtime-context.sh",
+                        "profiles/runtime-v1/scripts/patch-runtime-props.py",
+                        "src/xenoid/cold_profile.py",
+                        "scripts/seed-cold-profile.py",
+                        "scripts/seed-profile-boot-id.py",
+                    )
+                ],
+            }
+        return result
+
+    def _google_inputs(self, google_spec: Any) -> dict[str, Any]:
+        if google_spec is None:
+            return {
+                "provider": "none",
+                "release": "none",
+                "specSha256": _digest({"provider": "none", "release": "none"}),
+                "dataCompatibilitySha256": _digest({"provider": "none", "release": "none"}),
+                "payloadSha256": _digest([]),
+            }
+        try:
+            from .google_services import (
+                GOOGLE_RELEASE_SCHEMA_V2,
+                MINDTHEGAPPS_RELEASE,
+                asset_paths,
+                load_release_spec,
+                quick_validate_assets,
+            )
+
+            quick_validate_assets(self.project_root, google_spec)
+            provider = str(google_spec.provider)
+            release = str(google_spec.release)
+            spec_sha = _require_sha256(google_spec.fingerprint, "runtime_image_google_input_invalid")
+            data_sha = _require_sha256(
+                google_spec.data_compatibility_fingerprint, "runtime_image_google_input_invalid"
+            )
+            metadata_sha = _require_sha256(google_spec.metadata_sha256, "runtime_image_google_input_invalid")
+            if google_spec.schema == GOOGLE_RELEASE_SCHEMA_V2:
+                source_spec = load_release_spec(self.project_root, MINDTHEGAPPS_RELEASE)
+                quick_validate_assets(self.project_root, source_spec)
+                own_manifest = asset_paths(self.project_root, google_spec)["manifest"].read_bytes()
+                source_manifest = asset_paths(self.project_root, source_spec)["manifest"].read_bytes()
+                phonesky = google_spec.component("playStoreSeed")
+                component_set_sha = _digest(
+                    [
+                        {
+                            "id": str(item["id"]),
+                            "package": str(item["package"]),
+                            "runtimePath": str(item["runtimePath"]),
+                            "sha256": _require_sha256(item["sha256"], "runtime_image_google_input_invalid"),
+                            "size": int(item["size"]),
+                            "signingCertificateHistorySha256": [
+                                _require_sha256(entry, "runtime_image_google_input_invalid")
+                                for entry in item["signingCertificateHistorySha256"]
+                            ],
+                            "nativeAbis": [str(abi) for abi in item["nativeAbis"]],
+                            "privileged": bool(item["privileged"]),
+                        }
+                        for item in google_spec.components
+                    ]
+                )
+                signature_policy = google_spec.signature_policy
+                product_policy = google_spec.product_policy
+                return {
+                    "provider": provider,
+                    "release": release,
+                    "specSha256": spec_sha,
+                    "dataCompatibilitySha256": data_sha,
+                    "metadataSha256": metadata_sha,
+                    "providerSchema": str(google_spec.schema),
+                    "componentSetSha256": component_set_sha,
+                    "importManifestSha256": hashlib.sha256(own_manifest).hexdigest(),
+                    "sourceImportManifestSha256": hashlib.sha256(source_manifest).hexdigest(),
+                    "sourceMetadataSha256": _require_sha256(
+                        source_spec.metadata_sha256, "runtime_image_google_input_invalid"
+                    ),
+                    "playStoreSeedSha256": _require_sha256(phonesky["sha256"], "runtime_image_google_input_invalid"),
+                    "signaturePolicySha256": _digest(dict(signature_policy)),
+                    "productPolicySha256": _digest(dict(product_policy)),
+                    "payloadSha256": _digest(
+                        [
+                            {
+                                "runtimePath": str(item["runtimePath"]),
+                                "sha256": _require_sha256(item["sha256"], "runtime_image_google_input_invalid"),
+                                "size": int(item["size"]),
+                            }
+                            for item in sorted(
+                                google_spec.components,
+                                key=lambda entry: str(entry["runtimePath"]).encode("utf-8"),
+                            )
+                        ]
+                    ),
+                }
+            archive_sha = _require_sha256(google_spec.archive["sha256"], "runtime_image_google_input_invalid")
+            certificate_sha = _require_sha256(
+                google_spec.archive["certificate"]["sha256"], "runtime_image_google_input_invalid"
+            )
+            payload_sha = _digest(
+                [
+                    {
+                        "archivePath": str(item["archivePath"]),
+                        "runtimePath": str(item["runtimePath"]),
+                        "sha256": _require_sha256(item["sha256"], "runtime_image_google_input_invalid"),
+                        "size": int(item["size"]),
+                    }
+                    for item in sorted(google_spec.members, key=lambda entry: str(entry["runtimePath"]).encode("utf-8"))
+                ]
+            )
+        except RuntimeImageError:
+            raise
+        except Exception as exc:
+            raise RuntimeImageError("runtime_image_google_input_invalid") from exc
+        return {
+            "provider": provider,
+            "release": release,
+            "specSha256": spec_sha,
+            "dataCompatibilitySha256": data_sha,
+            "metadataSha256": metadata_sha,
+            "archiveSha256": archive_sha,
+            "certificateSha256": certificate_sha,
+            "payloadSha256": payload_sha,
+        }
+
+    def _tool_and_builder_inputs(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        java_command = shutil.which("java")
+        if java_command is None:
+            raise RuntimeImageError("runtime_image_java_unavailable")
+        java = self._run((java_command, "-version"), env=self._command_env(), cwd=self.project_root)
+        if java.returncode != 0:
+            raise RuntimeImageError("runtime_image_java_unavailable")
+        docker = self._run(
+            self.docker_argv + ("version", "--format", "{{json .}}"),
+            env=self._command_env(),
+            cwd=self.project_root,
+        )
+        if docker.returncode != 0:
+            raise RuntimeImageError("runtime_image_builder_unavailable")
+        buildx = self._run(self.docker_argv + ("buildx", "version"), env=self._command_env(), cwd=self.project_root)
+        if buildx.returncode != 0:
+            raise RuntimeImageError("runtime_image_builder_unavailable")
+        buildx_text = (buildx.stdout + b"\n" + buildx.stderr).decode("utf-8", "replace")
+        match = _BUILDX_VERSION_RE.search(buildx_text)
+        if match is None or tuple(int(group) for group in match.groups()) < (0, 10, 0):
+            raise RuntimeImageError("runtime_image_builder_unsupported")
+        python_identity = {
+            "implementation": platform.python_implementation(),
+            "version": platform.python_version(),
+            "zlibVersion": zlib.ZLIB_VERSION,
+            "zlibRuntimeVersion": zlib.ZLIB_RUNTIME_VERSION,
+        }
+        tools = {
+            "apktoolSha256": self._pinned_apktool_digest(),
+            "pythonIdentitySha256": _digest(python_identity),
+            "javaIdentitySha256": hashlib.sha256(java.stdout + b"\x00" + java.stderr).hexdigest(),
+        }
+        builder = {
+            "dockerIdentitySha256": hashlib.sha256(docker.stdout + b"\x00" + docker.stderr).hexdigest(),
+            "buildxIdentitySha256": hashlib.sha256(buildx.stdout + b"\x00" + buildx.stderr).hexdigest(),
+            "platform": "linux/arm64",
+            "sourceDateEpoch": 0,
+            "provenance": False,
+            "exporter": "docker-archive",
+            "rewriteTimestamp": True,
+        }
+        return tools, builder
+
+    def _pinned_apktool_digest(self) -> str:
+        path = self.project_root / "scripts" / "xenoid_archive.py"
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename="scripts/xenoid_archive.py")
+        except (OSError, SyntaxError, UnicodeError) as exc:
+            raise RuntimeImageError("runtime_image_tool_identity_invalid") from exc
+        values: list[str] = []
+        for node in tree.body:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(isinstance(target, ast.Name) and target.id == _APKTOOL_NAME for target in targets):
+                value = node.value
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    values.append(value.value)
+        if len(values) != 1:
+            raise RuntimeImageError("runtime_image_tool_identity_invalid")
+        return _require_sha256(values[0], "runtime_image_tool_identity_invalid")
+
+    def _daemon_seed_contract(
+        self, snapshot: ArtifactSnapshot, artifact_tuples: Sequence[Mapping[str, Any]]
+    ) -> dict[str, Any]:
+        provider = getattr(self.artifact_builder, "daemon_seed_contract", None)
+        if callable(provider):
+            return _normalize_daemon_seed_contract(provider(snapshot))
+        daemon_tuple = next((item for item in artifact_tuples if item["target"] == "daemon"), None)
+        if daemon_tuple is None:
+            raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+        apk_outputs = [item for item in daemon_tuple["outputs"] if str(item["path"]).endswith(".apk")]
+        if len(apk_outputs) != 1:
+            raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+        stage_root = Path(tempfile.mkdtemp(prefix="seed-", dir=self._cache_root))
+        os.chmod(stage_root, 0o700)
+        try:
+            try:
+                self.artifact_builder.stage(snapshot, stage_root)
+            except ArtifactError as exc:
+                raise RuntimeImageError("runtime_image_artifact_snapshot_invalid") from exc
+            apk_path = stage_root / apk_outputs[0]["path"]
+            lineage, package_name, shared_user, version_code = self._verified_apk_identity(apk_path)
+        finally:
+            self._remove_tree_if_owned(stage_root)
+
+        allowlist_path = (
+            self.project_root
+            / "runtime"
+            / "redroid"
+            / "xenoid-cellular-overlay"
+            / "system"
+            / "etc"
+            / "permissions"
+            / "privapp-permissions-xenoid.xml"
+        )
+        try:
+            allowlist_root = ET.parse(allowlist_path).getroot()
+        except (OSError, ET.ParseError) as exc:
+            raise RuntimeImageError("runtime_image_daemon_seed_invalid") from exc
+        permissions: list[str] = []
+        for element in allowlist_root.findall("privapp-permissions"):
+            if element.attrib.get("package") == package_name:
+                permissions.extend(
+                    permission.attrib["name"]
+                    for permission in element.findall("permission")
+                    if "name" in permission.attrib
+                )
+        if not permissions:
+            raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+        return _normalize_daemon_seed_contract(
+            {
+                "packageName": package_name,
+                "sharedUserId": shared_user,
+                "systemDestination": _DAEMON_DESTINATION,
+                "signingLineage": lineage,
+                "privilegedPermissions": permissions,
+                "apkSha256": apk_outputs[0]["sha256"],
+                "versionCode": version_code,
+            }
+        )
+
+    def _verified_apk_identity(self, apk_path: Path) -> tuple[list[str], str, str | None, int]:
+        tool_directory = self._android_build_tool_directory()
+        apksigner = tool_directory / "apksigner"
+        aapt2 = tool_directory / "aapt2"
+        for tool in (apksigner, aapt2):
+            try:
+                info = tool.stat()
+            except OSError as exc:
+                raise RuntimeImageError("runtime_image_android_tools_unavailable") from exc
+            if not stat.S_ISREG(info.st_mode) or not os.access(tool, os.X_OK):
+                raise RuntimeImageError("runtime_image_android_tools_unavailable")
+        signature = self._run(
+            (str(apksigner), "verify", "--verbose", "--print-certs", str(apk_path)),
+            env=self._command_env(),
+            cwd=self.project_root,
+        )
+        if signature.returncode != 0:
+            raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+        signature_text = (signature.stdout + b"\n" + signature.stderr).decode("utf-8", "replace")
+        lineage = sorted(
+            {
+                match.group(1).lower()
+                for match in re.finditer(
+                    r"certificate SHA-256 digest:\s*([0-9a-fA-F]{64})", signature_text
+                )
+            }
+        )
+        if not lineage:
+            raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+        manifest = self._run(
+            (str(aapt2), "dump", "badging", str(apk_path)),
+            env=self._command_env(),
+            cwd=self.project_root,
+        )
+        if manifest.returncode != 0:
+            raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+        manifest_text = manifest.stdout.decode("utf-8", "replace")
+        package_line = re.search(r"(?m)^package:.*$", manifest_text)
+        if package_line is None:
+            raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+        package = re.search(r"(?:^|\s)name='([^']+)'", package_line.group(0))
+        version = re.search(r"(?:^|\s)versionCode='(\d+)'", package_line.group(0))
+        shared = re.search(r"(?:^|\s)sharedUserId='([^']+)'", package_line.group(0))
+        if package is None or version is None:
+            raise RuntimeImageError("runtime_image_daemon_seed_invalid")
+        return (
+            lineage,
+            package.group(1),
+            None if shared is None else shared.group(1),
+            int(version.group(1)),
+        )
+
+    def _android_build_tool_directory(self) -> Path:
+        sdk = android_sdk_dir()
+        if sdk is None:
+            raise RuntimeImageError("runtime_image_android_tools_unavailable")
+        candidates: list[tuple[tuple[int, ...], Path]] = []
+        try:
+            directories = list((sdk / "build-tools").iterdir())
+        except OSError as exc:
+            raise RuntimeImageError("runtime_image_android_tools_unavailable") from exc
+        for directory in directories:
+            version = tuple(int(part) for part in re.findall(r"\d+", directory.name))
+            if version:
+                candidates.append((version, directory))
+        if not candidates:
+            raise RuntimeImageError("runtime_image_android_tools_unavailable")
+        candidates.sort(reverse=True)
+        return candidates[0][1]
+
+
+    def _generate_context(
+        self,
+        prepared: _PreparedInput,
+        base_tag: str,
+        destination: Path,
+        google_spec: Any,
+    ) -> str:
+        stage_root = Path(tempfile.mkdtemp(prefix="artifacts-", dir=self._cache_root))
+        os.chmod(stage_root, 0o700)
+        google_handle: Any = None
+        google_verifier: Callable[..., Any] | None = None
+        try:
+            try:
+                self.artifact_builder.stage(prepared.snapshot, stage_root)
+            except ArtifactError as exc:
+                raise RuntimeImageError("runtime_image_artifact_snapshot_invalid") from exc
+            environment = self._command_env()
+            # Only the hashed per-instance contract can select a cold profile.
+            environment.pop("XENOID_COLD_PROFILE", None)
+            environment.pop("XENOID_COLD_PROFILE_SHA256", None)
+            if getattr(self, "_cold_profile", None) is not None:
+                path = stage_root / "cold-profile.json"
+                path.write_bytes(cold_canonical(self._cold_profile))
+                path.chmod(0o600)
+                environment["XENOID_COLD_PROFILE"] = str(path)
+                environment["XENOID_COLD_PROFILE_SHA256"] = profile_digest(self._cold_profile)
+                expected_paths = set(PROFILE_ARTIFACT_OUTPUTS.values())
+                artifact_hashes = {
+                    output.path: output.sha256
+                    for record in prepared.snapshot.records
+                    for output in record.outputs if output.path in expected_paths
+                }
+                if set(artifact_hashes) != expected_paths:
+                    raise RuntimeImageError("runtime_image_profile_artifact_missing")
+                artifact_manifest = stage_root / "profile-artifacts.json"
+                artifact_manifest.write_text(json.dumps(artifact_hashes, sort_keys=True))
+                artifact_manifest.chmod(0o600)
+                environment["XENOID_PROFILE_ARTIFACT_MANIFEST"] = str(artifact_manifest)
+            environment.update(
+                {
+                    "LC_ALL": "C",
+                    "TZ": "UTC",
+                    "SOURCE_DATE_EPOCH": "0",
+                    "PYTHONHASHSEED": "0",
+                    "XENOID_ARTIFACT_STAGE": str(stage_root),
+                    "XENOID_DOCKER_ARGV_JSON": json.dumps(
+                        list(self.docker_argv), separators=(",", ":"), ensure_ascii=True
+                    ),
+                }
+            )
+            if google_spec is not None:
+                try:
+                    from .google_services import _stage_payload, cleanup_stage, verify_context_copy
+
+                    google_handle = _stage_payload(self.project_root, google_spec)
+                    google_verifier = verify_context_copy
+                    environment.update(
+                        {
+                            "XENOID_GOOGLE_PAYLOAD": str(google_handle.tree),
+                            "XENOID_GOOGLE_PROVIDER": str(google_spec.provider),
+                            "XENOID_GOOGLE_RELEASE": str(google_spec.release),
+                            "XENOID_GOOGLE_SPEC_SHA256": str(google_spec.fingerprint),
+                            "XENOID_GOOGLE_DATA_COMPAT_SHA256": str(
+                                google_spec.data_compatibility_fingerprint
+                            ),
+                        }
+                    )
+                except Exception as exc:
+                    raise RuntimeImageError("runtime_image_google_input_invalid") from exc
+            generator = ("profiles/runtime-v1/scripts/make-runtime-context.sh"
+                         if getattr(self, "_cold_profile", None) is not None else "scripts/make-runtime-context.sh")
+            command = (str(self.project_root / generator), base_tag, str(destination))
+            result = self._run(command, env=environment, cwd=self.project_root)
+            if result.returncode != 0:
+                raise RuntimeImageError("runtime_context_generation_failed")
+            manifest_sha256 = self._verify_context(destination)
+            if google_spec is not None:
+                if google_handle is None or google_verifier is None:
+                    raise RuntimeImageError("runtime_image_google_input_invalid")
+                try:
+                    google_verifier(destination, google_spec, google_handle)
+                except Exception as exc:
+                    raise RuntimeImageError("runtime_image_google_context_invalid") from exc
+            return manifest_sha256
+        finally:
+            if google_handle is not None:
+                try:
+                    cleanup_stage(google_handle)
+                except Exception as exc:
+                    raise RuntimeImageError("runtime_image_google_cleanup_failed") from exc
+            self._remove_tree_if_owned(stage_root)
+
+    def _verify_context(self, root: Path) -> str:
+        manifest_path = root / "context-manifest.json"
+        try:
+            root_info = root.lstat()
+            manifest_info = manifest_path.lstat()
+        except OSError as exc:
+            raise RuntimeImageError("runtime_context_manifest_invalid") from exc
+        if not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode):
+            raise RuntimeImageError("runtime_context_manifest_invalid")
+        if (
+            not stat.S_ISREG(manifest_info.st_mode)
+            or stat.S_ISLNK(manifest_info.st_mode)
+            or stat.S_IMODE(manifest_info.st_mode) != 0o644
+            or manifest_info.st_mtime_ns != 0
+        ):
+            raise RuntimeImageError("runtime_context_manifest_invalid")
+        try:
+            payload = manifest_path.read_bytes()
+            manifest = json.loads(payload)
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise RuntimeImageError("runtime_context_manifest_invalid") from exc
+        canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8") + b"\n"
+        if payload != canonical or not isinstance(manifest, Mapping) or set(manifest) != {"schema", "entries"}:
+            raise RuntimeImageError("runtime_context_manifest_invalid")
+        if manifest["schema"] != RUNTIME_CONTEXT_SCHEMA or not isinstance(manifest["entries"], list):
+            raise RuntimeImageError("runtime_context_manifest_invalid")
+        entries = manifest["entries"]
+        paths = [entry.get("path") for entry in entries if isinstance(entry, Mapping)]
+        if len(paths) != len(entries) or paths != sorted(paths, key=lambda item: str(item).encode("utf-8")) or len(paths) != len(set(paths)):
+            raise RuntimeImageError("runtime_context_manifest_invalid")
+        declared: set[str] = set()
+        for entry in entries:
+            if not isinstance(entry, Mapping) or set(entry) != {"path", "type", "mode", "size", "sha256"}:
+                raise RuntimeImageError("runtime_context_manifest_invalid")
+            if type(entry["size"]) is not int:
+                raise RuntimeImageError("runtime_context_manifest_invalid")
+            relative = entry["path"]
+            if (
+                not isinstance(relative, str)
+                or not relative
+                or relative == "context-manifest.json"
+                or PurePosixPath(relative).is_absolute()
+                or ".." in PurePosixPath(relative).parts
+                or "\\" in relative
+            ):
+                raise RuntimeImageError("runtime_context_manifest_invalid")
+            path = root / relative
+            try:
+                info = path.lstat()
+            except OSError as exc:
+                raise RuntimeImageError("runtime_context_manifest_invalid") from exc
+            if info.st_mtime_ns != 0:
+                raise RuntimeImageError("runtime_context_manifest_invalid")
+            if entry["type"] == "directory":
+                valid = (
+                    stat.S_ISDIR(info.st_mode)
+                    and not stat.S_ISLNK(info.st_mode)
+                    and entry["mode"] == "0755"
+                    and entry["size"] == 0
+                    and entry["sha256"] is None
+                )
+            elif entry["type"] == "file":
+                valid = (
+                    stat.S_ISREG(info.st_mode)
+                    and not stat.S_ISLNK(info.st_mode)
+                    and entry["mode"] in {"0644", "0755"}
+                    and entry["mode"] == f"0{stat.S_IMODE(info.st_mode):03o}"
+                    and entry["size"] == info.st_size
+                    and entry["sha256"] == _hash_regular_file(path)
+                )
+            else:
+                valid = False
+            if not valid:
+                raise RuntimeImageError("runtime_context_manifest_invalid")
+            declared.add(relative)
+        actual: set[str] = set()
+        for current, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+            base = Path(current)
+            for name in dirnames:
+                actual.add((base / name).relative_to(root).as_posix())
+            for name in filenames:
+                relative = (base / name).relative_to(root).as_posix()
+                if relative != "context-manifest.json":
+                    actual.add(relative)
+        if actual != declared:
+            raise RuntimeImageError("runtime_context_manifest_invalid")
+        return hashlib.sha256(payload).hexdigest()
+
+    def _record_value(
+        self,
+        prepared: _PreparedInput,
+        derived_tag: str,
+        image_id: str,
+        labels: Mapping[str, str],
+        *,
+        context_manifest_sha256: str | None,
+    ) -> dict[str, Any]:
+        value = {
+            "schema": RUNTIME_IMAGE_SCHEMA,
+            "inputSha256": prepared.public["inputSha256"],
+            "bootInputSha256": prepared.public["bootInputSha256"],
+            "derivedTag": derived_tag,
+            "imageId": image_id,
+            "architecture": "arm64",
+            "baseImageId": prepared.base.image_id,
+            "baseRepoDigests": list(prepared.base.repo_digests),
+            "artifactManifestSha256": prepared.public["artifactManifestSha256"],
+            "artifactTuples": prepared.public["artifactTuples"],
+            "contextInputs": prepared.public["contextInputs"],
+            "googleInputs": prepared.public["googleInputs"],
+            "toolInputs": prepared.public["toolInputs"],
+            "builderInputs": prepared.public["builderInputs"],
+            "daemonSeedContract": prepared.public["daemonSeedContract"],
+            "labels": dict(labels),
+            "contextManifestSha256": context_manifest_sha256,
+        }
+        return validate_record(value)
+
+    def _publish_record(self, record: Mapping[str, Any]) -> None:
+        validated = validate_record(record)
+        path = self._cache_root / f"{validated['inputSha256']}.json"
+        payload = _canonical_json(validated) + b"\n"
+        temporary = self._cache_root / f".{validated['inputSha256']}.{secrets.token_hex(8)}.tmp"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(temporary, flags, 0o600)
+            try:
+                _write_all(descriptor, payload)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.replace(temporary, path)
+            os.chmod(path, 0o600, follow_symlinks=False)
+            _fsync_directory(self._cache_root)
+        except OSError as exc:
+            raise RuntimeImageError("runtime_image_record_publish_failed") from exc
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+    @staticmethod
+    def _validate_image_archive(path: Path) -> None:
+        try:
+            info = path.lstat()
+        except OSError as exc:
+            raise RuntimeImageError("runtime_image_archive_invalid") from exc
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or stat.S_ISLNK(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_nlink != 1
+            or info.st_size <= 0
+            or info.st_size > _MAX_IMAGE_ARCHIVE_BYTES
+        ):
+            raise RuntimeImageError("runtime_image_archive_invalid")
+        try:
+            os.chmod(path, 0o600, follow_symlinks=False)
+        except OSError as exc:
+            raise RuntimeImageError("runtime_image_archive_invalid") from exc
+
+    @staticmethod
+    def _archive_copy_map(
+        context_path: Path,
+    ) -> tuple[tuple[str, str, bool], ...]:
+        """Return normalized ``(source, destination, destination_is_dir)`` rules.
+
+        The generated Dockerfile emits one two-argument COPY per line. Reject
+        syntax that would make destination expansion ambiguous instead of
+        silently leaving payload bytes unverified.
+        """
+        dockerfile = context_path / "Dockerfile"
+        try:
+            lines = dockerfile.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            raise RuntimeImageError("runtime_image_payload_manifest_invalid") from exc
+        rules: list[tuple[str, str, bool]] = []
+        for line in lines:
+            if line.startswith("ADD "):
+                raise RuntimeImageError("runtime_image_payload_manifest_invalid")
+            if not line.startswith("COPY "):
+                continue
+            tokens = line[5:].split()
+            while tokens and tokens[0].startswith("--"):
+                option = tokens.pop(0)
+                if option.startswith("--from="):
+                    raise RuntimeImageError("runtime_image_payload_manifest_invalid")
+            if (
+                len(tokens) != 2
+                or any(
+                    character in token
+                    for token in tokens
+                    for character in ("*", "?", "[")
+                )
+            ):
+                raise RuntimeImageError("runtime_image_payload_manifest_invalid")
+            source_token, destination_token = tokens
+            source_token = source_token.rstrip("/")
+            source = PurePosixPath(source_token)
+            destination = PurePosixPath(destination_token)
+            if (
+                not source_token
+                or source.is_absolute()
+                or str(source) != source_token
+                or ".." in source.parts
+                or not destination_token.startswith("/")
+                or ".." in destination.parts
+            ):
+                raise RuntimeImageError("runtime_image_payload_manifest_invalid")
+            normalized_destination = str(destination).lstrip("/")
+            if normalized_destination == ".":
+                normalized_destination = ""
+            rules.append(
+                (
+                    str(source),
+                    normalized_destination,
+                    destination_token.endswith("/"),
+                )
+            )
+        if not rules:
+            raise RuntimeImageError("runtime_image_payload_manifest_invalid")
+        return tuple(rules)
+
+    def _archive_member_index(
+        self,
+        archive: tarfile.TarFile,
+    ) -> dict[str, tarfile.TarInfo]:
+        members: dict[str, tarfile.TarInfo] = {}
+        try:
+            for member in archive:
+                self._payload_budget_check()
+                if len(members) >= _MAX_IMAGE_ARCHIVE_MEMBERS:
+                    raise RuntimeImageError(
+                        "runtime_image_archive_layout_invalid"
+                    )
+                # Image loaders resolve outer members by their canonical
+                # POSIX path, so the verifier must index the same canonical
+                # names: a "./" prefix is normalized away, while absolute
+                # paths, ".." components, and redundant dot/slash spellings
+                # are rejected, and two raw names collapsing to one
+                # canonical name is a duplicate.
+                name = member.name
+                if name.endswith("/") and not member.isdir():
+                    raise RuntimeImageError(
+                        "runtime_image_archive_layout_invalid"
+                    )
+                if name.startswith("./"):
+                    name = name[2:]
+                name = name.rstrip("/")
+                if not name or name == ".":
+                    if member.isdir():
+                        continue
+                    raise RuntimeImageError(
+                        "runtime_image_archive_layout_invalid"
+                    )
+                normalized = PurePosixPath(name)
+                if (
+                    normalized.is_absolute()
+                    or ".." in normalized.parts
+                    or str(normalized) != name
+                    or name in members
+                ):
+                    raise RuntimeImageError(
+                        "runtime_image_archive_layout_invalid"
+                    )
+                members[name] = member
+        except RuntimeImageError:
+            raise
+        except (OSError, tarfile.TarError, RecursionError) as exc:
+            raise RuntimeImageError(
+                "runtime_image_archive_layout_invalid"
+            ) from exc
+        return members
+
+    def _archive_layer_descriptors(
+        self,
+        archive: tarfile.TarFile,
+        members: Mapping[str, tarfile.TarInfo],
+    ) -> tuple[tuple[str, int, str], ...]:
+        def read_metadata(
+            name: str, *, expected_size: int | None = None
+        ) -> tuple[bytes, Any]:
+            try:
+                member = members[name]
+                stream = archive.extractfile(member)
+            except (KeyError, OSError, tarfile.TarError) as exc:
+                raise RuntimeImageError("runtime_image_archive_layout_invalid") from exc
+            if (
+                stream is None
+                or not member.isfile()
+                or member.size <= 0
+                or member.size > _MAX_RECORD_BYTES
+                or (expected_size is not None and member.size != expected_size)
+            ):
+                raise RuntimeImageError("runtime_image_archive_layout_invalid")
+            try:
+                payload = stream.read(_MAX_RECORD_BYTES + 1)
+                value = json.loads(
+                    payload,
+                    object_pairs_hook=_reject_duplicate_archive_json_names,
+                )
+            except (OSError, ValueError, TypeError, tarfile.TarError) as exc:
+                raise RuntimeImageError("runtime_image_archive_layout_invalid") from exc
+            finally:
+                stream.close()
+            if len(payload) != member.size or len(payload) > _MAX_RECORD_BYTES:
+                raise RuntimeImageError("runtime_image_archive_layout_invalid")
+            return payload, value
+
+        _, index = read_metadata("index.json")
+        index = _require_exact_archive_json_fields(index, _OCI_INDEX_FIELDS)
+        index_subject = index.get("subject")
+        if isinstance(index_subject, Mapping):
+            _require_exact_archive_descriptor(index_subject)
+        if index.get("schemaVersion") != 2:
+            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+        try:
+            manifests = index["manifests"]
+            if not isinstance(manifests, list) or len(manifests) != 1:
+                raise TypeError("ambiguous image manifest")
+            descriptor = _require_exact_archive_descriptor(manifests[0])
+            descriptor_media_type = descriptor["mediaType"]
+            digest = descriptor["digest"]
+            manifest_size = descriptor["size"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeImageError("runtime_image_archive_layout_invalid") from exc
+        if (
+            not isinstance(digest, str)
+            or _IMAGE_ID_RE.fullmatch(digest) is None
+            or not isinstance(manifest_size, int)
+            or isinstance(manifest_size, bool)
+            or manifest_size <= 0
+            or manifest_size > _MAX_RECORD_BYTES
+        ):
+            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+        manifest_bytes, manifest = read_metadata(
+            f"blobs/sha256/{digest[7:]}", expected_size=manifest_size
+        )
+        manifest = _require_exact_archive_json_fields(
+            manifest, _OCI_MANIFEST_FIELDS
+        )
+        manifest_subject = manifest.get("subject")
+        if isinstance(manifest_subject, Mapping):
+            _require_exact_archive_descriptor(manifest_subject)
+        if (
+            manifest.get("schemaVersion") != 2
+            or not isinstance(descriptor_media_type, str)
+            or descriptor_media_type
+            not in {
+                "application/vnd.docker.distribution.manifest.v2+json",
+                "application/vnd.oci.image.manifest.v1+json",
+            }
+            or manifest.get("mediaType") != descriptor_media_type
+            or hashlib.sha256(manifest_bytes).hexdigest() != digest[7:]
+        ):
+            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+        try:
+            config = _require_exact_archive_descriptor(manifest["config"])
+            config_media_type = config["mediaType"]
+            config_digest = config["digest"]
+            config_size = config["size"]
+            layers = manifest["layers"]
+            if (
+                not isinstance(layers, list)
+                or not layers
+                or len(layers) > _MAX_IMAGE_LAYERS
+            ):
+                raise TypeError("invalid image layers")
+            descriptors = tuple(
+                (
+                    descriptor["digest"],
+                    descriptor["size"],
+                    descriptor["mediaType"],
+                )
+                for descriptor in (
+                    _require_exact_archive_descriptor(layer)
+                    for layer in layers
+                )
+            )
+        except (KeyError, TypeError) as exc:
+            raise RuntimeImageError("runtime_image_archive_layout_invalid") from exc
+        # The config blob is consumed by the loader too, so pin its bytes to
+        # the descriptor exactly like the manifest itself.
+        if (
+            not isinstance(config_digest, str)
+            or _IMAGE_ID_RE.fullmatch(config_digest) is None
+            or not isinstance(config_size, int)
+            or isinstance(config_size, bool)
+            or config_size <= 0
+            or config_size > _MAX_RECORD_BYTES
+            or not isinstance(config_media_type, str)
+            or config_media_type
+            not in {
+                "application/vnd.docker.container.image.v1+json",
+                "application/vnd.oci.image.config.v1+json",
+            }
+        ):
+            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+        config_bytes, config_value = read_metadata(
+            f"blobs/sha256/{config_digest[7:]}", expected_size=config_size
+        )
+        config_value = _require_exact_archive_image_config(config_value)
+        if hashlib.sha256(config_bytes).hexdigest() != config_digest[7:]:
+            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+        for layer_digest, layer_size, media_type in descriptors:
+            if (
+                not isinstance(layer_digest, str)
+                or _IMAGE_ID_RE.fullmatch(layer_digest) is None
+                or not isinstance(layer_size, int)
+                or isinstance(layer_size, bool)
+                or layer_size <= 0
+                or layer_size > _MAX_IMAGE_ARCHIVE_BYTES
+                or not isinstance(media_type, str)
+                or media_type not in _LAYER_MEDIA_TYPES
+            ):
+                raise RuntimeImageError("runtime_image_archive_layout_invalid")
+        # The build exports type=docker: classic Docker load consumes
+        # manifest.json (and containerd selects its OCI importer only when
+        # oci-layout is present), so the archive must carry a valid
+        # oci-layout, and the single Docker manifest entry must reference
+        # exactly the config and ordered layer blob paths the verified OCI
+        # index/manifest named. Anything else means verification and load
+        # can observe different bytes.
+        _, layout = read_metadata("oci-layout")
+        layout = _require_exact_archive_json_fields(
+            layout, _OCI_LAYOUT_FIELDS
+        )
+        if layout.get("imageLayoutVersion") != "1.0.0":
+            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+        _, docker_entries = read_metadata("manifest.json")
+        if (
+            not isinstance(docker_entries, list)
+            or len(docker_entries) != 1
+            or not isinstance(docker_entries[0], Mapping)
+        ):
+            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+        docker_entry = _require_exact_docker_manifest_entry(docker_entries[0])
+        if (
+            docker_entry.get("Config") != f"blobs/sha256/{config_digest[7:]}"
+            or docker_entry.get("Layers")
+            != [
+                f"blobs/sha256/{layer_digest[7:]}"
+                for layer_digest, _, _ in descriptors
+            ]
+        ):
+            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+        return descriptors
+
+    def _payload_budget_check(self) -> None:
+        if time.monotonic() > self._deadline:
+            raise RuntimeImageError("runtime_image_timeout")
+        cancelled = self._cancelled
+        if cancelled is None:
+            return
+        is_set = getattr(cancelled, "is_set", None)
+        if is_set is not None:
+            if is_set():
+                raise RuntimeImageError("runtime_image_cancelled")
+        elif cancelled():
+            raise RuntimeImageError("runtime_image_cancelled")
+
+    def _archive_layer_contents(
+        self,
+        archive: tarfile.TarFile,
+        members: Mapping[str, tarfile.TarInfo],
+        layer_descriptors: Sequence[tuple[str, int, str]],
+        wanted: Mapping[str, int],
+    ) -> dict[str, str]:
+        """Replay layers and hash surviving wanted files without buffering blobs."""
+        wanted_ancestors: set[str] = set()
+        for wanted_path in wanted:
+            parts = wanted_path.split("/")
+            for index in range(1, len(parts)):
+                wanted_ancestors.add("/".join(parts[:index]))
+
+        def relevant(prefix: str) -> bool:
+            if not prefix:
+                return True
+            return any(
+                wanted_path == prefix or wanted_path.startswith(prefix + "/")
+                for wanted_path in wanted
+            )
+
+        found: dict[str, str] = {}
+        members_seen = 0
+        blocked_ancestors: set[str] = set()
+        # One set of replay budgets shared by every layer of this archive.
+        decompressed_counter: list[int] = [0]
+        metadata_counter: list[int] = [0]
+        compressed_bytes = 0
+        for expected_digest, expected_size, media_type in layer_descriptors:
+            self._payload_budget_check()
+            layer_mode = _LAYER_TAR_MODES.get(media_type)
+            if layer_mode is None:
+                raise RuntimeImageError("runtime_image_archive_layout_invalid")
+            compressed_bytes += expected_size
+            if compressed_bytes > _MAX_IMAGE_ARCHIVE_BYTES:
+                raise RuntimeImageError("runtime_image_archive_layout_invalid")
+            try:
+                outer_member = members[f"blobs/sha256/{expected_digest[7:]}"]
+                blob = archive.extractfile(outer_member)
+            except (KeyError, OSError, tarfile.TarError) as exc:
+                raise RuntimeImageError("runtime_image_archive_layout_invalid") from exc
+            if (
+                blob is None
+                or not outer_member.isfile()
+                or outer_member.size != expected_size
+            ):
+                raise RuntimeImageError("runtime_image_archive_layout_invalid")
+            reader = _LayerBlobReader(
+                blob,
+                expected_size=expected_size,
+                check=self._payload_budget_check,
+            )
+            decoder: Any = (
+                gzip.GzipFile(fileobj=reader, mode="rb")
+                if layer_mode == "r|gz"
+                else reader
+            )
+            decompressed = _LayerDecompressedReader(
+                decoder,
+                check=self._payload_budget_check,
+                counter=decompressed_counter,
+            )
+            setattr(decompressed, "_xenoid_metadata_counter", metadata_counter)
+            updates: dict[str, str | None] = {}
+            whiteouts: set[str] = set()
+            opaque_directories: set[str] = set()
+            try:
+                with tarfile.open(
+                    fileobj=decompressed,
+                    mode="r|",
+                    tarinfo=_BoundedTarInfo,
+                ) as layer:
+                    for member in layer:
+                        members_seen += 1
+                        if members_seen > _MAX_LAYER_MEMBERS:
+                            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+                        self._payload_budget_check()
+                        name = member.name
+                        if name.startswith("./"):
+                            name = name[2:]
+                        name = name.rstrip("/")
+                        if not name or name == ".":
+                            # Legal OCI layers may carry a "." or "./" root
+                            # directory record; a non-directory root is invalid.
+                            if member.isdir():
+                                continue
+                            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+                        normalized = PurePosixPath(name)
+                        if (
+                            normalized.is_absolute()
+                            or ".." in normalized.parts
+                            or str(normalized) != name
+                        ):
+                            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+                        if any(
+                            name.startswith(prefix + "/")
+                            for prefix in blocked_ancestors
+                        ):
+                            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+                        base = name.rsplit("/", 1)[-1]
+                        parent = name[: -len(base)].rstrip("/")
+                        if base == ".wh..wh..opq":
+                            if relevant(parent):
+                                opaque_directories.add(parent)
+                            continue
+                        if base.startswith(".wh."):
+                            target_base = base[4:]
+                            target = (
+                                f"{parent}/{target_base}" if parent else target_base
+                            )
+                            if relevant(target):
+                                whiteouts.add(target)
+                            continue
+                        if name in blocked_ancestors:
+                            if member.isdir():
+                                blocked_ancestors.discard(name)
+                                continue
+                            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+                        if name in wanted_ancestors:
+                            if not member.isdir():
+                                # A wanted path's ancestor was replaced by a
+                                # non-directory: lower-layer descendants and
+                                # any earlier same-layer additions cannot survive.
+                                if any(path.startswith(name + "/") for path in updates):
+                                    raise RuntimeImageError(
+                                        "runtime_image_archive_layout_invalid"
+                                    )
+                                blocked_ancestors.add(name)
+                                for path in tuple(found):
+                                    if path.startswith(name + "/"):
+                                        found.pop(path, None)
+                            continue
+                        if name not in wanted:
+                            continue
+                        if not member.isfile() or member.size != wanted[name]:
+                            updates[name] = None
+                            continue
+                        extracted = layer.extractfile(member)
+                        if extracted is None:
+                            raise RuntimeImageError("runtime_image_archive_layout_invalid")
+                        digest_state = hashlib.sha256()
+                        with extracted:
+                            while True:
+                                block = extracted.read(_COPY_CHUNK)
+                                if not block:
+                                    break
+                                digest_state.update(block)
+                            self._payload_budget_check()
+                        updates[name] = digest_state.hexdigest()
+                while decompressed.read(_COPY_CHUNK):
+                    pass
+                while reader.read(_COPY_CHUNK):
+                    pass
+            except RuntimeImageError:
+                raise
+            except (OSError, tarfile.TarError, zlib.error, RecursionError) as exc:
+                raise RuntimeImageError("runtime_image_archive_layout_invalid") from exc
+            finally:
+                if decoder is not reader:
+                    decoder.close()
+                reader.close()
+            if reader.count != expected_size or reader.digest() != expected_digest[7:]:
+                raise RuntimeImageError("runtime_image_archive_layout_invalid")
+            for target in whiteouts:
+                for path in tuple(found):
+                    if path == target or path.startswith(target + "/"):
+                        found.pop(path, None)
+            for directory in opaque_directories:
+                prefix = directory + "/" if directory else ""
+                for path in tuple(found):
+                    if not directory or path.startswith(prefix):
+                        found.pop(path, None)
+            for name, file_digest in updates.items():
+                if file_digest is None:
+                    found.pop(name, None)
+                else:
+                    found[name] = file_digest
+        return found
+
+    def _verify_archive_payload(self, archive_path: Path, context_path: Path) -> None:
+        """Prove the built image carries every generated context payload byte.
+
+        BuildKit's local-context blob cache can silently substitute a previous
+        build's bytes when a payload file keeps the same path, size, and
+        normalized mtime across a content-only change (observed 2026-09-18 with
+        a constant-only zygote shim edit). Replay the exported image layers and
+        compare every file destination produced by every Dockerfile COPY rule
+        against the verified context manifest.
+        """
+        rules = self._archive_copy_map(context_path)
+        manifest_path = context_path / "context-manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            entries = manifest["entries"]
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise RuntimeImageError("runtime_image_payload_manifest_invalid") from exc
+        if not isinstance(entries, list):
+            raise RuntimeImageError("runtime_image_payload_manifest_invalid")
+
+        entry_types: dict[str, str] = {}
+        source_files: dict[str, tuple[str, int]] = {}
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                raise RuntimeImageError("runtime_image_payload_manifest_invalid")
+            path = entry.get("path")
+            entry_type = entry.get("type")
+            if (
+                not isinstance(path, str)
+                or not isinstance(entry_type, str)
+                or path in entry_types
+            ):
+                raise RuntimeImageError("runtime_image_payload_manifest_invalid")
+            entry_types[path] = entry_type
+            if entry_type != "file":
+                continue
+            digest = entry.get("sha256")
+            size = entry.get("size")
+            if (
+                not isinstance(digest, str)
+                or _SHA256_RE.fullmatch(digest) is None
+                or not isinstance(size, int)
+                or isinstance(size, bool)
+                or size < 0
+            ):
+                raise RuntimeImageError("runtime_image_payload_manifest_invalid")
+            source_files[path] = (digest, size)
+
+        expected: dict[str, tuple[str, int]] = {}
+
+        def add_expected(destination: str, source: tuple[str, int]) -> None:
+            normalized = str(PurePosixPath(destination))
+            if not destination or normalized != destination or ".." in PurePosixPath(destination).parts:
+                raise RuntimeImageError("runtime_image_payload_manifest_invalid")
+            prior = expected.get(destination)
+            if prior is not None and prior != source:
+                raise RuntimeImageError("runtime_image_payload_manifest_invalid")
+            expected[destination] = source
+
+        for source, destination, destination_is_dir in rules:
+            source_type = entry_types.get(source)
+            if source_type == "file":
+                target = (
+                    str(PurePosixPath(destination) / PurePosixPath(source).name)
+                    if destination_is_dir
+                    else destination
+                )
+                add_expected(target, source_files[source])
+                continue
+            if source_type != "directory":
+                raise RuntimeImageError("runtime_image_payload_manifest_invalid")
+            prefix = source + "/"
+            for path, identity in source_files.items():
+                if path.startswith(prefix):
+                    relative = path[len(prefix) :]
+                    target = (
+                        str(PurePosixPath(destination) / relative)
+                        if destination
+                        else relative
+                    )
+                    add_expected(target, identity)
+        if not expected:
+            raise RuntimeImageError("runtime_image_payload_manifest_invalid")
+
+        try:
+            archive = _BoundedOuterTarFile.open(
+                archive_path, mode="r:", tarinfo=_BoundedTarInfo
+            )
+        except (OSError, tarfile.TarError) as exc:
+            raise RuntimeImageError("runtime_image_archive_invalid") from exc
+        with archive:
+            members = self._archive_member_index(archive)
+            layers = self._archive_layer_descriptors(archive, members)
+            actual = self._archive_layer_contents(
+                archive,
+                members,
+                layers,
+                {destination: identity[1] for destination, identity in expected.items()},
+            )
+        for destination, identity in sorted(expected.items()):
+            if actual.get(destination) != identity[0]:
+                raise RuntimeImageError("runtime_image_payload_mismatch")
+
+    @staticmethod
+    def _runtime_input_lock_name(input_sha: str) -> str:
+        return "xenoid-runtime-image-" + hashlib.sha256(
+            f"runtime-input:{input_sha}".encode("ascii")
+        ).hexdigest()
+
+    @staticmethod
+    def _base_tag(input_sha: str) -> str:
+        return f"xenoid/runtime-base:xenoid-{input_sha}"
+
+    def _temporary_tag(self, purpose: str, input_sha: str) -> str:
+        return f"xenoid/runtime-{purpose}:xenoid-{input_sha[:16]}-{secrets.token_hex(8)}"
+
+    def _docker_checked(
+        self,
+        suffix: Sequence[str],
+        code: str,
+        *,
+        cwd: Path | None = None,
+    ) -> _RunResult:
+        result = self._run(
+            self.docker_argv + tuple(suffix),
+            env=self._command_env(),
+            cwd=cwd or self.project_root,
+        )
+        if result.returncode != 0:
+            raise RuntimeImageError(code)
+        return result
+
+    def _docker_remove_tag(self, tag: str) -> None:
+        self._run(self.docker_argv + ("image", "rm", tag), env=self._command_env(), cwd=self.project_root)
+
+    def _remove_tag_if_image(self, tag: str, image_id: str) -> None:
+        try:
+            current = self._inspect_image(tag, required=False)
+        except RuntimeImageError:
+            return
+        if current is not None and current.get("Id") == image_id:
+            self._docker_remove_tag(tag)
+
+    def _command_env(self) -> dict[str, str]:
+        environment = dict(os.environ)
+        environment.update(self.docker_env)
+        environment.update(
+            {
+                "LC_ALL": "C",
+                "TZ": "UTC",
+                "SOURCE_DATE_EPOCH": "0",
+                "PYTHONHASHSEED": "0",
+            }
+        )
+        return environment
+
+    def _run(
+        self,
+        command: Sequence[str],
+        *,
+        env: Mapping[str, str],
+        cwd: Path | None,
+        input: bytes | None = None,
+    ) -> _RunResult:
+        if self._runner is None:
+            bounded = run_bounded(
+                tuple(command),
+                cwd=cwd or self.project_root,
+                env=env,
+                input_bytes=input,
+                deadline=self._deadline,
+                project_root=self.project_root,
+                cancelled=self._cancelled,
+            )
+            if bounded.state == "timed_out":
+                raise RuntimeImageError("runtime_image_timeout")
+            if bounded.state == "cancelled":
+                raise RuntimeImageError("runtime_image_cancelled")
+            completed = _RunResult(
+                bounded.returncode
+                if bounded.returncode is not None
+                else (0 if bounded.ok else 1),
+                bounded.stdout_tail.encode("utf-8", "replace"),
+                bounded.stderr_tail.encode("utf-8", "replace"),
+            )
+        else:
+            completed = self._runner(
+                tuple(command),
+                env=dict(env),
+                cwd=None if cwd is None else str(cwd),
+                input=input,
+            )
+        return _coerce_run_result(completed)
+
+    @contextlib.contextmanager
+    def _acquire_engine_lock(self, lock_name: str) -> Iterator[None]:
+        if self._engine_lock is None:
+            # A local lock is a safe single-checkout fallback. RuntimeManager supplies
+            # the engine-host lock for production/native/Colima/SSH operation.
+            path = self._local_lock_root / f"{lock_name}.lock"
+            descriptor = os.open(
+                path,
+                os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            try:
+                info = os.fstat(descriptor)
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+                    raise RuntimeImageError("runtime_image_engine_lock_invalid")
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                yield
+            finally:
+                os.close(descriptor)
+            return
+        manager = self._engine_lock(lock_name) if callable(self._engine_lock) else self._engine_lock
+        try:
+            with manager:
+                yield
+        except RuntimeImageError:
+            raise
+        except Exception as exc:
+            raise RuntimeImageError("runtime_image_engine_lock_failed") from exc
+
+    def _ensure_private_directory(self, path: Path) -> None:
+        try:
+            relative = path.relative_to(self.project_root)
+        except ValueError as exc:
+            raise RuntimeImageError("runtime_image_cache_unsafe") from exc
+        current = self.project_root
+        try:
+            for component in relative.parts:
+                current = current / component
+                try:
+                    current.mkdir(mode=0o700)
+                except FileExistsError:
+                    pass
+                info = current.lstat()
+                if (
+                    not stat.S_ISDIR(info.st_mode)
+                    or stat.S_ISLNK(info.st_mode)
+                    or info.st_uid != os.getuid()
+                ):
+                    raise RuntimeImageError("runtime_image_cache_unsafe")
+            os.chmod(path, 0o700, follow_symlinks=False)
+            final_info = path.lstat()
+        except RuntimeImageError:
+            raise
+        except OSError as exc:
+            raise RuntimeImageError("runtime_image_cache_unsafe") from exc
+        if stat.S_IMODE(final_info.st_mode) != 0o700:
+            raise RuntimeImageError("runtime_image_cache_unsafe")
+
+    def _remove_tree_if_owned(self, path: Path) -> None:
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return
+        except OSError:
+            return
+        if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_uid != os.getuid():
+            return
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _coerce_run_result(value: Any) -> _RunResult:
+    if isinstance(value, _RunResult):
+        return value
+    if isinstance(value, Mapping):
+        returncode = value.get("returncode", 0)
+        stdout = value.get("stdout", b"")
+        stderr = value.get("stderr", b"")
+    else:
+        returncode = getattr(value, "returncode", 0)
+        stdout = getattr(value, "stdout", b"")
+        stderr = getattr(value, "stderr", b"")
+    if isinstance(stdout, str):
+        stdout = stdout.encode("utf-8", "replace")
+    if isinstance(stderr, str):
+        stderr = stderr.encode("utf-8", "replace")
+    return _RunResult(int(returncode), bytes(stdout), bytes(stderr))
+
+
+def _hash_regular_file(path: Path) -> str:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise RuntimeImageError("runtime_image_input_unavailable") from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeImageError("runtime_image_input_unavailable")
+        digest = hashlib.sha256()
+        while True:
+            block = os.read(descriptor, _COPY_CHUNK)
+            if not block:
+                return digest.hexdigest()
+            digest.update(block)
+    finally:
+        os.close(descriptor)
+
+
+def _read_bounded(descriptor: int, limit: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = limit + 1
+    while remaining:
+        block = os.read(descriptor, min(_COPY_CHUNK, remaining))
+        if not block:
+            break
+        chunks.append(block)
+        remaining -= len(block)
+    payload = b"".join(chunks)
+    if len(payload) > limit:
+        raise RuntimeImageError("runtime_image_record_invalid")
+    return payload
+
+
+def _write_all(descriptor: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    while view:
+        written = os.write(descriptor, view)
+        if written <= 0:
+            raise OSError("short write")
+        view = view[written:]
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+__all__ = [
+    "RUNTIME_BOOT_INPUT_LABEL",
+    "RUNTIME_BASE_IMAGE_LABEL",
+    "RUNTIME_IMAGE_SCHEMA",
+    "RUNTIME_INPUT_LABEL",
+    "RUNTIME_SCHEMA_LABEL",
+    "RuntimeImageBuilder",
+    "RuntimeImageError",
+    "compute_input_record",
+    "derive_tag",
+    "validate_record",
+]

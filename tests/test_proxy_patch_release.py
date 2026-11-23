@@ -1,8 +1,8 @@
 """Bind the shipped upstream patch and upgrade allowlist to the exercised native fixtures."""
 import ast
 import hashlib
+import json
 from pathlib import Path
-import re
 import subprocess
 import tempfile
 import unittest
@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class ProxyPatchReleaseTests(unittest.TestCase):
     def test_shipped_patch_produces_the_exact_tested_observer_and_commit(self):
         # Undo the single older Fleet quarantine patch to reconstruct the pinned
-        # stock module, then exercise the same filtered git apply as install.sh.
+        # stock module, then exercise the retained historical source patch.
         previous = '''        # Planner quarantine intent is distinct from the host's live state.
         host_quarantined = (
             _at(snapshot, "proxyQuarantined") is True
@@ -54,11 +54,13 @@ class ProxyPatchReleaseTests(unittest.TestCase):
             expected = ast.parse(engine.NEW_APPLY)
             self.assertEqual(ast.dump(actual), ast.dump(expected))
 
-    def test_installer_accepts_only_the_exact_previous_fleet_observer_blob(self):
+    def test_native_bundle_accepts_the_exact_previous_fleet_observer(self):
         source = observer.OLD_SOURCE.encode()
-        old_blob = hashlib.sha1(b'blob '+str(len(source)).encode()+b'\0'+source).hexdigest()
-        installer = (ROOT/'install.sh').read_text()
-        self.assertEqual(re.search(r'^v012_live_observe_blob=(\w+)$',installer,re.M)[1],old_blob)
+        manifest = json.loads((ROOT/'nativebundle/manifest.json').read_text())
+        row = next(item for item in manifest['files'] if item['path'] == 'src/xenoid/live_observe.py')
+        self.assertIn(hashlib.sha256(source).hexdigest(), row['before_sha256'])
+        self.assertNotIn(hashlib.sha256(source + b'changed').hexdigest(), row['before_sha256'])
+        self.assertEqual(hashlib.sha256((ROOT/'nativebundle/source'/row['path']).read_bytes()).hexdigest(), row['sha256'])
 
 
 if __name__ == '__main__': unittest.main()

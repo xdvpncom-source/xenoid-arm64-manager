@@ -1,0 +1,42 @@
+{
+  "contract": {
+    "advertised_hz": 60,
+    "artifactSha256": {
+      "/system/lib64/libgui.so": "2eff4cbc1db60740d4398bb894a86c3c42b0386bf9f4f11cee5960cf187879e8",
+      "/system/lib64/libgui_pacer.so": "88005262499f3daa6e0ed58fbd333be75fc0b2fe211f7c0a3e5851d865526ffa",
+      "/system/lib64/libpiex_shim.so": "cc52bccedcb561bacd78b2385991d77ca1441bba8db562adbbe0e793091a252c",
+      "/vendor/etc/SwiftShader.ini": "228340162de0f5f5ac4ca228a89f6256cc8cc9cdaee81b618ebceec2f1b2dba8",
+      "/vendor/lib64/hw/hwcomposer.bluejay.so": "1fdbf546d3e35e4fe2bc721e3281621cf9583fe95432e37f116354671269ad9f",
+      "/vendor/lib64/hw/vulkan.pastel.so": "edee7f38701151b0af135c60bd167a45b1c456b2e2d7aaa87a96ef91509c9b13",
+      "/vendor/sw.ini": "228340162de0f5f5ac4ca228a89f6256cc8cc9cdaee81b618ebceec2f1b2dba8"
+    },
+    "display": {
+      "densityDpi": 420,
+      "height": 2400,
+      "physicalPpi": 429,
+      "width": 1080
+    },
+    "properties": {
+      "debug.gui.frame_pacer_fps": "15",
+      "debug.hwc.present_fps": "15",
+      "debug.hwui.fps_divisor": "4"
+    },
+    "regular_config_files": [
+      "/vendor/etc/SwiftShader.ini",
+      "/vendor/sw.ini"
+    ],
+    "render_fps": 15,
+    "schema": "xenoid.fresh-bluejay-render/v1",
+    "source": {
+      "gui_base_sha256": "b73d911a1680dd3ccc9ec4370aa3366d54f347ecaff3977f6ba58d0e1658e86c",
+      "gui_code_and_relocations_unchanged": true,
+      "gui_transform": "readonly-needed-segment-v1",
+      "swift_base_sha256": "da5910aeabe9ee9c9559dd49f497c741513e856ea34af2626deabc75b7966a90",
+      "swift_code_and_cfi_unchanged": true,
+      "swift_transform": "readonly-config-literal-v1"
+    },
+    "swiftshader_threads": 1
+  },
+  "runtime_tested": false,
+  "schema": "xenoid.render-candidate-evidence/v1"
+}

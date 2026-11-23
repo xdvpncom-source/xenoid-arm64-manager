@@ -1,0 +1,198 @@
+{
+  "base_revision": "c07e56b4aef8cd7e4d56eed11c84781369d29997",
+  "excluded": [
+    ".gitignore",
+    "native/xenoid-proxy-sandbox/xenoid-proxy-sandbox",
+    "all runtime/state/capture files",
+    "all compiled binaries",
+    "all signing keys",
+    "all Google APK payloads"
+  ],
+  "files": [
+    {
+      "original_sha256": "2606c505fe265c7aba731e6ea7bd5c8e9678ca742d17de27315f471c993087f1",
+      "path": "daemon/app/src/main/java/dev/xenoid/daemon/DeviceProfileManager.java"
+    },
+    {
+      "original_sha256": "ac7b97f82e81bb1ca5f940146c12de0b19d76760783fe18c8637bcd59c26576b",
+      "path": "native/xenoid-ril/xenoid_ril.c"
+    },
+    {
+      "original_sha256": "6b9b997dfb7ee24a36a5a9accf51754cf501258d4e4626047955873c4e16ee25",
+      "path": "scripts/build-daemon-standalone.sh"
+    },
+    {
+      "original_sha256": "1c2d04373b676de7df2df80a49455b88eb328db989ba19bf5bbd6cd4b5c01b40",
+      "path": "scripts/build-keymint.sh"
+    },
+    {
+      "original_sha256": "a790a9ce0cc7df54013bdcdff0571838d3c7b25a3b6e0446351dada4bf570eef",
+      "path": "scripts/test-bootstrap-contract.py"
+    },
+    {
+      "original_sha256": "9bd5709d7513b79f5b30ab71902f66341c5e260ffc8a154552ab69dcea4f5d56",
+      "path": "scripts/test-build-contract.py"
+    },
+    {
+      "original_sha256": "6c1e5a26c25c7beecb234703b87f8bdab3a014f3477169f0f6b26ba584b8bbfe",
+      "path": "scripts/test-convergence.py"
+    },
+    {
+      "original_sha256": "55662b7cad5f00d321d5013846dcb73ddd0087937e1edcbae03e29dac8ae7e69",
+      "path": "scripts/test-google-provider-cutover.py"
+    },
+    {
+      "original_sha256": "1665fa94fd0f01e203c2a0af48efc228dfd1569d9a03b9855965e6336874f0c5",
+      "path": "scripts/test-google-services.py"
+    },
+    {
+      "original_sha256": "cdac3ca5c1446d814a8d7ed283ace3a0933c4d314156f03e1e06971adeae09f8",
+      "path": "scripts/xenoid-proxy-agent.py"
+    },
+    {
+      "original_sha256": "44e8415ffd0a579843ff3afa3c5689a9052b3c05f3dc904645e7c9fc594b671c",
+      "path": "scripts/xenoid-proxy-engine.py"
+    },
+    {
+      "original_sha256": "a4c077b95dafc6fe8c68136990f12954de8a937984edd6011adb5995568ab4cb",
+      "path": "src/xenoid/artifacts.py"
+    },
+    {
+      "original_sha256": "bde5de99741fcb1c0d40f683bfd55039960badd8fb310a78cdb5e1c73866c7ee",
+      "path": "src/xenoid/backend.py"
+    },
+    {
+      "original_sha256": "f95001f6548551d9de8fe537b2349fc80c2d5e293262d380d03dbed4371bf5a7",
+      "path": "src/xenoid/cli.py"
+    },
+    {
+      "original_sha256": "77d9fe801943151c2bb467de5301bba12a82e05dcf93df661a129f6cc134f1e6",
+      "path": "src/xenoid/config.py"
+    },
+    {
+      "original_sha256": "e9f1e8492024c990b8d690c162bcb508a2d4ad1096fa30a8a78c58350e61eaa6",
+      "path": "src/xenoid/google_services.py"
+    },
+    {
+      "original_sha256": "d6e7d26129b2fda1bb15c9253415fb6af031e245a8944d04b0a406b797b158a2",
+      "path": "src/xenoid/live_observe.py"
+    },
+    {
+      "original_sha256": "8b45354d2df8edbda24922437a0a7444b1b5ea49537eb48200731165e99c4ffc",
+      "path": "src/xenoid/protection.py"
+    },
+    {
+      "original_sha256": "4c199ef4de2e26ef39990389b8d42127c662a6e0c19832f35f7508bae7a9707f",
+      "path": "src/xenoid/proxy_source.py"
+    },
+    {
+      "original_sha256": "047874ffafdeca20e93f651b2082d00395d7cab87d517cdba10e75064a01b020",
+      "path": "src/xenoid/runtime_image.py"
+    },
+    {
+      "original_sha256": "dcdeabd538e9eb0c680646dad63a86011cebaa48c7118a35e75c73a694886d62",
+      "path": "daemon/app/src/main/java/dev/xenoid/daemon/BuildMetadata.java"
+    },
+    {
+      "original_sha256": "26af903266f861ca2335e0c87991996495d398d1ceac6829484d15dc82acce69",
+      "path": "data/google-services/microg-0.3.15.250932-phonesky-30.4.17-gsfproxy-0.1.0-bluejay.json"
+    },
+    {
+      "original_sha256": "5c9b59ffac5784eabd688fdfb47521182d8e54a38dba4d421ba7082d5a2d665e",
+      "path": "examples/fingerprints/pixel-bluejay-android13.json"
+    },
+    {
+      "original_sha256": "54591960e0dd7259aa1a9804e1b31275c8fb6b2b06437f93d91887fc8871a2d8",
+      "path": "runtime/redroid/source-built-bluetooth.py"
+    },
+    {
+      "original_sha256": "acf4d22961275bbea6db560a7a3f24f942ad6ca7f5150ddd3df7f0b1c4ddd991",
+      "path": "src/xenoid/cold_profile.py"
+    },
+    {
+      "original_sha256": "e456bfb60b0299108814207470791ac8a091c252981efc4b2f7a810b8dc11b89",
+      "path": "native/xenoid-profile-runtime/cold_seed.c"
+    },
+    {
+      "original_sha256": "4fdb7c907101700b5321adfb1ccede8028267a04841b70360928d4e67f9d39da",
+      "path": "native/xenoid-profile-runtime/xenoid_shim.c"
+    },
+    {
+      "original_sha256": "a1f20b4c141cf1498e08afcf7671099271b7bb853562f0669b1e9b740dbeddab",
+      "path": "native/xenoid-profile-runtime/hwcomposer_wrapper.c"
+    },
+    {
+      "original_sha256": "03c93b84862415bb28e655f1c2228afe0c43851b7a7e2cffef197cd5317f1e8c",
+      "path": "native/xenoid-profile-runtime/xenoid_zygote.c"
+    },
+    {
+      "original_sha256": "b745c5422160c6f5af9b469045639341ea685f20f30a3f4f2ec16be8a652a782",
+      "path": "profiles/runtime-v1/scripts/patch-runtime-props.py"
+    },
+    {
+      "original_sha256": "dde9eb877ce74d7424a351927989fcf6a70ec4fb70232f3c3af06679a805a377",
+      "path": "profiles/runtime-v1/scripts/make-runtime-context.sh"
+    },
+    {
+      "original_sha256": "b4c58de2205b1b38a2846616823d1a3f174b4cf2d14e1ce4b536d61f2bd3c403",
+      "path": "scripts/build-profile-hwcomposer.sh"
+    },
+    {
+      "original_sha256": "dede1f37d5344761e0aabbee385aa5bb37dfa915f9f24fbeff33bd75e0cc67de",
+      "path": "scripts/build-profile-zygote.sh"
+    },
+    {
+      "original_sha256": "e2839ad8c785a4b83d5f3216f99475e897046afd74d2838b58cb8ac4492a62da",
+      "path": "scripts/ensure-android-tun.py"
+    },
+    {
+      "original_sha256": "d6a2d3547574c436305fd17fcf1d9a076992aa872064cdb1465c96925c39b17b",
+      "path": "scripts/seed-cold-profile.py"
+    },
+    {
+      "original_sha256": "d5a963bf5852c4dc13360a515f0b5f38f787e3a3da3718f41169e6ba43e161e8",
+      "path": "scripts/seed-profile-boot-id.py"
+    },
+    {
+      "original_sha256": "6de1da4480e91874e8ea3642f35484794cdae2aa1dfe9d84d89e0531a7c17b3f",
+      "path": "scripts/test-android-tun.py"
+    },
+    {
+      "original_sha256": "e0b9a402f0c2dc27abae3c283dd4c12fb03fa1868219376f009417f58f4db8ec",
+      "path": "scripts/test-build-metadata.py"
+    },
+    {
+      "original_sha256": "ae3cf039b788e4479fa7d7b0464c4b1ab64aa65da1c45c9cb81575e6999a1e95",
+      "path": "scripts/test-cold-profile-defaults.py"
+    },
+    {
+      "original_sha256": "a36576be4376e6e4e4bf70fce3f3413b96c97cc93aeaf965ec5ed7f2c9cbd35c",
+      "path": "scripts/test-cold-profile.py"
+    },
+    {
+      "original_sha256": "599e40c4523e9ac06708255b065a39a4201fb33b8524717e00b8da0b9c2515f7",
+      "path": "scripts/test-cold-seed-native.py"
+    },
+    {
+      "original_sha256": "723743b850e9dae00a2c8ceb176cdd3d6767fee6ed865450079ce32ccbfc4bf3",
+      "path": "scripts/test-google-bluejay.py"
+    },
+    {
+      "original_sha256": "eeaffa5e0752c2c3281ad5ce4a20aa4a63745e5e21a9ec00fb05b167cabc1ebd",
+      "path": "scripts/test-profile-boot-id.py"
+    },
+    {
+      "original_sha256": "53efe08e65b419a5fd225f10682b3f8de515a49ac773cf6f50628ac81b890465",
+      "path": "scripts/test-proxy-android-underlay.py"
+    },
+    {
+      "original_sha256": "1dfed88f43e14c6839ea03d678e392aaa6085df4bed54953b03217b2e33e8a11",
+      "path": "scripts/test-regeneration-device-name.py"
+    },
+    {
+      "original_sha256": "8e054b3db887e116d342d6cd2e564b8b37ec7e53dbeb508d41e69059f9b5c075",
+      "path": "scripts/test-soft-reboot.py"
+    }
+  ],
+  "schema": "xenoid.native-source-extraction/v1"
+}

@@ -1,0 +1,26 @@
+{
+  "schema": "dev.xenoid.rootcanal-source-fix/v1",
+  "supported_commits": {
+    "android-13.0.0_r74": "afe918573bddb9bf4c657fd86a2fdaeb4526f9d7",
+    "android-13.0.0_r75": "26115431ba81de998abaecdfafd802eb98a96f8b",
+    "android-13.0.0_r82": "24b2d62acf6182bf52c05a867216a04a54749243",
+    "android-13.0.0_r83": "e090a3dfb8ab5cb7216587daea8ecac8ece7e511"
+  },
+  "files": {
+    "tools/rootcanal/model/controller/link_layer_controller.cc": {
+      "before_sha256": "98aee68acc64e9849cda1abe67611f79e150f10379490c1dcc5fefdca745a417",
+      "after_sha256": "37cdd08be4e28cbb80c69d40a8bee92310115771908b7709166782a2b88d298a"
+    },
+    "tools/rootcanal/Android.bp": {
+      "before_sha256": "46733c3ca821389c5948a45c160e1257eff4d62df57bdb0bc0512c56aebd553f",
+      "after_sha256": "c1474082caa21465d1f973d77fc4ce996cb7ee3fb390eafc2b498a5189add0ef"
+    },
+    "system/test/rootcanal/Android.bp": {
+      "before_sha256": "fa101bae985dd3b229da01b3160ebbce9ac895a0557432aafa57064c9f93f8c9",
+      "after_sha256": "6358e2bc1a5a7dcc84ca7dab6aa54229b9f532130085e334f10c2e3d125fe179"
+    }
+  },
+  "patch_sha256": "7c2ed6b3fdcfbebcca47bd5b5d9c31e2c3506a9716c32cf8c5348295b5398cac",
+  "cfi_disabled": false,
+  "unique_ptr_header_layout_changed": false
+}

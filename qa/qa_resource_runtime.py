@@ -17,7 +17,7 @@ import tempfile
 
 
 DEFAULT_CONFIG = {"enabled": True, "fps": 20, "scale": "minimum",
-                  "min_side": 200, "dpi": 72, "timeout": 180}
+                  "min_side": 200, "dpi": 72, "timeout": 180, "render_fps": None}
 CONFIG = Path("/etc/xenoid-fleet/qa-resources.json")
 STATE = Path("/var/lib/xenoid-fleet/qa-resources")
 UPSTREAM = Path("/opt/xenoid-fleet/upstream")
@@ -34,6 +34,10 @@ def validate_config(value):
     fps = config["fps"]
     if fps is not None and (type(fps) is not int or not 0 <= fps <= 1_000_000_000):
         raise ValueError("fps must be null or a nonnegative integer with a nanosecond period")
+    render_fps = config["render_fps"]
+    if render_fps is not None and (type(render_fps) is not int or render_fps != 15
+            or config["fps"] != 60 or config["scale"] is not None or config["dpi"] != 420):
+        raise ValueError("Fresh native pacing requires render_fps=15, fps=60, scale=null and dpi=420")
     scale = config["scale"]
     if scale is not None and scale != "minimum":
         try:
@@ -355,6 +359,12 @@ def reconcile_owned(name, config, manager, *, force=False, broker=None):
         return {"instance": name, "skipped": "no_owned_runtime"}
     if (owned.get("State") or {}).get("Running") is not True:
         return {"instance": name, "skipped": "stopped"}
+    # An explicit native Bluejay image must never fall back to the old HWC
+    # replacement/WM-scaling path after a legacy settings update.
+    from qa_fresh6a import is_bluejay
+    cold = getattr(getattr(manager, "cfg", None), "cold_profile", None)
+    if is_bluejay(cold) and config.get("render_fps") != 15:
+        raise ValueError("Fresh Pixel 6a requires its separate native render_fps=15 contract")
     if pending_profile(manager, owned):
         return {"instance": name, "ok": True, "skipped": "profile_pending", "deferred": True}
     config = effective_config(config, manager, owned)
@@ -383,8 +393,20 @@ def reconcile_owned(name, config, manager, *, force=False, broker=None):
         previous["display"]["proxy"] = proxy
         atomic_json(marker, previous)
         return {**previous, "proxy_retry_only": True}
-    result = broker.set_frame_rate(config["fps"], timeout=config["timeout"])
-    metrics = apply_metrics(broker, config, backup, identity=identity)
+    if config.get("render_fps") is not None:
+        # Native image/boot owns the 15 FPS render cap independently of the
+        # advertised 60 Hz mode. Never invoke the legacy HWC replacement here.
+        import time
+        from qa_fresh6a import verify_runtime
+        deadline = time.monotonic() + config["timeout"] if config["timeout"] else None
+        # A timer-created Broker binds its immutable CID lazily. Enter the
+        # official owner context before comparing IDs or reading Android.
+        with broker.owned_manager() as active:
+            result = verify_runtime(broker, active, deadline=deadline)
+        metrics = {"changed": False, "preserved": True, "native": True}
+    else:
+        result = broker.set_frame_rate(config["fps"], timeout=config["timeout"])
+        metrics = apply_metrics(broker, config, backup, identity=identity)
     if result.get("proxy", {}).get("ready") is False:
         # Leave the marker incomplete so the timer can retry native recovery.
         # No direct-network bypass or changes to the saved proxy policy.

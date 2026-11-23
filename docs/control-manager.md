@@ -10,11 +10,11 @@ On the manager host, `sudo fleet-control --help` opens the CLI help. `--json` se
 | --- | --- | --- |
 | `status` | `sudo fleet-control --json status` | Read controller and queue status. |
 | `server list` | `sudo fleet-control --json server list` | Read the registered SSH inventory. |
-| `server add HOST` | `sudo fleet-control server add qa-arm64.example.com --name qa-node --username root --port 22 --device-count 4 --wait` | Prompt for a password, check via SSH, install Fleet if needed, and ensure IDs 1 through 4. |
-| `server add HOST --identity-file PATH` | `sudo fleet-control server add qa-arm64.example.com --identity-file ./manager-key --device-count 4` | Register with an SSH private key. Add `--host-key-fingerprint SHA256:…` to pin a verified server key. |
+| `server add HOST` | `sudo fleet-control server add qa-arm64.example.com --name qa-node --username root --port 22 --device-count auto --wait` | Prompt for a password, check via SSH, install Fleet if needed, and ensure IDs up to the host’s reserved capacity. |
+| `server add HOST --identity-file PATH` | `sudo fleet-control server add qa-arm64.example.com --identity-file ./manager-key --device-count auto` | Register with an SSH private key. Add `--host-key-fingerprint SHA256:…` to pin a verified server key. |
 | `server edit ID` | `sudo fleet-control server edit 1 --name qa-node --change-password` | Edit the record and prompt for a new password. Use `--identity-file PATH` to change to key authentication. |
 | `server check` | `sudo fleet-control server check --server 1,2 --wait` | Check connectivity, installation, and device status. |
-| `server install` | `sudo fleet-control server install --server 1 --device-count 4 --wait` | Install the published package where needed and create missing IDs. |
+| `server install` | `sudo fleet-control server install --server 1 --device-count auto --wait` | Install the published package where needed and create missing IDs. |
 | `server remove ID` | `sudo fleet-control server remove 1` | Remove the record from the manager inventory. |
 
 `server add` and `server edit` also accept `--identity-stdin` for a key or `--password-stdin` for one password line. Read the credential from standard input or use the interactive prompt. `--prompt-key-passphrase` reads the key passphrase interactively. `server edit` accepts `--hostname HOST`, `--name`, `--username`, `--port`, and `--host-key-fingerprint`. The controller requires root or passwordless sudo on key-authenticated managed hosts.
@@ -28,7 +28,7 @@ On the manager host, `sudo fleet-control --help` opens the CLI help. `--json` se
 | `device list` | `sudo fleet-control --json device list --server all` |
 | `device refresh` | `sudo fleet-control device refresh --server all --wait` |
 | `device create` with IDs | `sudo fleet-control device create --server 1 --devices 2,3 --wait` |
-| `device create` to a count | `sudo fleet-control device create --server 1 --count 4 --wait` |
+| `device create` to a count | `sudo fleet-control device create --server 1 --count auto --wait` |
 | `device create` with JSON | `sudo fleet-control device create --server 1 --devices 2 --profile /srv/profiles/qa.json --wait` |
 | `device start` | `sudo fleet-control device start --server 1,2 --devices all --wait` |
 | `device stop` | `sudo fleet-control device stop --server 1 --devices 2 --wait` |
@@ -38,7 +38,7 @@ On the manager host, `sudo fleet-control --help` opens the CLI help. `--json` se
 | `device screenshot HOST_ID DEVICE_ID` | `sudo fleet-control device screenshot 1 2 --output ./phone-2.png` |
 | `device live HOST_ID DEVICE_ID` | `sudo fleet-control device live 1 2 --frames 30 --interval 2.5 --output ./phone-2-frames` |
 
-`device list` reads the controller's cached inventory. `device refresh` updates it via the remote CLI. `--count N` ensures IDs 1 through N and preserves IDs that are already registered. Explicit IDs follow the native `xenoid-fleet create` recreate behavior. Use a profile path on the managed server. Use `--output -` for a screenshot on standard output. Live view takes successive PNG frames, with 1 to 3600 frames and 1 to 60 seconds between captures. The web panel offers live frame grids for multiple devices.
+`device list` reads the controller's cached inventory. `device refresh` updates it via the remote CLI. `--count auto` reads real host RAM/CPU and reserves one CPU plus max(1 GiB, 10% RAM); `--count N` is an explicit override. Both preserve IDs that are already registered. A warning records CPU/RAM or swap overcommit for numeric overrides. Explicit IDs follow the native `xenoid-fleet create` recreate behavior. Use a profile path on the managed server. Use `--output -` for a screenshot on standard output. Live view takes successive PNG frames, with 1 to 3600 frames and 1 to 60 seconds between captures. The web panel offers live frame grids for multiple devices.
 
 ## Xenoid proxy
 
@@ -109,3 +109,29 @@ sudo fleet-control server install --server all --device-count 1 --wait
 | `rpc` | `printf '%s\n' '{"method":"status","parameters":{}}' \| sudo fleet-control rpc` |
 
 A loop runs its ordered lines in the same noninteractive SSH shell. `--repeat` accepts 1 to 10 rounds and `--interval` accepts 0 to 300 seconds between rounds. `--continue-on-error` lets later lines run after a command fails. An active cancellation skips subsequent work after the in-flight SSH command returns. `rpc` reads one JSON request from standard input. The local socket controls access to the manager.
+
+## Fresh Pixel 6a rollout
+
+The published Fleet release is the single device creation path for the panel and
+CLI. New instances select the canonical cold profile before first boot, use real
+1-CPU/2-GiB/512-MiB-swap limits, report 1080×2400 at 420 DPI/429 PPI and 60 Hz,
+and verify source-owned 15-FPS render pacing. Native Xenoid input remains the
+only touch backend.
+
+A fresh migration deletes Android instances and their data only after an
+explicit authorized delete operation. Keep controller APK uploads, weighted
+assignment settings, SSH records, proxy sources and domain exclusions. Archive
+and replace the active profile/resource defaults explicitly before creating the
+new fleet; ordinary upgrades do not overwrite stored administrator policy.
+Refresh inventory after deletion and creation so assignments use new instance
+identities. Restart the selected script only after per-device acceptance.
+
+`control/plan_apk_redeployment.py` reads an object containing the current
+`hosts` and saved `apks` API arrays from standard input and prints a read-only
+redeployment plan. It uses the same percentage selection and rounding as the
+panel, requires each new device's verified identity, and shows overlaps between
+independent APK percentages. Review those overlaps, then submit the listed
+`apk.deploy` requests through the existing API in order. Explicit device
+selections are marked for review instead of applying stale bindings to newly
+created instances. The helper neither reads the controller database nor submits
+jobs.

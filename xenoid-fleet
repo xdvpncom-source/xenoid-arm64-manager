@@ -22,7 +22,9 @@ from typing import Iterator
 
 
 NAME_PREFIX = "phone-"
-VERSION = "v0.1.28"
+VERSION = "v0.1.29"
+FRESH_CONFIG = Path("defaults/bluejay-linux-arm.json")
+BLUEJAY_GOOGLE_RELEASE = "microg-0.3.15.250932-phonesky-30.4.17-gsfproxy-0.1.0-bluejay"
 DEVICE_ID = re.compile(r"[1-9][0-9]{0,25}")
 INSTALL_ROOT = Path(__file__).resolve().parent
 CHROME_SCHEMA = "dev.xenoid.fleet.chrome-baseline/v1"
@@ -55,6 +57,56 @@ RECREATE_RECOVERY_CODES = {
 
 class FleetError(Exception):
     pass
+
+
+def capacity_report(*, memory_total_bytes=None, cpu_count=None, swap_total_bytes=None,
+                    memory_reserve_mib=None, cpu_reserve=1, meminfo_path=Path("/proc/meminfo")):
+    """Plan fresh-device capacity from host resources without changing anything."""
+    if memory_total_bytes is None or swap_total_bytes is None:
+        values = {}
+        for line in meminfo_path.read_text().splitlines():
+            match = re.fullmatch(r"(MemTotal|SwapTotal):\s+(\d+) kB", line.strip())
+            if match:
+                values[match[1]] = int(match[2]) * 1024
+        if memory_total_bytes is None:
+            memory_total_bytes = values.get("MemTotal")
+        if swap_total_bytes is None:
+            swap_total_bytes = values.get("SwapTotal", 0)
+    if cpu_count is None:
+        cpu_count = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
+    if (type(memory_total_bytes) is not int or memory_total_bytes <= 0
+            or type(cpu_count) is not int or cpu_count <= 0
+            or type(swap_total_bytes) is not int or swap_total_bytes < 0
+            or type(cpu_reserve) is not int or cpu_reserve < 1
+            or (memory_reserve_mib is not None
+                and (type(memory_reserve_mib) is not int or memory_reserve_mib < 1024))):
+        raise FleetError("Capacity requires valid host resources and at least 1 CPU/1 GiB reserve")
+    reserve = (max(1024**3, (memory_total_bytes + 9) // 10) if memory_reserve_mib is None
+               else memory_reserve_mib * 1024**2)
+    by_cpu = max(0, cpu_count - cpu_reserve)
+    by_memory = max(0, (memory_total_bytes - reserve) // (2 * 1024**3))
+    count = min(by_cpu, by_memory)
+    return {
+        "schema": "dev.xenoid.fleet.capacity/v1", "ok": True, "read_only": True,
+        "host": {"cpu_count": cpu_count, "memory_total_bytes": memory_total_bytes,
+                 "swap_total_bytes": swap_total_bytes},
+        "reserve": {"cpu_count": cpu_reserve, "memory_bytes": reserve,
+                    "memory_policy": "max-1gib-10-percent" if memory_reserve_mib is None else "explicit"},
+        "per_device": {"cpu_count": 1, "memory_bytes": 2 * 1024**3,
+                       "swap_limit_bytes": 512 * 1024**2},
+        "max_by_cpu": by_cpu, "max_by_memory": by_memory, "recommended_count": count,
+        "swap_capacity_ok": swap_total_bytes >= count * 512 * 1024**2,
+        "explicit_count_overrides_allowed": True,
+    }
+
+
+def capacity_warnings(report, count):
+    result = []
+    if count > report["recommended_count"]:
+        result.append("cpu_memory_overcommit")
+    if count * report["per_device"]["swap_limit_bytes"] > report["host"]["swap_total_bytes"]:
+        result.append("swap_capacity_below_requested_limits")
+    return result
 
 
 @contextlib.contextmanager
@@ -587,13 +639,21 @@ def verify_migration_base(context: str, reference) -> None:
 
 def create_device(upstream: Upstream, device_id: str, args: argparse.Namespace,
                   profile: str | None, baseline: ChromeBaseline | None,
-                  proxy_default: ProxyDefault | None = None) -> None:
-    row = upstream.registry().get(device_id)
+                  proxy_default: ProxyDefault | None = None, *, reconcile: bool = True) -> None:
+    registry = upstream.registry()
+    row = registry.get(device_id)
     check_registry_entry(device_id, row)
+    if Path("/proc/meminfo").is_file():
+        capacity = capacity_report()
+        count = len(set(registry) | {device_id})
+        warnings = capacity_warnings(capacity, count)
+        if warnings:
+            print(f"Explicit device count {count} overrides recommended capacity {capacity['recommended_count']}: "
+                  + ", ".join(warnings), file=sys.stderr)
     runtime = baseline.runtime if baseline is not None else None
     base_id = None
     if row is None:
-        command = ["init", "--config", str(upstream.root / "examples" / "config-linux-arm.json")]
+        command = ["init", "--config", str(INSTALL_ROOT / FRESH_CONFIG)]
         if args.no_google_services:
             command.append("--no-google-services")
         if runtime is not None:
@@ -601,7 +661,15 @@ def create_device(upstream: Upstream, device_id: str, args: argparse.Namespace,
             command.extend(("--image", runtime.image))
         upstream.require(device_id, command)
     else:
-        settings = instance_settings(upstream, device_id) if args.no_google_services or runtime is not None else {}
+        settings = instance_settings(upstream, device_id)
+        configured = settings.get("cold_profile")
+        build = configured.get("build") if isinstance(configured, dict) else None
+        provider = settings.get("google_services_provider")
+        if (not isinstance(build, dict) or build.get("product") != "bluejay"
+                or build.get("model") != "Pixel 6a"
+                or provider not in {"microg", "none"}
+                or (provider == "microg" and settings.get("google_services_release") != BLUEJAY_GOOGLE_RELEASE)):
+            raise FleetError("Existing device uses a different runtime profile; explicitly delete it before fresh Bluejay creation")
         if args.no_google_services:
             if settings.get("google_services_provider") != "none":
                 raise FleetError("Google services on an existing device require a new device ID to change")
@@ -614,7 +682,7 @@ def create_device(upstream: Upstream, device_id: str, args: argparse.Namespace,
         if runtime is not None and settings.get("image") != runtime.image:
             # Native up recreates the container when its configured boot image changes.
             upstream.require(device_id, ["config", "set", "--image", runtime.image])
-        else:
+        elif not getattr(args, "if_missing", False):
             upstream.recreate(device_id)
     upstream.require(device_id, ["up"])
     if profile is not None:
@@ -623,7 +691,8 @@ def create_device(upstream: Upstream, device_id: str, args: argparse.Namespace,
         proxy_default.converge(upstream, device_id)
     if baseline is not None:
         baseline.converge(upstream, device_id, base_id)
-    qa_reconcile([device_id], force=True)
+    if reconcile:
+        qa_reconcile([device_id], force=True)
 
 
 def qa_reconcile(ids: list[str], *, force: bool = False, required: bool = False, report: bool = False) -> int:
@@ -715,6 +784,15 @@ def run_devices(upstream: Upstream, ids: list[str], command: list[str]) -> int:
 
 
 def execute(args: argparse.Namespace, command: list[str]) -> int:
+    if args.action == "capacity":
+        report = capacity_report(memory_reserve_mib=args.memory_reserve_mib, cpu_reserve=args.cpu_reserve)
+        if args.json:
+            print(json.dumps(report, sort_keys=True))
+        else:
+            print(f"Recommended fresh devices: {report['recommended_count']}")
+            print(f"Host reserve: {report['reserve']['cpu_count']} CPU, {report['reserve']['memory_bytes']} bytes RAM")
+            print(f"Swap capacity sufficient: {str(report['swap_capacity_ok']).lower()}")
+        return 0
     if args.action == "proxy-routing" and args.routing_action in ("configure", "show"):
         helper = INSTALL_ROOT / "panel-scripts" / "qa_proxy_routing.py"
         if not helper.is_file():
@@ -784,10 +862,15 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="action", required=True)
     listing = commands.add_parser("list", help="list registered numeric devices and their status")
     listing.add_argument("--json", action="store_true")
+    capacity = commands.add_parser("capacity", help="read host capacity for fresh 1-CPU/2-GiB devices")
+    capacity.add_argument("--json", action="store_true")
+    capacity.add_argument("--memory-reserve-mib", type=int, help="explicit reserve, at least 1024 MiB; default max(1 GiB, 10%%)")
+    capacity.add_argument("--cpu-reserve", type=int, default=1, help="host CPU reserve, at least 1")
     create = commands.add_parser("create", help="create or recreate devices while preserving existing data")
     create.add_argument("ids", metavar="ID[,ID...]")
     create.add_argument("profile", nargs="?", metavar="PROFILE")
     create.add_argument("--no-google-services", action="store_true")
+    create.add_argument("--if-missing", action="store_true", help="create missing IDs and converge existing matching Bluejay instances")
     delete = commands.add_parser("delete", help="preview or permanently delete selected devices")
     delete.add_argument("ids", metavar="ID|CSV|all")
     confirm = delete.add_mutually_exclusive_group()

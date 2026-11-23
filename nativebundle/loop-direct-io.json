@@ -1,0 +1,69 @@
+{
+  "fixture_image_bytes": 67108864,
+  "fixture_payload_bytes": 33554432,
+  "kernel": "6.8.0-138-generic",
+  "limits": [
+    "Not a complete Android workload stability qualification.",
+    "Cold canary must verify both active loop devices, default display, source-built HAL, official touch, actual resource limits and regeneration.",
+    "No kernel memory limit, filesystem barrier or filesystem integrity check was weakened."
+  ],
+  "mock_failure_boundaries_passed": 7,
+  "primary_sources": [
+    "https://github.com/torvalds/linux/blob/v6.8/drivers/block/loop.c#L174",
+    "https://github.com/torvalds/linux/blob/v6.8/drivers/block/loop.c#L1009",
+    "https://github.com/torvalds/linux/blob/v6.8/drivers/block/loop.c#L1767",
+    "https://github.com/torvalds/linux/blob/v6.8/drivers/block/loop.c#L1814",
+    "https://github.com/torvalds/linux/blob/v6.8/mm/vmscan.c#L1117",
+    "https://github.com/torvalds/linux/blob/v6.8/include/uapi/linux/loop.h"
+  ],
+  "schema": "xenoid.loop-direct-io-source-fixture/v1",
+  "source_after_sha256": "974918e4951c673bbd8ce0c1cd67c52b8f028d4a7766fe272f6ce9ebdd84454b",
+  "source_before_sha256": "87456a417fc7ee2f3e3dfa2a002cdbe5c49d4e0189149788175a158138541143",
+  "tests": [
+    {
+      "cache_after_bytes": 35115008,
+      "cache_before_bytes": 0,
+      "dio": false,
+      "flags": 5,
+      "fsck_pass": null,
+      "hash_preserved": true,
+      "kind": "buffered",
+      "mode": "ro",
+      "persisted_across_reattach": null
+    },
+    {
+      "cache_after_bytes": 35115008,
+      "cache_before_bytes": 0,
+      "dio": false,
+      "flags": 4,
+      "fsck_pass": true,
+      "hash_preserved": null,
+      "kind": "buffered",
+      "mode": "rw",
+      "persisted_across_reattach": true
+    },
+    {
+      "cache_after_bytes": 0,
+      "cache_before_bytes": 0,
+      "dio": true,
+      "flags": 21,
+      "fsck_pass": null,
+      "hash_preserved": true,
+      "kind": "direct",
+      "mode": "ro",
+      "persisted_across_reattach": null
+    },
+    {
+      "cache_after_bytes": 0,
+      "cache_before_bytes": 0,
+      "dio": true,
+      "flags": 20,
+      "fsck_pass": true,
+      "hash_preserved": null,
+      "kind": "direct",
+      "mode": "rw",
+      "persisted_across_reattach": true
+    }
+  ],
+  "upstream_revision": "c07e56b4aef8cd7e4d56eed11c84781369d29997"
+}

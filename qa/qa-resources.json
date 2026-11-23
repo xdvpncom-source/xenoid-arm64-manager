@@ -1,8 +1,9 @@
 {
   "enabled": true,
-  "fps": 20,
-  "scale": "minimum",
-  "min_side": 200,
-  "dpi": 72,
-  "timeout": 180
+  "fps": 60,
+  "render_fps": 15,
+  "scale": null,
+  "min_side": 1080,
+  "dpi": 420,
+  "timeout": 0
 }

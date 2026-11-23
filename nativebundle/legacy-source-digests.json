@@ -1,0 +1,49 @@
+{
+  "base_revision": "c07e56b4aef8cd7e4d56eed11c84781369d29997",
+  "files": {
+    "scripts/build-daemon-standalone.sh": [
+      "631a3bbde36aa1649b59e3c442747ae2856bd6fe727dd4c87d19da98477b4310",
+      "6b9b997dfb7ee24a36a5a9accf51754cf501258d4e4626047955873c4e16ee25",
+      "7adc0a6ae1a73fb9c23b8d7653e1d956dbb0a47c5b0b47515db4e4d69376b663"
+    ],
+    "scripts/build-keymint.sh": [
+      "0fc5ae8f0700b0f1185d7708fc86eac900bd947abdb433626506585c296a8efd",
+      "1c2d04373b676de7df2df80a49455b88eb328db989ba19bf5bbd6cd4b5c01b40"
+    ],
+    "scripts/xenoid-proxy-agent.py": [
+      "24d05ead62f1fbfdd9cb91481c5d07fd51ac5468116775d375efacf98331bb5b",
+      "cdac3ca5c1446d814a8d7ed283ace3a0933c4d314156f03e1e06971adeae09f8"
+    ],
+    "scripts/xenoid-proxy-engine.py": [
+      "775ad1d7506708b9f5e9f39932ae107486ed2d0789b9da7f464af091e96f17f1",
+      "9a3457d73560b557b265971867fdf685dcfb300960baeaec3308a396a59e65a7",
+      "9e24b7237b1d3d515205d8a0392174aba0cb017ad6f5686835e2d6eb5279b918",
+      "dc1a4123373420694f9abbb7bea1340de2f82b4560ec4e76984c47126c5d1798"
+    ],
+    "src/xenoid/backend.py": [
+      "058475fbda896302e89cd9904877a7c16ae8791ae918061cab154e109f18d864",
+      "46e5a44a328ef3d6e401d4f9f7e7a88e3082d3f5ef730f3e2b5926e8d029d74f",
+      "83918807ab247bae02ad7848b4d7bc2c0ed3788207201617aa1260895f2d0e9e",
+      "b376893a531eb54ad03e05ff419af55e0a4ea3ea5daaaab9f79affe6123e7e4c",
+      "b606554e66162113485d11c0841de038c6f290a9dc7c6e7c111956c512bc2d77",
+      "c090c9a4c3796d0a63d073d17cc33fabcc8b0ba831958dcb687004812ffc7acb",
+      "c42b8f7cc122e6c597a44fd0cd1969d5e2b5f728e0366f7f0aa80387dd5b0ebc"
+    ],
+    "src/xenoid/live_observe.py": [
+      "12e5f659f17118ca7f9a4bb704c6d56aa69756bdd516706ca2c845a39a91b05b",
+      "3f359f93657f28f5b892005ecf69571c5522429b2399d768b35c0f403479546f",
+      "b8e409b67b2605c89dd451da233e9d1252fbb05df3ae0608c8b0cb153e91d868"
+    ],
+    "src/xenoid/protection.py": [
+      "8b45354d2df8edbda24922437a0a7444b1b5ea49537eb48200731165e99c4ffc",
+      "dc63322c50768a8f21501669d55ea586e0329aae6a5f3a2cf769b97914768d1f"
+    ],
+    "src/xenoid/proxy_source.py": [
+      "4c199ef4de2e26ef39990389b8d42127c662a6e0c19832f35f7508bae7a9707f",
+      "def4ca54910af27b3b913f53611c315e92de98258d4993fbc965c981d8d2e57d",
+      "e52b4603891adad4f27c4b2b996a7cf21615dffbe6f6e635bd89f6fe9b85ada0"
+    ]
+  },
+  "reconstructed_manager_revisions": 12,
+  "schema": "xenoid.legacy-source-digests/v1"
+}

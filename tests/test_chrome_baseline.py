@@ -47,7 +47,9 @@ class Instance:
     def document(self, command, _device):
         self.commands.append(command)
         if command == ["config", "show"]:
-            return {"ok": True, "config": {"image": self.image, "docker_context": "qa-context"}}, 0
+            return {"ok": True, "config": {"image": self.image, "docker_context": "qa-context",
+                    "cold_profile": {"build": {"product": "bluejay", "model": "Pixel 6a"}},
+                    "google_services_provider": "microg", "google_services_release": FLEET["BLUEJAY_GOOGLE_RELEASE"]}}, 0
         if command == ["status"]:
             return {
                 "ok": True,
@@ -112,12 +114,15 @@ class ChromeBaselineTest(unittest.TestCase):
             with self.subTest(existing=existing), contextlib.redirect_stderr(io.StringIO()):
                 instance = Instance(existing=existing)
                 FLEET["create_device"](instance, "1", Namespace(no_google_services=False), "/profile.json", baseline)
-                self.assertEqual(instance.commands[0][0], "start" if existing else "init")
-                self.assertEqual(instance.commands[1:3], [["up"], ["device", "apply", "/profile.json", "--instance-identity"]])
-                self.assertEqual(instance.commands[4], ["app", "install", str(self.directory / "trichrome.apk")])
-                self.assertEqual(instance.commands[5], ["adb", "install-multiple", "-r", str(self.directory / "base.apk"),
+                offset = int(existing)
+                if existing:
+                    self.assertEqual(instance.commands[0], ["config", "show"])
+                self.assertEqual(instance.commands[offset][0], "start" if existing else "init")
+                self.assertEqual(instance.commands[offset + 1:offset + 3], [["up"], ["device", "apply", "/profile.json", "--instance-identity"]])
+                self.assertEqual(instance.commands[offset + 4], ["app", "install", str(self.directory / "trichrome.apk")])
+                self.assertEqual(instance.commands[offset + 5], ["adb", "install-multiple", "-r", str(self.directory / "base.apk"),
                                                         str(self.directory / "split_config.en.apk")])
-                self.assertEqual(instance.commands[3], instance.commands[6])
+                self.assertEqual(instance.commands[offset + 3], instance.commands[offset + 6])
 
     def test_plain_up_converges_once_and_preserves_equal_or_later_versions(self):
         for version in (720418033, 720418034):
@@ -243,7 +248,7 @@ class ChromeBaselineTest(unittest.TestCase):
         self.runtime_manifest()
         baseline = BASELINE.load()
         for existing, image, leading in (
-            (False, "stock", [["init", "--config", "/fixture/upstream/examples/config-linux-arm.json",
+            (False, "stock", [["init", "--config", str(self.root / "defaults/bluejay-linux-arm.json"),
                                "--image", baseline.runtime.image]]),
             (True, "stock", [["config", "show"], ["config", "set", "--image", baseline.runtime.image]]),
             (True, baseline.runtime.image, [["config", "show"], ["start", "--recreate", "--no-wait"]]),

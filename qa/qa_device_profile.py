@@ -368,6 +368,18 @@ def default_policy(base_profiles=None, resource_config=None):
     profiles = base_profiles or []
     if isinstance(profiles, dict):
         profiles = [profiles]
+    # A fresh native Bluejay release already owns coherent Build/geometry.
+    # Preserve legacy saved policies and Raven defaults; never seed QA model or
+    # arbitrary fingerprint variants for this explicit new release.
+    from qa_fresh6a import is_bluejay, default_policy as fresh_bluejay_policy
+    if profiles and all(is_bluejay(profile) for profile in profiles):
+        result = fresh_bluejay_policy(validate_profile(profiles[0]))
+        for profile in profiles[1:]:
+            other = fresh_bluejay_policy(validate_profile(profile))
+            for path, row in other["fields"].items():
+                old = result["fields"].setdefault(path, copy.deepcopy(row))
+                old["values"] = _unique(old["values"] + row["values"])
+        return result
     result = {"schema": SCHEMA, "enabled": True, "revision": 1, "fields": {},
               "display_random": copy.deepcopy(DEFAULT_DISPLAY_RANDOM)}
     for raw in profiles:
@@ -391,7 +403,8 @@ def migrate_policy(policy, base_profiles, resource_config=None):
         current = result["fields"].get(path)
         if reported and row["values"] and (current is None or current["enabled"] and not current["values"]):
             result["fields"][path] = copy.deepcopy(row)
-    if "display_presets" not in result and "display_random" not in result:
+    if ("display_presets" not in result and "display_random" not in result
+            and "display_random" in defaults):
         result["display_random"] = copy.deepcopy(defaults["display_random"])
     result["revision"] += 1
     return validate_policy(result, base_profiles)

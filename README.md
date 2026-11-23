@@ -7,10 +7,10 @@ Install Xenoid on an ARM64 Ubuntu server and manage headless Android 13 instance
 Use an **ARM64 (aarch64) server running Ubuntu 24.04**, such as a Hetzner CAX server. The installer requires root access, outbound HTTPS, and free disk space for the build toolchain, container images, and Android data. Install and management commands use the same operator account and Xenoid registry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.26/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.29/install.sh | sudo -H bash -s -- --accept-android-licenses
 ```
 
-The `--accept-android-licenses` flag accepts the Android SDK licenses for the pinned build tools from Google. The installer prepares the host and starts device `1`. Allow tens of minutes for the first build on a small server. The CLI is installed as `/usr/local/bin/xenoid-fleet` and the managed checkout lives under `/opt/xenoid-fleet/upstream`. Rerunning the installer reuses the toolchain and converges device `1` with its existing data.
+The `--accept-android-licenses` flag accepts the Android SDK licenses for the pinned build tools from Google. The installer prepares the host and creates fresh Pixel 6a devices up to the host’s reserved capacity. Allow tens of minutes for the first build on a small server. The CLI is installed as `/usr/local/bin/xenoid-fleet` and the managed checkout lives under `/opt/xenoid-fleet/upstream`. Rerunning the installer reuses the toolchain, creates missing IDs and converges existing matching Pixel 6a instances. An incompatible existing profile is rejected; deletion is a separate explicit operation.
 
 Android runs natively on ARM64 under Docker. An existing Docker engine needs Buildx and the containerd image store, which is the default on new Docker Engine 29 installations. The installer enables x86-64 userspace emulation for Google's Linux SDK and NDK executables. The Xenoid build cache and Docker images stay on the server for subsequent devices. The fleet CLI gives image builds separate Buildx client state so Xenoid can verify their payloads against the current build inputs.
 
@@ -25,7 +25,7 @@ sudo -H xenoid-fleet run 1 -- adb shell getprop sys.boot_completed
 Use `--install-only` to prepare the host before creating the first device or upgrade an existing installation without issuing a device start. Upgrades also refresh enabled proxies on already-running devices when their native control/process revision has not been verified.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.26/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.29/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
 ```
 
 ## Devices
@@ -34,6 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manage
 | --- | --- |
 | List devices and runtime status | `sudo -H xenoid-fleet list` |
 | List devices as JSON | `sudo -H xenoid-fleet list --json` |
+| Read automatic capacity | `sudo -H xenoid-fleet capacity --json` |
 | Create and start device 2 | `sudo -H xenoid-fleet create 2` |
 | Create or recreate device 2 with a profile | `sudo -H xenoid-fleet create 2 ./qa-profile.json` |
 | Apply one profile to devices 2 and 3 during create or recreate | `sudo -H xenoid-fleet create 2,3 ./qa-profile.json` |
@@ -118,18 +119,45 @@ unrelated connection tables therefore do not hide a valid root-helper listener.
 Both-family read/filter failures, ambiguous listeners and non-loopback addresses
 still fail ownership checks.
 
-### Panel-controlled QA defaults
+### Fresh Pixel 6a defaults
 
-Version v0.1.26 installs the QA SDK/backend, the native logical-to-raw input
-coordinate correction, and configurable resource defaults for all instances,
-including devices with no APK or shared script assignment. The stock pinned
-Redroid image, each native instance identity, persistent data, and saved proxy
-source/node/policy remain in place. The addon mounts its verified ARM64 composer
-over the running container's vendor path; it does not replace the stock image.
-Resource transactions wait for the native instance lock using the configured
-timeout (`0` waits without a deadline), then hold it through FPS and display
-writes. Normal script input/ADB lock behavior stays unchanged. Failure reports
-include a safe native reason code or exception class, never raw exception text.
+New devices select the native cold profile before their first Android boot. The
+profile reports Pixel 6a, a coherent fixed Android 13 Build tuple, 1080×2400 at
+420 DPI and 429 physical PPI, with a 60 Hz display mode. Source-owned compositor,
+GUI and HWUI pacing limits rendering to 15 FPS. The APK and official Xenoid touch
+path are unchanged. Native GEN owns unique identity values; fixed Build and
+screen metadata are not randomized. Camera and sensor capabilities remain those
+supported by the underlying Android image; this profile is not physical-device
+or Google-certification equivalence.
+
+Docker enforces one CPU, 2 GiB RAM and at most 512 MiB swap per device. The
+reported 6 GiB model memory is separate from these real host limits. Read the
+recommended count without changing any runtime:
+
+```bash
+sudo -H xenoid-fleet capacity --json
+```
+
+Automatic sizing reserves one host CPU and the greater of 1 GiB or 10% of real
+host RAM. A numeric count remains an explicit administrator override and reports
+overcommit. The panel accepts `auto` for new hosts and device-count operations.
+`--install-only` installs source, tools and defaults without creating a device;
+normal installation uses the automatic count. `create ID --if-missing` avoids
+forced recreation while still converging an existing matching instance.
+
+This release does not convert old Android data to a different Google/product
+binding. For an authorized fresh migration, stop scripts, explicitly delete the
+old owned instances, install the release, then create the new devices. Preserve
+controller APK uploads, assignments, SSH inventory, proxy sources and domain
+exceptions. Archived old profile/resource settings can be restored separately;
+ordinary installation does not erase those settings.
+
+The installer validates one public native source bundle against the pinned
+upstream commit. Source-built Bluetooth HAL provenance is supplied as a separate
+hash-verified release asset. Pacer, profile renderer and framework metadata
+artifacts are built through the existing native ArtifactBuilder and included in
+the content-addressed cold image. No private Google APKs, identifiers, credentials
+or runtime captures are included in the source or release asset.
 
 Native touches now require the official driver's kernel axes and DIRECT property
 to match Android's InputReader and InputDispatcher mapping. A healthy driver
@@ -180,21 +208,18 @@ full fresh UI observation when focus changes or at most ten seconds after the
 last full observation. Timings are editable in the script. Controls and touch
 coordinates are never reused from a cached observation after an action.
 
-The default profile is `/etc/xenoid-fleet/qa-resources.json`:
+The fresh default configuration is `/etc/xenoid-fleet/qa-resources.json`:
 
 ```json
-{"enabled":true,"fps":20,"scale":"minimum","min_side":200,"dpi":72,"timeout":180}
+{"enabled":true,"fps":60,"render_fps":15,"scale":null,"min_side":1080,"dpi":420,"timeout":0}
 ```
 
-Every value is editable through the management panel or JSON configuration.
-`fps: null` preserves the current rate; `0` restores the native modes. `scale:
-null` preserves the display metrics; `1` restores physical metrics; a positive
-number scales the physical metrics. `"minimum"` keeps the physical aspect ratio,
-rounds dimensions to even pixels, and uses `min_side` and `dpi`. For a physical
-720×1280 display, the defaults produce 200×356 at 72 DPI. Positive administrator
-values are passed to Android and verified by readback; unsupported values fail
-with rollback. `timeout: 0` permits unlimited setup time. These are resource
-defaults, with no action/package/ADB/round policy added to scripts.
+`fps` describes the native display mode; `render_fps` verifies the separate
+source-owned pacing contract. The fresh profile keeps 1080×2400/420 and derives
+official input coordinates from that same geometry. `timeout: 0` permits an
+unlimited setup wait. The runtime verifies the actual cold-image assets, live
+properties, display, official touch mapping and cgroup limits before accepting
+this profile. It does not turn an incompatible old runtime into a fresh one.
 
 The panel supplies each device's APK assignment and saved script version.
 Installing the addon does not select an app, clear app data or begin a QA cycle
@@ -205,8 +230,8 @@ devices, so changing ad selectors or timing does not require a Fleet upgrade.
 `qa/vpn-cycle.py` is the release-time reference protected by the installer
 manifest. The current panel workflow is also mirrored in
 [`examples/current-vpn-cycle.py`](examples/current-vpn-cycle.py) and exported as
-the [`vpn-cycle-v19.py` release asset](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.26/vpn-cycle-v19.py)
-with a [SHA-256 sidecar](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.26/vpn-cycle-v19.py.sha256).
+the [`vpn-cycle-v19.py` release asset](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.29/vpn-cycle-v19.py)
+with a [SHA-256 sidecar](https://github.com/xdvpncom-source/xenoid-arm64-manager/releases/download/v0.1.29/vpn-cycle-v19.py.sha256).
 The historical v0.1.17 `vpn-cycle-v14.py`, v0.1.16 `vpn-cycle-v14.py`, v0.1.15 `vpn-cycle-v13.py`, v0.1.14 `vpn-cycle-v13.py`, v0.1.13 `vpn-cycle-v12.py` and v0.1.12 `vpn-cycle-v11.py` assets remain unchanged. Updating the
 editable workflow never rewrites an existing release tag or its installer pins.
 

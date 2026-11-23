@@ -6,6 +6,7 @@ import re
 root = Path(__file__).resolve().parents[1]
 source = (root / "install.sh").read_text()
 pins = {"fleet_sha256": "xenoid-fleet", "toolchain_sha256": "install-toolchain.sh",
+        "loader_layout_sha256": "scripts/repair-merged-lib64.py",
         "daemon_patch_sha256": "patches/standalone-manifest.patch",
         "keymint_patch_sha256": "patches/keymint-paths.patch",
         "protection_patch_sha256": "patches/shared-protection-inspect.patch",
@@ -14,7 +15,12 @@ pins = {"fleet_sha256": "xenoid-fleet", "toolchain_sha256": "install-toolchain.s
         "proxy_cleanup_patch_sha256": "patches/proxy-namespaced-cleanup.patch",
         "host_vm_patch_sha256": "patches/host-vm-isolation.patch",
         "proxy_upgrader_sha256": "scripts/upgrade-proxy-control.py",
-        "qa_manifest_sha256": "qa/manifest.sha256", "qa_installer_sha256": "install-qa-addon.sh"}
+        "qa_manifest_sha256": "qa/manifest.sha256", "qa_installer_sha256": "install-qa-addon.sh",
+        "native_manifest_sha256": "nativebundle/manifest.json", "native_applier_sha256": "nativebundle/apply.py",
+        "native_artifacts_sha256": "nativebundle/artifacts.json",
+        "native_artifact_installer_sha256": "nativebundle/install_artifacts.py",
+        "fresh_config_sha256": "defaults/bluejay-linux-arm.json",
+        "control_adapter_sha256": "control/panel_device_create.py"}
 for name, filename in pins.items():
     expected = re.search(r"^" + name + r"=([0-9a-f]{64})$", source, re.M)
     assert expected, name + " is not pinned"
@@ -28,10 +34,11 @@ manifest_rows = [line.split(maxsplit=1) for line in (root / "qa/manifest.sha256"
 manifest_paths = [row[1].strip() for row in manifest_rows]
 assert len(manifest_paths) == len(set(manifest_paths)), "Duplicate QA manifest paths"
 required = {"script_host.py", "script_runtime.py", "shared_policy.py", "qa_lifecycle.py",
-            "qa_vpn_probe.py", "qa_input_ready.py", "qa_ui_reader.py", "qa_google_reset.py"}
+            "qa_vpn_probe.py", "qa_input_ready.py", "qa_ui_reader.py", "qa_google_reset.py", "qa_fresh6a.py"}
 assert required <= set(installed), "Required QA host module is not installed"
 assert all(installed.index(name) < installed.index("script_host.py") for name in required - {"script_host.py"}), "Host dependency installs after entrypoint"
 for filename in installed:
     assert "qa/" + filename in manifest_paths, filename + " has no integrity pin"
     assert (root / "qa" / filename).is_file(), filename + " is missing from release"
+assert "qa/default-bluejay-policy.json" in manifest_paths, "Fresh profile policy has no integrity pin"
 print("Release integrity pins match " + version)

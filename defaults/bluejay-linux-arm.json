@@ -1,0 +1,580 @@
+{
+  "backend": "linux-docker",
+  "image": "redroid/redroid@sha256:5a42a569ee1d7c71796c0385e906cbaa4c3e0a162a56d9f26b29bdb1befac13b",
+  "runtime_image_tag": "xenoid/redroid:local",
+  "auto_build_runtime_image": true,
+  "docker_context": "",
+  "google_services_provider": "microg",
+  "google_services_release": "microg-0.3.15.250932-phonesky-30.4.17-gsfproxy-0.1.0-bluejay",
+  "network_dns_servers": [
+    "1.1.1.1",
+    "8.8.8.8"
+  ],
+  "extra_docker_args": [
+    "--cpus",
+    "1",
+    "--memory",
+    "2147483648",
+    "--memory-swap",
+    "2684354560"
+  ],
+  "cold_profile": {
+    "battery": {
+      "capacityMah": 4410,
+      "chargeCounterUah": 2954700,
+      "chargeFullDesignUah": 4410000,
+      "chargeFullUah": 4410000,
+      "health": 2,
+      "level": 67,
+      "minimumCapacityMah": 4306,
+      "plugged": 0,
+      "present": 1,
+      "scale": 100,
+      "status": 3,
+      "technology": "Li-ion",
+      "temperature": 335,
+      "voltage": 3850
+    },
+    "build": {
+      "abi": "arm64-v8a",
+      "abilist": "arm64-v8a",
+      "abilist32": "",
+      "abilist64": "arm64-v8a",
+      "baseband": "g5123b-102852-220720-B-8851166",
+      "bionic_arch": "arm64",
+      "board": "bluejay",
+      "bootloader": "bluejay-1.2-8895132",
+      "brand": "google",
+      "dalvik_isa_arm": "",
+      "dalvik_isa_arm64": "arm64",
+      "date_utc": "1662059754",
+      "description": "bluejay-user 13 TP1A.221005.003 9018821 release-keys",
+      "device": "bluejay",
+      "fingerprint": "google/bluejay/bluejay:13/TP1A.221005.003/9018821:user/release-keys",
+      "first_api_level": "32",
+      "hardware": "bluejay",
+      "host": "abfarm-release-rbe-64-00023",
+      "id": "TP1A.221005.003",
+      "incremental": "9018821",
+      "kernel_build_suffix": "ab9012097",
+      "manufacturer": "Google",
+      "model": "Pixel 6a",
+      "platform": "gs101",
+      "product": "bluejay",
+      "release": "13",
+      "sdk": "33",
+      "security_patch": "2022-10-05",
+      "sku": "G1AZG",
+      "soc_manufacturer": "Google",
+      "soc_model": "Tensor",
+      "tags": "release-keys",
+      "type": "user",
+      "user": "android-build"
+    },
+    "cameras": [
+      {
+        "aperture": 1.85,
+        "facing": "back",
+        "flashAvailable": true,
+        "focalLengthMm": 6.81,
+        "id": "0",
+        "oisAvailable": false,
+        "outputSizes": [
+          {
+            "height": 3072,
+            "width": 4080
+          },
+          {
+            "height": 2160,
+            "width": 3840
+          },
+          {
+            "height": 1080,
+            "width": 1920
+          },
+          {
+            "height": 720,
+            "width": 1280
+          },
+          {
+            "height": 480,
+            "width": 640
+          },
+          {
+            "height": 240,
+            "width": 320
+          }
+        ],
+        "physicalCameraIds": [],
+        "sensorPhysicalSizeMm": {
+          "height": 7.3728,
+          "width": 9.792
+        },
+        "sensorPixelArray": {
+          "height": 3072,
+          "width": 4080
+        }
+      },
+      {
+        "aperture": 2.2,
+        "facing": "front",
+        "flashAvailable": false,
+        "focalLengthMm": 2.74,
+        "id": "1",
+        "oisAvailable": false,
+        "outputSizes": [
+          {
+            "height": 2880,
+            "width": 3840
+          },
+          {
+            "height": 1080,
+            "width": 1920
+          },
+          {
+            "height": 720,
+            "width": 1280
+          },
+          {
+            "height": 480,
+            "width": 640
+          },
+          {
+            "height": 240,
+            "width": 320
+          }
+        ],
+        "physicalCameraIds": [],
+        "sensorPhysicalSizeMm": {
+          "height": 3.5136,
+          "width": 4.6848
+        },
+        "sensorPixelArray": {
+          "height": 2880,
+          "width": 3840
+        }
+      }
+    ],
+    "cpu": {
+      "cores": [
+        {
+          "maximumFrequencyKhz": 1800000,
+          "minimumFrequencyKhz": 300000,
+          "model": "Cortex-A55",
+          "part": "0xd05",
+          "processor": 0
+        },
+        {
+          "maximumFrequencyKhz": 1800000,
+          "minimumFrequencyKhz": 300000,
+          "model": "Cortex-A55",
+          "part": "0xd05",
+          "processor": 1
+        },
+        {
+          "maximumFrequencyKhz": 1800000,
+          "minimumFrequencyKhz": 300000,
+          "model": "Cortex-A55",
+          "part": "0xd05",
+          "processor": 2
+        },
+        {
+          "maximumFrequencyKhz": 1800000,
+          "minimumFrequencyKhz": 300000,
+          "model": "Cortex-A55",
+          "part": "0xd05",
+          "processor": 3
+        },
+        {
+          "maximumFrequencyKhz": 2253000,
+          "minimumFrequencyKhz": 400000,
+          "model": "Cortex-A76",
+          "part": "0xd0b",
+          "processor": 4
+        },
+        {
+          "maximumFrequencyKhz": 2253000,
+          "minimumFrequencyKhz": 400000,
+          "model": "Cortex-A76",
+          "part": "0xd0b",
+          "processor": 5
+        },
+        {
+          "maximumFrequencyKhz": 2802000,
+          "minimumFrequencyKhz": 500000,
+          "model": "Cortex-X1",
+          "part": "0xd44",
+          "processor": 6
+        },
+        {
+          "maximumFrequencyKhz": 2802000,
+          "minimumFrequencyKhz": 500000,
+          "model": "Cortex-X1",
+          "part": "0xd44",
+          "processor": 7
+        }
+      ],
+      "implementer": "0x41"
+    },
+    "display": {
+      "defaultRefreshRateHz": 60,
+      "densityDpi": 420,
+      "height": 2400,
+      "modes": [
+        {
+          "height": 2400,
+          "id": 1,
+          "refreshRateHz": 60,
+          "width": 1080
+        }
+      ],
+      "peakRefreshRateHz": 60,
+      "physicalPpi": 429,
+      "supportedRefreshRatesHz": [
+        60
+      ],
+      "width": 1080
+    },
+    "ids": {
+      "android_id": "REGENERATE",
+      "boot_id": "REGENERATE",
+      "imei": "REGENERATE",
+      "imeisv": "REGENERATE",
+      "serial": "REGENERATE"
+    },
+    "input": {
+      "busType": 24,
+      "name": "sec_touchscreen",
+      "pressure": {
+        "maximum": 255,
+        "minimum": 0
+      },
+      "productId": 26720,
+      "trackingId": {
+        "maximum": 31,
+        "minimum": 0
+      },
+      "vendorId": 1256,
+      "version": 256,
+      "x": {
+        "maximum": 1079,
+        "minimum": 0
+      },
+      "y": {
+        "maximum": 2399,
+        "minimum": 0
+      }
+    },
+    "memory": {
+      "swapBytes": 4194304,
+      "totalBytes": 6442450944,
+      "totalKiB": 6291456
+    },
+    "provenance": {
+      "aospBoardConfig": "https://android.googlesource.com/device/google/raviole/+/refs/heads/android13-release/raven/BoardConfig.mk",
+      "aospProduct": "https://android.googlesource.com/device/google/raviole/+/refs/heads/android13-release/device-raven.mk",
+      "cameraGeometryConfidence": "community-derived",
+      "factoryImage": "https://redirector.gvt1.com/edgedl/android/aosp/raven-tp1a.221005.002-factory-d61dff29.zip",
+      "officialSpecs": "https://support.google.com/pixelphone/answer/7158570?hl=en",
+      "retainedImageHardware": "Camera and sensor descriptors remain inherited from the Raven-based Android image; this is not a claim of physical Pixel 6a hardware.",
+      "sensorRegistry": "https://dumps.tadiphone.dev/dumps/google/raven/-/raw/raven-user-13-TP1A.221005.002-9012097-release-keys/vendor/etc/sensors/registry/raven_pro_1_1.reg"
+    },
+    "schema": "dev.xenoid.fingerprint/v1",
+    "sensors": [
+      {
+        "flags": 0,
+        "handle": 1,
+        "maximumDelayUs": 200000,
+        "maximumRange": 78.4532,
+        "minimumDelayUs": 5000,
+        "name": "LSM6DSR Accelerometer",
+        "powerMa": 0.24,
+        "resolution": 0.00239563,
+        "type": 1,
+        "typeString": "android.sensor.accelerometer",
+        "vendor": "STMicroelectronics",
+        "version": 1
+      },
+      {
+        "flags": 0,
+        "handle": 2,
+        "maximumDelayUs": 200000,
+        "maximumRange": 34.9066,
+        "minimumDelayUs": 5000,
+        "name": "LSM6DSR Gyroscope",
+        "powerMa": 0.55,
+        "resolution": 0.00122173,
+        "type": 4,
+        "typeString": "android.sensor.gyroscope",
+        "vendor": "STMicroelectronics",
+        "version": 1
+      },
+      {
+        "flags": 0,
+        "handle": 3,
+        "maximumDelayUs": 200000,
+        "maximumRange": 3000,
+        "minimumDelayUs": 10000,
+        "name": "MMC56X3X Magnetometer",
+        "powerMa": 0.2,
+        "resolution": 0.1,
+        "type": 2,
+        "typeString": "android.sensor.magnetic_field",
+        "vendor": "MEMSIC",
+        "version": 1
+      },
+      {
+        "flags": 2,
+        "handle": 4,
+        "maximumDelayUs": 0,
+        "maximumRange": 5,
+        "minimumDelayUs": 0,
+        "name": "TMD3719 Proximity",
+        "powerMa": 0.13,
+        "resolution": 1,
+        "type": 8,
+        "typeString": "android.sensor.proximity",
+        "vendor": "ams AG",
+        "version": 1
+      },
+      {
+        "flags": 2,
+        "handle": 5,
+        "maximumDelayUs": 0,
+        "maximumRange": 12000,
+        "minimumDelayUs": 0,
+        "name": "TMD3719 Light",
+        "powerMa": 0.13,
+        "resolution": 1,
+        "type": 5,
+        "typeString": "android.sensor.light",
+        "vendor": "ams AG",
+        "version": 1
+      },
+      {
+        "flags": 0,
+        "handle": 6,
+        "maximumDelayUs": 1000000,
+        "maximumRange": 1100,
+        "minimumDelayUs": 50000,
+        "name": "ICP10101 Pressure",
+        "powerMa": 0.02,
+        "resolution": 0.0002,
+        "type": 6,
+        "typeString": "android.sensor.pressure",
+        "vendor": "TDK InvenSense",
+        "version": 1
+      },
+      {
+        "flags": 0,
+        "handle": 7,
+        "maximumDelayUs": 200000,
+        "maximumRange": 78.4532,
+        "minimumDelayUs": 5000,
+        "name": "LSM6DSR Accelerometer Uncalibrated",
+        "powerMa": 0.24,
+        "resolution": 0.00239563,
+        "type": 35,
+        "typeString": "android.sensor.accelerometer_uncalibrated",
+        "vendor": "STMicroelectronics",
+        "version": 1
+      },
+      {
+        "flags": 0,
+        "handle": 8,
+        "maximumDelayUs": 200000,
+        "maximumRange": 34.9066,
+        "minimumDelayUs": 5000,
+        "name": "LSM6DSR Gyroscope Uncalibrated",
+        "powerMa": 0.55,
+        "resolution": 0.00122173,
+        "type": 16,
+        "typeString": "android.sensor.gyroscope_uncalibrated",
+        "vendor": "STMicroelectronics",
+        "version": 1
+      },
+      {
+        "flags": 0,
+        "handle": 9,
+        "maximumDelayUs": 200000,
+        "maximumRange": 3000,
+        "minimumDelayUs": 10000,
+        "name": "MMC56X3X Magnetometer Uncalibrated",
+        "powerMa": 0.2,
+        "resolution": 0.1,
+        "type": 14,
+        "typeString": "android.sensor.magnetic_field_uncalibrated",
+        "vendor": "MEMSIC",
+        "version": 1
+      },
+      {
+        "flags": 2,
+        "handle": 10,
+        "maximumDelayUs": 0,
+        "maximumRange": 1,
+        "minimumDelayUs": 0,
+        "name": "CHRE Step Counter",
+        "powerMa": 0,
+        "resolution": 1,
+        "type": 19,
+        "typeString": "android.sensor.step_counter",
+        "vendor": "Google LLC",
+        "version": 1
+      },
+      {
+        "flags": 6,
+        "handle": 11,
+        "maximumDelayUs": 0,
+        "maximumRange": 1,
+        "minimumDelayUs": 0,
+        "name": "CHRE Step Detector",
+        "powerMa": 0,
+        "resolution": 1,
+        "type": 18,
+        "typeString": "android.sensor.step_detector",
+        "vendor": "Google LLC",
+        "version": 1
+      },
+      {
+        "flags": 0,
+        "handle": 13,
+        "maximumDelayUs": 200000,
+        "maximumRange": 1,
+        "minimumDelayUs": 5000,
+        "name": "CHRE Game Rotation Vector",
+        "powerMa": 0,
+        "resolution": 1,
+        "type": 15,
+        "typeString": "android.sensor.game_rotation_vector",
+        "vendor": "Google LLC",
+        "version": 1
+      },
+      {
+        "flags": 0,
+        "handle": 14,
+        "maximumDelayUs": 200000,
+        "maximumRange": 1,
+        "minimumDelayUs": 10000,
+        "name": "CHRE Geomagnetic Rotation Vector",
+        "powerMa": 0,
+        "resolution": 1,
+        "type": 20,
+        "typeString": "android.sensor.geomagnetic_rotation_vector",
+        "vendor": "Google LLC",
+        "version": 1
+      },
+      {
+        "flags": 0,
+        "handle": 15,
+        "maximumDelayUs": 200000,
+        "maximumRange": 9.80665,
+        "minimumDelayUs": 10000,
+        "name": "CHRE Gravity",
+        "powerMa": 0,
+        "resolution": 0.001,
+        "type": 9,
+        "typeString": "android.sensor.gravity",
+        "vendor": "Google LLC",
+        "version": 1
+      },
+      {
+        "flags": 0,
+        "handle": 16,
+        "maximumDelayUs": 200000,
+        "maximumRange": 78.4532,
+        "minimumDelayUs": 5000,
+        "name": "CHRE Linear Acceleration",
+        "powerMa": 0,
+        "resolution": 0.00239563,
+        "type": 10,
+        "typeString": "android.sensor.linear_acceleration",
+        "vendor": "Google LLC",
+        "version": 1
+      },
+      {
+        "flags": 0,
+        "handle": 17,
+        "maximumDelayUs": 200000,
+        "maximumRange": 1,
+        "minimumDelayUs": 5000,
+        "name": "CHRE Rotation Vector",
+        "powerMa": 0,
+        "resolution": 1,
+        "type": 11,
+        "typeString": "android.sensor.rotation_vector",
+        "vendor": "Google LLC",
+        "version": 1
+      },
+      {
+        "flags": 0,
+        "handle": 18,
+        "maximumDelayUs": 200000,
+        "maximumRange": 360,
+        "minimumDelayUs": 10000,
+        "name": "CHRE Orientation",
+        "powerMa": 0,
+        "resolution": 0.01,
+        "type": 3,
+        "typeString": "android.sensor.orientation",
+        "vendor": "Google LLC",
+        "version": 1
+      },
+      {
+        "flags": 2,
+        "handle": 19,
+        "maximumDelayUs": 0,
+        "maximumRange": 65535,
+        "minimumDelayUs": 0,
+        "name": "VD6282 Rear Light Sensor",
+        "powerMa": 0.13,
+        "resolution": 1,
+        "type": 65545,
+        "typeString": "com.google.sensor.rear_light",
+        "vendor": "STMicroelectronics",
+        "version": 1
+      }
+    ],
+    "storage": {
+      "blockDevice": "sda",
+      "capacityBytes": 128000000000,
+      "filesystem": "f2fs",
+      "mountSource": "/dev/block/platform/14700000.ufs/by-name/userdata",
+      "removable": false,
+      "sectorCount": 250000000,
+      "sectorSizeBytes": 512,
+      "sparse": true,
+      "technology": "UFS 3.1",
+      "variant": "128GB"
+    },
+    "template": "pixel-bluejay-android13",
+    "thermal": {
+      "zone0": {
+        "temp": 33000,
+        "type": "skin"
+      },
+      "zone1": {
+        "temp": 32000,
+        "type": "battery"
+      },
+      "zone2": {
+        "temp": 37000,
+        "type": "cpu-0"
+      },
+      "zone3": {
+        "temp": 36500,
+        "type": "cpu-1"
+      },
+      "zone4": {
+        "temp": 35000,
+        "type": "gpu"
+      }
+    },
+    "usb": {
+      "manufacturer": "Google",
+      "product": "Pixel 6a",
+      "product_id": "0x4ee7",
+      "serial": "REGENERATE",
+      "vendor_id": "0x18d1"
+    }
+  }
+}

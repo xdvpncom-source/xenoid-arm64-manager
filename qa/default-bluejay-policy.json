@@ -1,0 +1,71 @@
+{
+  "schema": "dev.xenoid.fresh-bluejay-defaults/v1",
+  "build": {
+    "model": "Pixel 6a",
+    "device": "bluejay",
+    "product": "bluejay",
+    "board": "bluejay",
+    "hardware": "bluejay",
+    "fingerprint": "google/bluejay/bluejay:13/TP1A.221005.003/9018821:user/release-keys",
+    "description": "bluejay-user 13 TP1A.221005.003 9018821 release-keys",
+    "id": "TP1A.221005.003",
+    "incremental": "9018821",
+    "release": "13",
+    "sdk": "33",
+    "security_patch": "2022-10-05",
+    "bootloader": "bluejay-1.2-8895132",
+    "host": "abfarm-release-rbe-64-00023",
+    "user": "android-build",
+    "date_utc": "1662059754",
+    "baseband": "g5123b-102852-220720-B-8851166"
+  },
+  "display": {
+    "width": 1080,
+    "height": 2400,
+    "densityDpi": 420,
+    "physicalPpi": 429,
+    "defaultRefreshRateHz": 60,
+    "peakRefreshRateHz": 60
+  },
+  "render_fps": 15,
+  "battery": {
+    "capacityMah": 4410,
+    "minimumCapacityMah": 4306,
+    "chargeFullDesignUah": 4410000,
+    "chargeFullUah": 4410000,
+    "levels": [
+      37,
+      52,
+      67,
+      79,
+      91
+    ],
+    "voltages": [
+      3750,
+      3850,
+      3975,
+      4100
+    ],
+    "temperatures": [
+      280,
+      295,
+      310,
+      325
+    ],
+    "plugged": [
+      0
+    ],
+    "statuses": [
+      3
+    ]
+  },
+  "thermal_temperatures": {
+    "zone0": [
+      32000,
+      34000,
+      36000,
+      38000
+    ]
+  },
+  "native_ids": "Official GEN owns IDs, native SIM/location, DRM and Google identity; never generate replacements in this policy."
+}

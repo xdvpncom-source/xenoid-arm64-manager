@@ -1,0 +1,11 @@
+{
+  "bytes": 1006928,
+  "file": "xenoid-bluejay-native-assets-v1.tar.xz",
+  "google_payload_included": false,
+  "license_files": 813,
+  "public_provenance": true,
+  "schema": "dev.xenoid.fleet.native-artifacts/v1",
+  "service_sha256": "2eb818005f54c77d7456d3c0910485c7bc0f1b5dd56c5e2c8c21771a32c55e29",
+  "sha256": "d611d1491339591e068f2cee43caf89c17517c96124568aa8a7068e4f1c6a4f2",
+  "source_patch_sha256": "7c2ed6b3fdcfbebcca47bd5b5d9c31e2c3506a9716c32cf8c5348295b5398cac"
+}
