@@ -11,12 +11,44 @@
     "source_patch_sha256": "7c2ed6b3fdcfbebcca47bd5b5d9c31e2c3506a9716c32cf8c5348295b5398cac"
   },
   "bluetooth_identity_tests_passed": 20,
+  "boot_ui_and_bluetooth_dumpability": {
+    "Android_canary_accepted": true,
+    "Android_new_BT_crashes": 0,
+    "Android_new_restore_fatals": 0,
+    "Android_numeric_dumpability_directly_observed": false,
+    "Android_qualification_sha256": "26a65d770bcc926753ab4f3f6eeda28c0b99205f6c9a712d22977228aa3c3adb",
+    "Android_same_process_native_backtraces": 2,
+    "actual_caps_and_DIO_verified": true,
+    "all_device_new_image_qualification_complete": false,
+    "bluetooth_argv0": "com.android.bluetooth",
+    "bluetooth_real_uid_euid": 1002,
+    "cold_profile_only": true,
+    "daemon_APK_HAL_touch_proxy_sources_unchanged": true,
+    "fake_prctl_result": false,
+    "host_sysctl_changed": false,
+    "initial_real_dumpability2_to0": true,
+    "managed_bootstrap_confirmation_order_observed": true,
+    "original_identity_storage_signer_config_proxy_preserved": true,
+    "profileZygote_and_image_inputs_change": true,
+    "provider_budget": "caller and parent bounded; no new timeout ceiling",
+    "qualified_profileZygote_output_sha256": "aa13f41f2bfa3d60c9931891e79fa500c75af72078f06fffd1cbab030506d612",
+    "qualified_render_manifest_canonical_sha256": "5998183738e949e4cf97cab0805a0ac660bd13883295fab98aeb9a0a8859b344",
+    "source_review_only": false,
+    "supported_secure_setting": {
+      "name": "immersive_mode_confirmations",
+      "namespace": "secure",
+      "user": 0,
+      "value": "confirmed"
+    },
+    "universal_before_all_base_window_order_proven": false,
+    "warm_UP_and_observed_restart_resume_skipped": true
+  },
   "canonical_cold_profile_directory_mode": "0700",
   "files": {
     "apply.py": "256b74a271241b407425d8e44547c363881d13125709dc4ef05e7cb2caa8e305",
     "artifacts.json": "3ec779fa7c96a3fcb65dcde685884d310b4849c1a3913c4aea6da20c3e99954b",
     "install_artifacts.py": "f22c34f69f2c79539139156d452acdeea4857195961d0484ddd906b1f72bb380",
-    "manifest.json": "bdec0d37f75b5348a72da917ad45ed87274a148d97799fe0566bdf7ec5b38a86"
+    "manifest.json": "1911a208034ae4be15ded41ea4fd74688bdcb8fde63a00ea5f31f9ba7c341459"
   },
   "fresh_runtime_accepted": false,
   "initial_proxy_bootstrap": {

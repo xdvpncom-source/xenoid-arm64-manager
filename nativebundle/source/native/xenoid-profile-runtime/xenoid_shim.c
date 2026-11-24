@@ -10,6 +10,8 @@
 #define XENOID_HAS_LINK_H 0
 #endif
 #include <stdarg.h>
+#include <stdatomic.h>
+#include <signal.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -673,10 +675,106 @@ ssize_t readlink(const char*path,char*buf,size_t bufsiz){
 
 
 #if XENOID_HAS_PRCTL
+/* Bluetooth dumpability initialization begins here. Keep this policy at the
+ * real process boundary: UID/package specialization happens after zygote fork.
+ * Android's debuggerd saves PR_GET_DUMPABLE and restores it after a trace. Linux
+ * can assign 2 after a credential change, but PR_SET_DUMPABLE only accepts 0/1.
+ * Normalize that unsupported initial state to the more restrictive real 0.
+ * This changes no host sysctl and never fabricates a prctl result. */
+static atomic_int bluetooth_dumpability_pid;
+
+static long bluetooth_kernel_call(long number, unsigned long a1, unsigned long a2,
+                                  unsigned long a3, unsigned long a4,
+                                  unsigned long a5, unsigned long a6) {
+#if defined(__aarch64__)
+  register unsigned long x0 __asm__("x0") = a1;
+  register unsigned long x1 __asm__("x1") = a2;
+  register unsigned long x2 __asm__("x2") = a3;
+  register unsigned long x3 __asm__("x3") = a4;
+  register unsigned long x4 __asm__("x4") = a5;
+  register unsigned long x5 __asm__("x5") = a6;
+  register long x8 __asm__("x8") = number;
+  __asm__ volatile("svc #0" : "+r"(x0)
+                   : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x8)
+                   : "memory", "cc");
+  return (long)x0;
+#elif defined(__x86_64__)
+  register unsigned long r10 __asm__("r10") = a4;
+  register unsigned long r8 __asm__("r8") = a5;
+  register unsigned long r9 __asm__("r9") = a6;
+  long result;
+  __asm__ volatile("syscall" : "=a"(result)
+                   : "a"(number), "D"(a1), "S"(a2), "d"(a3),
+                     "r"(r10), "r"(r8), "r"(r9)
+                   : "rcx", "r11", "memory", "cc");
+  return result;
+#else
+#error Bluetooth dumpability policy requires a supported 64-bit Linux syscall ABI
+#endif
+}
+
+static int bluetooth_process_name(void) {
+  static const char expected[] = "com.android.bluetooth";
+  char name[sizeof(expected)];
+  long fd = bluetooth_kernel_call(SYS_openat, AT_FDCWD,
+                                  (unsigned long)"/proc/self/cmdline",
+                                  O_RDONLY | O_CLOEXEC | O_NOFOLLOW, 0, 0, 0);
+  if (fd < 0) return 0;
+  long size;
+  do {
+    size = bluetooth_kernel_call(SYS_read, (unsigned long)fd,
+                                  (unsigned long)name, sizeof(name), 0, 0, 0);
+  } while (size == -EINTR);
+  bluetooth_kernel_call(SYS_close, (unsigned long)fd, 0, 0, 0, 0, 0);
+  return size == (long)sizeof(expected) && !memcmp(name, expected, sizeof(expected));
+}
+
+static void bluetooth_initialize_dumpability(void) {
+  int saved_errno = errno;
+  if (bluetooth_kernel_call(SYS_getuid, 0, 0, 0, 0, 0, 0) != 1002 ||
+      bluetooth_kernel_call(SYS_geteuid, 0, 0, 0, 0, 0, 0) != 1002) goto done;
+  int pid = (int)bluetooth_kernel_call(SYS_getpid, 0, 0, 0, 0, 0, 0);
+  if (pid <= 0 || atomic_load_explicit(&bluetooth_dumpability_pid,
+                                      memory_order_acquire) == -pid ||
+      !bluetooth_process_name()) goto done;
+
+  /* No allocator/linker or pthread locks are used. Blocking signals around the
+   * short initialization prevents a trace handler interrupting its own owner.
+   * Other threads wait for publication; a forked child has a different PID and
+   * cannot inherit an in-progress owner or a completed parent's policy. */
+  uint64_t block = UINT64_MAX, previous = 0;
+  if (bluetooth_kernel_call(SYS_rt_sigprocmask, SIG_BLOCK, (unsigned long)&block,
+                            (unsigned long)&previous, sizeof(previous), 0, 0) != 0)
+    goto done;
+  for (;;) {
+    int observed = atomic_load_explicit(&bluetooth_dumpability_pid, memory_order_acquire);
+    if (observed == -pid) break;
+    if (observed == pid) {
+      bluetooth_kernel_call(SYS_sched_yield, 0, 0, 0, 0, 0, 0);
+      continue;
+    }
+    if (!atomic_compare_exchange_weak_explicit(&bluetooth_dumpability_pid,
+          &observed, pid, memory_order_acquire, memory_order_relaxed)) continue;
+    long original = bluetooth_kernel_call(SYS_prctl, PR_GET_DUMPABLE, 0, 0, 0, 0, 0);
+    int ready = original == 0 || original == 1;
+    if (original == 2 &&
+        bluetooth_kernel_call(SYS_prctl, PR_SET_DUMPABLE, 0, 0, 0, 0, 0) == 0 &&
+        bluetooth_kernel_call(SYS_prctl, PR_GET_DUMPABLE, 0, 0, 0, 0, 0) == 0)
+      ready = 1;
+    atomic_store_explicit(&bluetooth_dumpability_pid, ready ? -pid : 0, memory_order_release);
+    break;
+  }
+  bluetooth_kernel_call(SYS_rt_sigprocmask, SIG_SETMASK, (unsigned long)&previous,
+                        0, sizeof(previous), 0, 0);
+done:
+  errno = saved_errno;
+}
+
 int prctl(int option, ...) {
   va_list ap; va_start(ap, option);
   unsigned long a2=va_arg(ap,unsigned long), a3=va_arg(ap,unsigned long), a4=va_arg(ap,unsigned long), a5=va_arg(ap,unsigned long);
   va_end(ap);
+  bluetooth_initialize_dumpability();
   /* Scudo names fresh mappings with prctl while the dynamic linker may hold its
    * symbol lock. Resolving prctl lazily with dlsym here deadlocks the allocator
    * and eventually ANRs the process. The syscall is the complete prctl ABI. */
@@ -687,6 +785,7 @@ int prctl(int option, ...) {
   }
   return r;
 }
+/* Bluetooth dumpability initialization ends here. */
 
 
 int pthread_getname_np(pthread_t thread, char *name, size_t len) {

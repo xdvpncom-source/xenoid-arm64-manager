@@ -203,12 +203,13 @@
     },
     {
       "before_sha256": [
-        null
+        null,
+        "4fdb7c907101700b5321adfb1ccede8028267a04841b70360928d4e67f9d39da"
       ],
-      "bytes": 48529,
+      "bytes": 53185,
       "mode": "0644",
       "path": "native/xenoid-profile-runtime/xenoid_shim.c",
-      "sha256": "4fdb7c907101700b5321adfb1ccede8028267a04841b70360928d4e67f9d39da"
+      "sha256": "760d14679994068d888a47d5398c6b163482ddfc81906ef5b65b0d33d4143e20"
     },
     {
       "before_sha256": [
@@ -628,12 +629,13 @@
         "991cfc59aa976065aee21b2ebb05602e8b31f8e01f277c1b03220bfa35648452",
         "61da636815884a47da938e201176cb440e38d7971d412157b829aae6c6128327",
         "3de8128936bccd8dca4a0bbdc68264ccf7af72ff4da818a4ccb1682a7dfa918a",
-        "d796b9c3e527352d128c59a7c5e2f28eb97fcfa8914d008cf67e210d68ede0af"
+        "d796b9c3e527352d128c59a7c5e2f28eb97fcfa8914d008cf67e210d68ede0af",
+        "ec3b086bd3727813f4e10ee1c70cbc2cb9bca9d8e6c330c33c7d2c7265d0cc12"
       ],
-      "bytes": 604796,
+      "bytes": 611166,
       "mode": "0644",
       "path": "src/xenoid/backend.py",
-      "sha256": "ec3b086bd3727813f4e10ee1c70cbc2cb9bca9d8e6c330c33c7d2c7265d0cc12"
+      "sha256": "3eeff84bec5b61dd25294196006f8e58c53b3765001330638b7af279428bde7e"
     },
     {
       "before_sha256": [

@@ -170,3 +170,47 @@ is host Python orchestration only: daemon APK, compiled native artifacts and
 image context inputs are unchanged. Runtime-free regression tests cover import
 ordering, offline readiness, crash/resume and context identity. A fresh boot
 with packet observation is still required before fleet creation.
+
+## Cold boot UI and Bluetooth tracing
+
+Cold-profile startup reads user0's supported secure
+`immersive_mode_confirmations` setting through SettingsProvider and, when it is
+empty, writes `confirmed` and verifies readback. The call is fenced to the
+expected owned container, image and running init identity. Provider startup
+uses the existing caller and parent deadline, with short individual calls and
+cancellation. An unknown value or unverified write fails before later startup
+actions. An already-running UP, a profile without cold defaults and an already
+observed restart do not receive a retroactive write. The normal cold-profile
+soft reboot prepares the value before its existing stop sequence.
+
+Android13 can queue an immersive hint before a setting change is observed;
+SettingsProvider readback alone does not prove that no earlier hint was shown.
+The cold canary must establish actual event ordering and check new ANR/crash
+evidence. The runtime-free tests execute the owning backend methods, including
+provider readiness after35 and125 seconds, the parent deadline, ownership
+fences, cancellation, cold/warm call ordering and pre-stop/resume behavior.
+
+The profile runtime initializes the real dumpability state only for actual
+UID/EUID1002 with exact argv0 `com.android.bluetooth`. Linux may assign state2
+after credential changes, while restoring2 through PR_SET_DUMPABLE is invalid.
+The initializer changes that initial state to real0 and verifies it. It does
+not change a host sysctl or fabricate a prctl result. Per-process publication
+preserves debuggerd's temporary SET1 and normal restoration, including threads
+and forked children. Other UIDs, package names and already valid0/1 states keep
+their existing behavior.
+
+Run the public backend regressions with
+`python -m unittest discover -s tests -p test_boot_ui_defaults.py -v`. The
+disposable Linux kernel fixture and its explicit prerequisites are documented
+under `tests/bluetooth_dumpability/`. Android interposition and native backtrace
+survival need an approved real canary; Linux fixture success is separate
+evidence. The profileZygote artifact and derived image inputs change, while
+the daemon APK, qualified Bluetooth HAL, pacing/input and proxy sources do not.
+
+A controlled Android canary has now passed official UP and runtime doctor,
+then two useful native Bluetooth backtraces on the same PID/UID/starttime with
+no new crash or restore fatal. The candidate mapping, actual caps/direct-I/O,
+stable identity, storage and desired proxy were checked. Confirmation
+write/readback preceded the managed bootstrap activity; universal ordering
+before every base-image window and a numeric Android PR_GET_DUMPABLE0 reading
+are not claimed. Full fleet qualification with the new image remains pending.

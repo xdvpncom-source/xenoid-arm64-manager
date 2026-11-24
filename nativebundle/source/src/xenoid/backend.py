@@ -3233,6 +3233,113 @@ cat >/dev/null
             return {"ok": False, "error": str(e), "command": cmd}
         return {"ok": proc.returncode == 0, "returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr, "command": cmd}
 
+    def _ensure_initial_boot_ui_defaults(
+        self,
+        expected_container_id: str,
+        *,
+        timeout: float,
+    ) -> dict[str, Any]:
+        """Initialize one supported UI default before managed boot windows.
+
+        This is an explicit lifecycle writer, never a status/getter hook.
+        SettingsProvider owns persistence and its normal observer notification.
+        An already allocated base/launcher window may precede provider access;
+        only a real cold ordering test can qualify that first-boot boundary.
+        """
+        if getattr(self.cfg, "cold_profile", None) is None:
+            return {"ok": True, "skipped": True}
+        if (re.fullmatch(r"[0-9a-f]{64}", expected_container_id or "") is None
+                or type(timeout) not in (int, float) or not math.isfinite(timeout)
+                or timeout <= 0):
+            return {"ok": False, "error": "boot_ui_defaults_budget_invalid"}
+        budget = bounded_timeout(timeout)
+        if budget is None or budget <= 0:
+            return {"ok": False, "error": "boot_ui_defaults_timeout"}
+        deadline = time.monotonic() + budget
+        binding = None
+        attempts = 0
+        write_attempted = False
+
+        def cancelled() -> bool:
+            event = getattr(self, "cancellation_event", None)
+            return bool(event is not None and callable(getattr(event, "is_set", None))
+                        and event.is_set())
+
+        def remaining() -> float:
+            if cancelled():
+                raise RuntimeError("boot_ui_defaults_cancelled")
+            value = deadline - time.monotonic()
+            if value <= 0:
+                raise RuntimeError("boot_ui_defaults_timeout")
+            return min(2.0, value)
+
+        def current() -> tuple[Any, ...]:
+            owned, _ = self._owned_container_record(timeout=remaining())
+            state = owned.get("State") if isinstance(owned, Mapping) else None
+            if (not isinstance(state, Mapping) or owned.get("Id") != expected_container_id
+                    or state.get("Running") is not True or type(state.get("Pid")) is not int
+                    or state["Pid"] <= 1):
+                raise RuntimeError("convergence_state_conflict")
+            return owned["Id"], owned.get("Image"), state["Pid"], state.get("StartedAt")
+
+        def invoke(operation: str, *values: str) -> Any:
+            nonlocal binding
+            before = current()
+            if binding is None:
+                binding = before
+            if before != binding:
+                raise RuntimeError("convergence_state_conflict")
+            # Never re-resolve a mutable name between the fence and exec.
+            response = run([
+                *self.docker_base_cmd(), "exec", expected_container_id,
+                "/system/bin/cmd", "settings", "--user", "0", operation,
+                "secure", "immersive_mode_confirmations", *values,
+            ], timeout=remaining(), env=self.docker_env())
+            if current() != binding:
+                raise RuntimeError("convergence_state_conflict")
+            return response
+
+        while time.monotonic() < deadline:
+            attempts += 1
+            try:
+                value = invoke("get")
+                if value.returncode == 0:
+                    saved = value.stdout.strip()
+                    if saved == "confirmed":
+                        return {"ok": True, "changed": False, "readbackVerified": True,
+                                "user": 0, "attempts": attempts}
+                    if saved not in ("", "null"):
+                        return {"ok": False, "error": "boot_ui_defaults_unexpected_value"}
+                    write_attempted = True
+                    written = invoke("put", "confirmed")
+                    if written.returncode != 0:
+                        return {"ok": False, "error": "boot_ui_defaults_write_failed"}
+                    readback = invoke("get")
+                    if readback.returncode != 0 or readback.stdout.strip() != "confirmed":
+                        return {"ok": False, "error": "boot_ui_defaults_readback_failed"}
+                    return {"ok": True, "changed": True, "readbackVerified": True,
+                            "user": 0, "attempts": attempts}
+            except RuntimeError as exc:
+                if str(exc) in {"convergence_state_conflict", "boot_ui_defaults_cancelled",
+                                "boot_ui_defaults_timeout"}:
+                    return {"ok": False, "error": str(exc)}
+            except Exception:
+                if write_attempted:
+                    return {"ok": False, "error": "boot_ui_defaults_write_unverified"}
+                # Provider/transport startup can precede the supported command.
+                # Retry only this fixed setting under the original deadline.
+                pass
+            try:
+                delay = min(1.0, remaining())
+                event = getattr(self, "cancellation_event", None)
+                if event is not None and callable(getattr(event, "wait", None)):
+                    event.wait(delay)
+                else:
+                    time.sleep(delay)
+            except RuntimeError as exc:
+                return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": "boot_ui_defaults_timeout", "attempts": attempts}
+
     def docker_wait_boot(self, timeout_sec: int = 120) -> dict[str, Any]:
         """Wait for Android boot via docker exec; independent of adb state."""
         deadline = time.time() + timeout_sec
@@ -5880,6 +5987,13 @@ cat >/dev/null
         if not wait:
             return result
         deadline = time.monotonic() + 300.0
+        if not running and getattr(self.cfg, "cold_profile", None) is not None:
+            result["bootUiDefaults"] = self._ensure_initial_boot_ui_defaults(
+                container_id, timeout=max(0.0, deadline - time.monotonic()),
+            )
+            if result["bootUiDefaults"].get("ok") is not True:
+                return {**result, "ok": False, "error": result["bootUiDefaults"].get(
+                    "error", "boot_ui_defaults_unavailable")}
         result["boot"] = self.docker_wait_boot(
             timeout_sec=max(1, int(deadline - time.monotonic())),
         )
@@ -10908,6 +11022,15 @@ cat >/dev/null
             previous_netd_pid = self._rootd_output(["pidof", "netd"], limit=64, deadline=deadline)
             if not previous_netd_pid or not previous_netd_pid.isdecimal() or int(previous_netd_pid) <= 1:
                 return failure("soft_reboot_netd_unavailable")
+            if getattr(self.cfg, "cold_profile", None) is not None:
+                owned, _ = self._owned_container_record(timeout=remaining())
+                if not isinstance(owned, Mapping):
+                    return failure("convergence_state_conflict")
+                ui_defaults = self._ensure_initial_boot_ui_defaults(
+                    str(owned.get("Id") or ""), timeout=remaining(10.0),
+                )
+                if ui_defaults.get("ok") is not True:
+                    return failure(str(ui_defaults.get("error") or "boot_ui_defaults_unavailable"))
             restart_commands = ["set -e", 'setprop sys.boot_completed ""']
             if restart_receipt is not None:
                 restart_commands.extend(
