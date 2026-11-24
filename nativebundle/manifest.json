@@ -510,12 +510,13 @@
     {
       "before_sha256": [
         null,
-        "1fa09a22d6511c6de3c16e2904e8fd981c05890dc7f02975b174c45106b039a2"
+        "1fa09a22d6511c6de3c16e2904e8fd981c05890dc7f02975b174c45106b039a2",
+        "b5b2ff7c4293a46825482d9ad3bf79f4c1eef480a3af574e8a44af44318ed9a7"
       ],
-      "bytes": 22545,
+      "bytes": 22699,
       "mode": "0755",
       "path": "scripts/test-proxy-bootstrap.py",
-      "sha256": "b5b2ff7c4293a46825482d9ad3bf79f4c1eef480a3af574e8a44af44318ed9a7"
+      "sha256": "bd91728fe417ccf76bdc6a949854e515f0e5cfc90e135584b7ef1dff10d4bd10"
     },
     {
       "before_sha256": [
@@ -630,12 +631,13 @@
         "61da636815884a47da938e201176cb440e38d7971d412157b829aae6c6128327",
         "3de8128936bccd8dca4a0bbdc68264ccf7af72ff4da818a4ccb1682a7dfa918a",
         "d796b9c3e527352d128c59a7c5e2f28eb97fcfa8914d008cf67e210d68ede0af",
-        "ec3b086bd3727813f4e10ee1c70cbc2cb9bca9d8e6c330c33c7d2c7265d0cc12"
+        "ec3b086bd3727813f4e10ee1c70cbc2cb9bca9d8e6c330c33c7d2c7265d0cc12",
+        "3eeff84bec5b61dd25294196006f8e58c53b3765001330638b7af279428bde7e"
       ],
-      "bytes": 611166,
+      "bytes": 620831,
       "mode": "0644",
       "path": "src/xenoid/backend.py",
-      "sha256": "3eeff84bec5b61dd25294196006f8e58c53b3765001330638b7af279428bde7e"
+      "sha256": "aa0e87b3f0eb0a53f7fd97bc429ba585084ba3bffab53a8847afbd215927bc3a"
     },
     {
       "before_sha256": [

@@ -167,7 +167,8 @@ class SeedTransport(unittest.TestCase):
   manager.forward_daemon_port=lambda**kw:{'ok':True}
   manager.daemon_client=lambda**kw:types.SimpleNamespace(transport=lambda**kw:{'ok':clock.now>=ready_at})
   launches=[];manager.launch_daemon_activity_once=lambda**kw:(launches.append(clock.now)or{'ok':True})
-  manager.adb=lambda*args,**kw:None
+  manager.adb=lambda*args,**kw:{'ok':True,'stdout':'device\n'}
+  manager._owned_container_record=lambda**kw:({'Id':'a'*64,'State':{'Running':True,'Pid':123,'StartedAt':'fixed-start'}},None)
   def sleep(seconds):clock.now+=seconds
   with patch.object(b.time,'monotonic',lambda:clock.now),patch.object(b.time,'sleep',sleep),\
        patch.object(b,'bounded_timeout',lambda requested:requested if parent_limit is None else min(requested,parent_limit)):

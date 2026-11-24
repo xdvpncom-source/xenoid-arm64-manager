@@ -6019,8 +6019,11 @@ cat >/dev/null
             return {**result, "ok": False, "error": "adb_wait_timeout"}
         result["daemonForward"] = self.forward_daemon_port(
             timeout=max(1.0, min(30.0, deadline - time.monotonic())),
+            expected_container_id=container_id,
         )
-        if result["daemonForward"].get("ok") is not True:
+        if (result["daemonForward"].get("ok") is not True
+                and result["daemonForward"].get("code") in {
+                    "daemon_forward_conflict", "daemon_forward_table_invalid", "daemon_transport_owner_changed"}):
             return {**result, "ok": False, "error": "daemon_forward_failed"}
         try:
             storage_state = StorageStateStore(self.context, self.lease).load()
@@ -6033,6 +6036,7 @@ cat >/dev/null
             result["daemonTransport"] = self.wait_daemon_transport(
                 max(1.0, min(_DAEMON_START_TRANSPORT_TIMEOUT_SECONDS, deadline - time.monotonic())),
                 allow_activity_launch=allow_daemon_activity_launch,
+                expected_container_id=container_id,
             )
             if result["daemonTransport"].get("ok") is not True:
                 return {
@@ -6043,6 +6047,8 @@ cat >/dev/null
                         or "daemon_transport_timeout"
                     ),
                 }
+        elif result["daemonForward"].get("ok") is not True:
+            return {**result, "ok": False, "error": "daemon_forward_failed"}
         return result
 
     def ensure_regeneration_runtime(
@@ -9004,12 +9010,88 @@ cat >/dev/null
     def forward_daemon_port(
         self,
         timeout: Optional[float] = None,
+        *,
+        expected_runtime: Optional[tuple[str, int, str]] = None,
+        expected_container_id: Optional[str] = None,
     ) -> dict[str, Any]:
-        return self.adb([
-            "forward",
-            f"tcp:{self.lease.host_daemon_port}",
-            f"tcp:{self.lease.android_daemon_port}",
-        ], timeout=timeout)
+        """Reconcile only this owned incarnation's leased ADB forward."""
+        requested = 15.0 if timeout is None else timeout
+        if type(requested) not in (int, float) or not math.isfinite(requested):
+            return {"ok": False, "error": "daemon_transport_budget_invalid"}
+        parent = bounded_timeout(max(0.0, requested))
+        deadline = time.monotonic() + (max(0.0, requested) if parent is None else parent)
+        binding = expected_runtime
+        local = f"tcp:{self.lease.host_daemon_port}"
+        remote = f"tcp:{self.lease.android_daemon_port}"
+
+        def remaining() -> float:
+            return min(5.0, max(0.0, deadline - time.monotonic()))
+
+        def owner() -> bool:
+            nonlocal binding
+            if remaining() <= 0:
+                return False
+            owned, _ = self._owned_container_record(timeout=remaining())
+            state = owned.get("State", {}) if isinstance(owned, Mapping) else {}
+            current = (owned.get("Id"), state.get("Pid"), state.get("StartedAt")) if isinstance(owned, Mapping) else None
+            if (state.get("Running") is not True or current is None
+                    or not isinstance(current[0], str) or not re.fullmatch(r"[0-9a-f]{64}", current[0])
+                    or type(current[1]) is not int or current[1] <= 0 or not isinstance(current[2], str) or not current[2]):
+                return False
+            if expected_container_id is not None and current[0] != expected_container_id:
+                return False
+            if binding is None:
+                binding = current
+            return current == binding
+
+        def failure(code: str) -> dict[str, Any]:
+            return {"ok": False, "code": code, "error": code}
+
+        def command(args: list[str]) -> dict[str, Any]:
+            if remaining() <= 0:
+                return failure("daemon_transport_timeout")
+            if not owner():
+                return failure("daemon_transport_owner_changed")
+            if remaining() <= 0:
+                return failure("daemon_transport_timeout")
+            result = self.adb(args, timeout=remaining())
+            if remaining() <= 0:
+                return failure("daemon_transport_timeout")
+            if not owner():
+                return failure("daemon_transport_owner_changed")
+            return result
+
+        def mapping(result: Mapping[str, Any]) -> str:
+            if result.get("ok") is not True:
+                return "unavailable"
+            rows = [line.split() for line in str(result.get("stdout") or "").splitlines() if line.strip()]
+            if any(len(row) != 3 for row in rows):
+                return "invalid"
+            selected = [row for row in rows if row[1] == local]
+            if not selected:
+                return "absent"
+            return "matching" if selected == [[self.adb_target, local, remote]] else "conflict"
+
+        before = command(["forward", "--list"])
+        state = mapping(before)
+        if state == "matching":
+            return {"ok": True, "already": True, "reconciled": False}
+        if state in {"conflict", "invalid"}:
+            return failure("daemon_forward_conflict" if state == "conflict" else "daemon_forward_table_invalid")
+        if state == "unavailable":
+            return failure(str(before.get("code") or "daemon_forward_list_failed"))
+        created = command(["forward", "--no-rebind", local, remote])
+        if created.get("code") in {"daemon_transport_owner_changed", "daemon_transport_timeout"}:
+            return created
+        # A concurrent same-lease creator may win --no-rebind. Only exact
+        # readback can accept that race; a foreign mapping is never replaced.
+        after = command(["forward", "--list"])
+        state = mapping(after)
+        if state == "matching":
+            return {"ok": True, "already": created.get("ok") is not True, "reconciled": True}
+        if state in {"conflict", "invalid"}:
+            return failure("daemon_forward_conflict" if state == "conflict" else "daemon_forward_table_invalid")
+        return failure(str(after.get("code") or "daemon_forward_failed"))
 
     def _run_keybox_adb_stream(
         self,
@@ -10300,6 +10382,7 @@ cat >/dev/null
         timeout: float = _DAEMON_TRANSPORT_TIMEOUT_SECONDS,
         *,
         allow_activity_launch: bool = True,
+        expected_container_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """Bind and prove the listener without consulting aggregate health."""
         if type(timeout) not in (int, float) or not math.isfinite(timeout):
@@ -10314,9 +10397,43 @@ cat >/dev/null
         attempts = 0
         launches = 0
         recovered = False
+        last_forward: dict[str, Any] = {}
+        last_transport: dict[str, Any] = {}
+        next_reconcile = started
+        if deadline <= time.monotonic():
+            return {"ok": False, "code": "daemon_transport_timeout",
+                    "error": "daemon_transport_timeout", "transportReady": False}
+        owned, _ = self._owned_container_record(timeout=min(5.0, deadline - time.monotonic()))
+        state = owned.get("State", {}) if isinstance(owned, Mapping) else {}
+        expected_runtime = (owned.get("Id"), state.get("Pid"), state.get("StartedAt")) if isinstance(owned, Mapping) else None
+        if (state.get("Running") is not True or expected_runtime is None
+                or not isinstance(expected_runtime[0], str) or not re.fullmatch(r"[0-9a-f]{64}", expected_runtime[0])
+                or expected_container_id is not None and expected_runtime[0] != expected_container_id
+                or type(expected_runtime[1]) is not int or expected_runtime[1] <= 0
+                or not isinstance(expected_runtime[2], str) or not expected_runtime[2]):
+            return {"ok": False, "code": "daemon_transport_owner_changed",
+                    "error": "daemon_transport_owner_changed", "transportReady": False}
 
         def remaining(cap: float) -> float:
             return min(cap, max(0.0, deadline - time.monotonic()))
+
+        def same_runtime() -> bool:
+            if remaining(5.0) <= 0:
+                return False
+            current, _ = self._owned_container_record(timeout=remaining(5.0))
+            current_state = current.get("State", {}) if isinstance(current, Mapping) else {}
+            return (current_state.get("Running") is True and isinstance(current, Mapping)
+                    and (current.get("Id"), current_state.get("Pid"), current_state.get("StartedAt")) == expected_runtime)
+
+        def forward() -> dict[str, Any]:
+            return self.forward_daemon_port(timeout=remaining(5.0), expected_runtime=expected_runtime)
+
+        def fatal_forward(result: Mapping[str, Any]) -> bool:
+            return result.get("code") in {"daemon_forward_conflict", "daemon_forward_table_invalid", "daemon_transport_owner_changed"}
+
+        def forward_failure(result: Mapping[str, Any]) -> dict[str, Any]:
+            code = str(result.get("code") or result.get("error") or "daemon_forward_failed")
+            return {"ok": False, "code": code, "error": code, "transportReady": False}
 
         initial_remaining = remaining(_DAEMON_TRANSPORT_TIMEOUT_SECONDS)
         if initial_remaining <= 0:
@@ -10326,7 +10443,9 @@ cat >/dev/null
                 "error": "daemon_transport_timeout",
                 "transportReady": False,
             }
-        self.forward_daemon_port(timeout=initial_remaining)
+        last_forward = forward()
+        if fatal_forward(last_forward):
+            return forward_failure(last_forward)
         while True:
             transport_remaining = remaining(2.0)
             if transport_remaining <= 0:
@@ -10337,19 +10456,57 @@ cat >/dev/null
                     "transportReady": False,
                     "attempts": attempts,
                     "activityLaunches": launches,
+                    "lastForwardCode": last_forward.get("code") or last_forward.get("error"),
+                    "lastTransportCode": last_transport.get("code") or last_transport.get("error"),
                 }
             attempts += 1
-            transport = client.transport(timeout=transport_remaining)
+            transport = (client.transport(timeout=transport_remaining)
+                         if last_forward.get("ok") is True else
+                         {"ok": False, "code": "daemon_forward_unproven"})
+            last_transport = transport
             if transport.get("ok") is True:
-                return {
-                    "ok": True,
-                    "transportReady": True,
-                    "attempts": attempts,
-                    "activityLaunches": launches,
-                    "midpointRecovery": recovered,
-                }
+                if not same_runtime():
+                    return forward_failure({"code": "daemon_transport_timeout" if remaining(5.0) <= 0 else "daemon_transport_owner_changed"})
+                last_forward = forward()
+                if fatal_forward(last_forward):
+                    return forward_failure(last_forward)
+                if last_forward.get("ok") is True:
+                    # A repaired mapping cannot authenticate the HTTP reply
+                    # obtained before that repair. Re-prove it on the next poll.
+                    if last_forward.get("reconciled") is True:
+                        continue
+                    return {
+                        "ok": True,
+                        "transportReady": True,
+                        "attempts": attempts,
+                        "activityLaunches": launches,
+                        "midpointRecovery": recovered,
+                    }
             now = time.monotonic()
-            if launches == 0 and allow_activity_launch:
+            if now >= next_reconcile:
+                if not same_runtime():
+                    return forward_failure({"code": "daemon_transport_timeout" if remaining(5.0) <= 0 else "daemon_transport_owner_changed"})
+                # Reconnect only this lease's existing ADB endpoint. Never
+                # call start/adb_wait/bootstrap recursively, or touch readers.
+                if remaining(2.0) <= 0:
+                    continue
+                adb_state = self.adb(["get-state"], timeout=remaining(2.0))
+                if adb_state.get("ok") is not True or str(adb_state.get("stdout") or "").strip() != "device":
+                    if remaining(5.0) <= 0:
+                        continue
+                    if not same_runtime():
+                        return forward_failure({"code": "daemon_transport_timeout" if remaining(5.0) <= 0 else "daemon_transport_owner_changed"})
+                    if remaining(5.0) > 0:
+                        self.adb(["connect"], timeout=remaining(5.0))
+                if remaining(5.0) <= 0:
+                    continue
+                if not same_runtime():
+                    return forward_failure({"code": "daemon_transport_timeout" if remaining(5.0) <= 0 else "daemon_transport_owner_changed"})
+                last_forward = forward()
+                if fatal_forward(last_forward):
+                    return forward_failure(last_forward)
+                next_reconcile = time.monotonic() + 1.0
+            if launches == 0 and allow_activity_launch and last_forward.get("ok") is True:
                 launch_remaining = remaining(_DAEMON_TRANSPORT_TIMEOUT_SECONDS)
                 if launch_remaining <= 0:
                     continue
@@ -10364,8 +10521,10 @@ cat >/dev/null
                     }
                 forward_remaining = remaining(_DAEMON_TRANSPORT_TIMEOUT_SECONDS)
                 if forward_remaining > 0:
-                    self.forward_daemon_port(timeout=forward_remaining)
-            elif not recovered and allow_activity_launch and now >= midpoint:
+                    last_forward = forward()
+                    if fatal_forward(last_forward):
+                        return forward_failure(last_forward)
+            elif not recovered and allow_activity_launch and now >= midpoint and last_forward.get("ok") is True:
                 force_stop_remaining = remaining(10.0)
                 if force_stop_remaining <= 0:
                     continue
@@ -10388,7 +10547,9 @@ cat >/dev/null
                     }
                 forward_remaining = remaining(_DAEMON_TRANSPORT_TIMEOUT_SECONDS)
                 if forward_remaining > 0:
-                    self.forward_daemon_port(timeout=forward_remaining)
+                    last_forward = forward()
+                    if fatal_forward(last_forward):
+                        return forward_failure(last_forward)
             sleep_remaining = remaining(0.25)
             if sleep_remaining > 0:
                 time.sleep(sleep_remaining)
