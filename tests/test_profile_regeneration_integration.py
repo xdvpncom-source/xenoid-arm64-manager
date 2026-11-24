@@ -1,5 +1,10 @@
 """The profile phase must not rerun native GEN on a partial completion."""
 import copy
+import ast
+from collections.abc import Mapping
+from pathlib import Path
+from types import MethodType, SimpleNamespace
+from typing import Any
 import unittest
 from unittest.mock import Mock
 
@@ -78,6 +83,66 @@ class ProfileRegenerationIntegrationTest(unittest.TestCase):
         receipt = self.broker.regeneration_receipts.load("profile")
         self.assertNotIn("profile_plan", receipt)
         self.broker.capture_regeneration_profile.assert_called_once()
+
+    def test_cached_keybox_failure_resumes_durable_preparation_without_reroll(self):
+        # Exercise the production owner method without importing a native SDK
+        # checkout into this manager-only suite. The separate native contract
+        # uses the real DaemonClient and complete bootstrap sequence.
+        source = Path(__file__).resolve().parents[1] / 'nativebundle/source/src/xenoid/backend.py'
+        owner = next(n for n in ast.parse(source.read_text()).body
+                     if isinstance(n, ast.ClassDef) and n.name == 'RuntimeManager')
+        methods = [n for n in owner.body if isinstance(n, ast.FunctionDef)
+                   and n.name in {'reconcile_keybox', '_convergence_action_name'}]
+        namespace = {'Any': Any, 'Mapping': Mapping}
+        tree = ast.Module(body=[ast.ClassDef(name='Owner', bases=[], keywords=[],
+                          body=methods, decorator_list=[])], type_ignores=[])
+        exec(compile(ast.fix_missing_locations(tree), str(source), 'exec'), namespace)
+        self.manager.reconcile_keybox = MethodType(namespace['Owner'].reconcile_keybox, self.manager)
+        self.manager._convergence_action_name = namespace['Owner']._convergence_action_name
+        peer = SimpleNamespace(native_available=False, cached_ready=False, attempts=0)
+        self.manager.daemon_client = lambda **kw: SimpleNamespace(keybox_status=lambda **kw:
+            {'ok': True, 'ready': True, 'configured': False} if peer.cached_ready else
+            {'ok': False, 'error': 'clear_failed'})
+        def bootstrap():
+            self.assertTrue(self.manager.held)
+            peer.attempts += 1
+            peer.cached_ready = peer.native_available
+            return {'ok': True, 'controlReady': True}
+        self.manager.reconcile_bootstrap = bootstrap
+        store = self.broker.regeneration_receipts
+        cli = regen.cli_with_preparation(self.manager, store)
+        base = cli.ConvergenceExecutor
+        class KeyboxExecutor(base):
+            def _phase_call(inner, phase, method, reporter, deadline, **kwargs):
+                answer = inner.manager.reconcile_keybox('reconcile')
+                if not answer['ok']:
+                    raise regen.ConvergenceError(answer['error'], phase='keybox_converged')
+                return answer
+        cli.ConvergenceExecutor = KeyboxExecutor
+        self.broker.regeneration_cli = lambda: cli
+        with self.assertRaises(h.RegenerationPending) as raised:
+            self.broker.regenerate(0, 'key')
+        self.assertEqual(raised.exception.code, 'clear_failed')
+        pending = store.load('key')
+        self.assertEqual(pending['preparation']['status'], 'pending')
+        self.assertNotIn('native_journal', pending)
+        self.assertEqual(self.manager.rotations, 0)
+        original_profile = copy.deepcopy(pending['profile_plan'])
+        original_plan = pending['preparation']['plan_digest']
+        self.broker.capture_regeneration_profile.return_value = {'different_admin_policy': True}
+        self.broker.regeneration_receipts = h.RegenerationReceipts(self.fixture.root, regen.BASE['run_id'], 1)
+        peer.native_available = True
+        result = self.broker.regenerate(0, 'key')
+        self.assertTrue(result['ok'])
+        saved = self.broker.regeneration_receipts.load('key')
+        self.assertEqual(saved['status'], 'committed')
+        self.assertEqual(saved['profile_plan'], original_profile)
+        self.assertEqual(saved['preparation']['plan_digest'], original_plan)
+        self.assertEqual(self.manager.rotations, 1)
+        self.assertEqual(self.manager.commands, 1)
+        self.assertEqual(peer.attempts, 2)
+        self.assertTrue(self.broker.regenerate(0, 'key')['replayed'])
+        self.assertEqual(self.manager.rotations, 1)
         self.assertEqual(self.manager.rotations, 1)
 
     def test_shared_failure_wrapper_keeps_profile_error_code(self):

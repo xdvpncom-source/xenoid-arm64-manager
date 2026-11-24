@@ -5,6 +5,7 @@ assignment are not queued. No app is selected from the current foreground window
 """
 
 import math
+import hashlib
 import json
 import random
 import re
@@ -92,6 +93,10 @@ CLOSE_WORDS = {"close", "close ad", "close advertisement", "close button", "dism
                "dismiss ad", "skip ad", "بستن", "بستن تبلیغ", "بستن آگهی", "رد کردن تبلیغ"}
 CLOSE_IDS = {"close", "close_button", "ad_close", "ad_close_button", "close_ad_button",
              "interstitial_close_button", "close_ad", "closebutton", "skip_ad", "skip_button"}
+# Some WebView accessibility IDs do not preserve word separators or camel case.
+# Match complete IDs only; arbitrary substrings such as "disclose" are not Close.
+AD_PACKED_CLOSE_IDS = {"adclose", "adclosebutton", "closead", "closeadbutton", "closebtn",
+                       "dismissbtn", "dismissbutton", "mraidclose", "mraidclosebutton"}
 CLOSE_SYMBOLS = {"×", "✕", "✖", "x"}
 CLOSE_ACTION_TOKENS = {"close", "dismiss", "skip", "بستن", "ببند", "ببندید"}
 CLOSE_LABEL_TOKENS = CLOSE_ACTION_TOKENS | {
@@ -200,6 +205,32 @@ def choose_unique(scored):
     unique = {bounds(control): control for score, control in scored if score == highest}
     unique.pop(None, None)
     return next(iter(unique.values())) if len(unique) == 1 else None
+
+
+def choose_ad_close(scored):
+    """Collapse nested accessibility representations of one observed button.
+
+    No geometric corner guessing: every candidate already has Close semantics.
+    Distinct buttons, windows, equal-size overlaps and anonymous parents remain
+    ambiguous. A chosen actionable point must lie in every candidate rectangle.
+    """
+    selected = choose_unique(scored)
+    if selected is not None or not scored:
+        return selected
+    highest = max(score for score, _ in scored)
+    candidates = [control for score, control in scored if score == highest]
+    identities = {(control.get("package"), control.get("window_id"), control.get("display_id"))
+                  for control in candidates}
+    if (len(identities) != 1 or any(type(control.get("window_id")) is not int
+                                  or type(control.get("display_id")) is not int
+                                  for control in candidates)):
+        return None
+    boxes = {bounds(control) for control in candidates}
+    nested = [control for control in candidates if control.get("clickable") is True
+              and all(box[0] <= bounds(control)[0] < bounds(control)[2] <= box[2]
+                      and box[1] <= bounds(control)[1] < bounds(control)[3] <= box[3]
+                      for box in boxes)]
+    return choose_unique([(1, control) for control in nested])
 
 
 def controls(window):
@@ -481,14 +512,15 @@ class Cycle:
             words = labels(control)
             tail = control.get("resource_id", "").rsplit("/", 1)[-1].casefold()
             actionable = control.get("clickable") or control.get("class_name", "").rsplit(".", 1)[-1] in {"Button", "ImageButton"}
-            if tail in CLOSE_IDS or ad and close_tokens(control.get("resource_id", "").rsplit("/", 1)[-1]) & {"close", "dismiss", "skip"}:
+            if (tail in CLOSE_IDS or ad and actionable and tail in AD_PACKED_CLOSE_IDS
+                    or ad and close_tokens(control.get("resource_id", "").rsplit("/", 1)[-1]) & {"close", "dismiss", "skip"}):
                 scored.append((110, control))
             elif words & CLOSE_WORDS or ad and actionable and semantic_close_label(control):
                 scored.append((100, control))
             elif actionable and words & CLOSE_SYMBOLS:
                 scored.append((90, control))
         if scored or not geometric or not ad:
-            return choose_unique(scored)
+            return choose_ad_close(scored) if ad else choose_unique(scored)
         # An ambiguous semantic match stays ambiguous. Geometry uses only actual
         # observed clickable controls, with no CTA/countdown or descriptive copy.
         all_boxes = [bounds(control) for control in controls(window)]
@@ -652,6 +684,59 @@ class Cycle:
             matches.append((1, control))
         return choose_unique(matches)
 
+    def ad_failure_evidence(self, window):
+        """Record bounded metadata from the held ad snapshot, never another read.
+
+        No screenshot, URLs, free-form ad copy or editable field contents enter
+        the event log. Label hashes and recognized policy words distinguish
+        anonymous, rejected, ambiguous and exhausted close observations.
+        """
+        if not is_ad_activity(window) or is_terms(window) or is_notification(window) or is_crash_dialog(window):
+            return
+        items = list(window.get("controls", ()))
+        encoded = json.dumps(window, sort_keys=True, separators=(",", ":"), default=str).encode()
+        selected = self.close_control(window, AD_CLOSE_SELECTORS, geometric=False)
+        available = self.ad_close_control(window)
+        candidates = sum(self.close_control({**window, "controls": [item]}, AD_CLOSE_SELECTORS,
+                                            geometric=False) is not None for item in controls(window))
+        reason = ("no_semantic_close" if not candidates else "ambiguous_semantic_close" if selected is None
+                  else "close_attempt_budget_exhausted" if available is None else "close_still_observed")
+        vocabulary = CLOSE_LABEL_TOKENS | CLOSE_REJECT_TOKENS | AD_CLOSE_INFO_TOKENS
+        rows, used = [], 0
+        # Actionable/control-ID nodes precede anonymous layout containers when
+        # the output budget is insufficient for every observed node.
+        ordered = sorted(enumerate(items), key=lambda pair: (
+            not bool(pair[1].get("clickable")), not bool(pair[1].get("resource_id")), pair[0]))
+        for index, item in ordered[:128]:
+            rid = str(item.get("resource_id", ""))
+            safe_id = rid if (not rid or re.fullmatch(
+                r"(?:[A-Za-z_][A-Za-z0-9_.]*:id/)?[A-Za-z_][A-Za-z0-9_.$-]{0,100}", rid)) else "sha256:" + hashlib.sha256(rid.encode()).hexdigest()
+            label_values = [str(item.get(field, "")) for field in ("text", "content_desc")]
+            tokens = set().union(*(close_tokens(value) for value in label_values))
+            cls = str(item.get("class_name", ""))
+            row = {"index": index, "id": safe_id, "class": cls if re.fullmatch(r"[A-Za-z0-9_.$]{0,120}", cls) else "unrecognized",
+                   "bounds": bounds(item), "enabled": item.get("enabled") is True,
+                   "clickable": item.get("clickable") is True,
+                   "window": item.get("window_id"), "display": item.get("display_id"),
+                   "label_sha256": hashlib.sha256(json.dumps(label_values, ensure_ascii=False).encode()).hexdigest(),
+                   "policy_words": sorted(tokens & vocabulary)[:24], "other_word_count": len(tokens - vocabulary),
+                   "positive_countdown": any(int(n) > 0 for value in label_values for n in re.findall(r"\d+", value)),
+                   "rejected": close_rejected(item, ad=True)}
+            line = "Ad control evidence " + json.dumps(row, separators=(",", ":"))
+            if len(line.encode()) > 1600 or used + len(line.encode()) + 1 > 24576:
+                continue
+            rows.append(line)
+            used += len(line.encode()) + 1
+        self.log("Ad close evidence " + json.dumps({"schema": "xenoid.ad-close-evidence/v1",
+                 "snapshot_sha256": hashlib.sha256(encoded).hexdigest(), "reason": reason,
+                 "controls_total": len(items), "controls_recorded": len(rows),
+                 "controls_omitted": len(items) - len(rows), "semantic_candidates": candidates,
+                 "observed_native_back": self.observed_navigation_back(window) is not None,
+                 "back_attempts": sum(self.missing_ad_close_backs.values()),
+                 "source": "held_snapshot_no_additional_read"}, separators=(",", ":")))
+        for line in rows:
+            self.log(line)
+
     def ad_failure(self, message):
         window = self.last_ad_window or {}
         owner = str(window.get("package", "unknown"))
@@ -659,6 +744,7 @@ class Cycle:
         # Diagnose the exact already-observed state that exhausted the budget.
         # Reading again here could hide a transient blocker or add UI work.
         visible = controls(window)
+        self.ad_failure_evidence(window)
         diagnostic = {"stable": window.get("stable") is True,
                       "loading": is_loading(window, self.package),
                       "terms": is_terms(window), "notification": is_notification(window),

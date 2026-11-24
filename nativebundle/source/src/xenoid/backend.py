@@ -12733,6 +12733,15 @@ cat >/dev/null
         name = self._convergence_action_name(action)
         try:
             status = self.daemon_client().keybox_status(timeout=20.0)
+            if name == "reconcile" and status.get("ok") is not True:
+                # Status is observational: a failed bootstrap component keeps
+                # its error until the owning coordinator actually retries it.
+                # Reuse the same identity/epoch sequence; never clear or import
+                # Keybox state from the host or rotate a regeneration target.
+                bootstrap = self.reconcile_bootstrap()
+                if bootstrap.get("ok") is not True:
+                    return bootstrap
+                status = self.daemon_client().keybox_status(timeout=20.0)
         except Exception:
             return {"ok": False, "error": "keybox_daemon_unavailable"}
         if name in {"none", "reuse", "inspect", "matching"}:

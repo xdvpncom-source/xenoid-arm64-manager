@@ -162,10 +162,12 @@ class ActualResourceTests(unittest.TestCase):
              patch.object(resources, 'pending_profile', return_value=False), \
              patch.object(resources, 'effective_config', side_effect=lambda c, m, o: c), \
              patch.object(resources, 'ensure_host_vm_guard', return_value={'ok': True}), \
+             patch.object(resources, 'ensure_memory_headroom', return_value={'ok': True}) as headroom, \
              patch.object(resources, 'apply_metrics', side_effect=AssertionError('WM setter called')), \
              patch.object(fresh, 'verify_runtime', return_value={'ok': True, 'render_fps': 15}) as verify:
             got = resources.reconcile_owned('phone-1', config, manager, force=True, broker=broker)
         self.assertTrue(got['ok']); self.assertEqual(got['display']['render_fps'], 15)
+        headroom.assert_called_once_with(manager, owned['Id'], reserve_mib=256)
         broker.set_frame_rate.assert_not_called(); verify.assert_called_once()
 
 

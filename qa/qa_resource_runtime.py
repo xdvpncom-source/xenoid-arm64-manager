@@ -17,7 +17,7 @@ import tempfile
 
 
 DEFAULT_CONFIG = {"enabled": True, "fps": 20, "scale": "minimum",
-                  "min_side": 200, "dpi": 72, "timeout": 180, "render_fps": None}
+                  "min_side": 200, "dpi": 72, "timeout": 180, "render_fps": None, "memory_reserve_mib": 0}
 CONFIG = Path("/etc/xenoid-fleet/qa-resources.json")
 STATE = Path("/var/lib/xenoid-fleet/qa-resources")
 UPSTREAM = Path("/opt/xenoid-fleet/upstream")
@@ -38,6 +38,14 @@ def validate_config(value):
     if render_fps is not None and (type(render_fps) is not int or render_fps != 15
             or config["fps"] != 60 or config["scale"] is not None or config["dpi"] != 420):
         raise ValueError("Fresh native pacing requires render_fps=15, fps=60, scale=null and dpi=420")
+    reserve = config["memory_reserve_mib"]
+    if "memory_reserve_mib" not in value:
+        reserve = 256 if render_fps is not None else 0
+        config["memory_reserve_mib"] = reserve
+    if type(reserve) is not int or not 0 <= reserve <= 1024:
+        raise ValueError("memory_reserve_mib must be an integer from 0 through 1024")
+    if reserve and render_fps is None:
+        raise ValueError("Memory reclaim reserve requires the fresh native resource contract")
     scale = config["scale"]
     if scale is not None and scale != "minimum":
         try:
@@ -369,6 +377,8 @@ def reconcile_owned(name, config, manager, *, force=False, broker=None):
         return {"instance": name, "ok": True, "skipped": "profile_pending", "deferred": True}
     config = effective_config(config, manager, owned)
     host_vm = ensure_host_vm_guard(manager, owned)
+    headroom = (ensure_memory_headroom(manager, owned["Id"], reserve_mib=config["memory_reserve_mib"])
+                if config.get("render_fps") is not None else {"ok": True, "skipped": "legacy_resources"})
     identity = resource_identity(manager)
     key = resource_key(owned, config, identity)
     marker = STATE / (name + ".json")
@@ -376,7 +386,7 @@ def reconcile_owned(name, config, manager, *, force=False, broker=None):
     previous = prepare_identity(marker, backup, read_marker(marker), identity)
     same_boot = previous.get("key") == key
     if not force and same_boot and not previous.get("proxy_pending"):
-        return {"instance": name, "skipped": "already_applied", "host_vm": host_vm}
+        return {"instance": name, "skipped": "already_applied", "host_vm": host_vm, "memory_headroom": headroom}
     from script_host import Broker
     if broker is None:
         broker = Broker(manager, lambda *_args: None, config={"expected_container_id": owned["Id"],
@@ -411,10 +421,10 @@ def reconcile_owned(name, config, manager, *, force=False, broker=None):
         # Leave the marker incomplete so the timer can retry native recovery.
         # No direct-network bypass or changes to the saved proxy policy.
         document = {"instance": name, "ok": False, "key": key, "identity": identity, "proxy_pending": True,
-                    "code": "proxy_recovery_pending", "display": result, "metrics": metrics}
+                    "code": "proxy_recovery_pending", "display": result, "metrics": metrics, "memory_headroom": headroom}
         atomic_json(marker, document)
         return document
-    document = {"instance": name, "ok": True, "key": key, "identity": identity, "display": result, "metrics": metrics}
+    document = {"instance": name, "ok": True, "key": key, "identity": identity, "display": result, "metrics": metrics, "memory_headroom": headroom}
     atomic_json(marker, document)
     return document
 
@@ -527,6 +537,269 @@ def main(argv=None):
             failed |= result.get("ok") is False
             print(json.dumps(result))
     return int(failed)
+
+
+
+
+HIGH_BYTES=1792*1024*1024
+MAX_BYTES=2*1024*1024*1024
+SWAP_BYTES=512*1024*1024
+
+def _memory_need(value,code):
+    if not value:raise RuntimeError(code)
+
+def _memory_binding(manager,cid,proc,*,qualified=True):
+    _memory_need(re.fullmatch('[0-9a-f]{64}',cid)is not None,'full_CID_required')
+    owned,error=manager._owned_container_record(timeout=5)
+    _memory_need(owned is not None and owned.get('Id')==cid,'headroom_owner_changed')
+    labels=(owned.get('Config')or{}).get('Labels')or{}
+    _memory_need(labels.get('dev.xenoid.owner')=='xenoid'
+         and labels.get('dev.xenoid.instance_id')==manager.context.instance_id
+         and labels.get('dev.xenoid.resource_tag')==manager.lease.resource_tag,'headroom_labels_changed')
+    hc=owned.get('HostConfig')or{}
+    if qualified:
+        _memory_need([hc.get(k)for k in('NanoCpus','Memory','MemorySwap')]==[1000000000,MAX_BYTES,MAX_BYTES+SWAP_BYTES],
+             'headroom_requires_qualified_caps')
+    state=owned.get('State')or{};pid=state.get('Pid')
+    _memory_need(state.get('Running')is True and type(pid)is int and pid>1,'headroom_runtime_not_running')
+    base=proc/str(pid)
+    ticks=base.joinpath('stat').read_text().rsplit(')',1)[1].split()[19]
+    expected='/system.slice/docker-'+cid+'.scope'
+    if qualified:
+        _memory_need(base.joinpath('cgroup').read_text().splitlines()==['0::'+expected],'headroom_cgroup_changed')
+    return (cid,owned.get('Image'),pid,state.get('StartedAt'),ticks),expected
+
+def _memory_filesystem_type(fd):
+    # cgroup kernfs is legitimately delegated (UID1000/0775 on qualified hosts).
+    # Trust the kernel filesystem and exact owned cgroup, not private-file UID
+    # conventions. Credentials/receipts retain their separate strict rules.
+    import ctypes
+    libc=ctypes.CDLL(None,use_errno=True)
+    libc.fstatfs.argtypes=[ctypes.c_int,ctypes.c_void_p]
+    libc.fstatfs.restype=ctypes.c_int
+    data=ctypes.create_string_buffer(256)
+    _memory_need(libc.fstatfs(fd,data)==0,'headroom_cgroup_fstatfs_failed')
+    return ctypes.c_long.from_buffer(data).value & 0xffffffff
+
+
+def _memory_record(path, document):
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
+    try:
+        info=os.fstat(directory)
+        _memory_need(info.st_uid==os.geteuid() and stat.S_IMODE(info.st_mode)==0o700,
+                     'headroom_receipt_directory_invalid')
+        atomic_json(path,document)
+        os.fsync(directory)
+    finally:os.close(directory)
+
+
+def _memory_write(fd, payload, record_writer, timeout):
+    """Gated Linux writer; no caller return until this exact child is dead.
+
+    The owner stays pending if kernel IO cannot acknowledge cancellation.
+    Normal signals are masked only across fork/handle setup and cleanup, then
+    restored inside the protected parent scope; SIGKILL remains unmaskable.
+    """
+    import signal
+    import time
+    _memory_need(type(timeout) in (int,float) and math.isfinite(timeout) and 0 < timeout <= 10,
+                 'headroom_write_budget_invalid')
+    _memory_need(hasattr(os,'pidfd_open') and hasattr(signal,'pidfd_send_signal')
+                 and signal.getsignal(signal.SIGCHLD)==signal.SIG_DFL,
+                 'headroom_exact_child_control_unsupported')
+    cancellation={signal.SIGINT,signal.SIGTERM,signal.SIGHUP,signal.SIGALRM,signal.SIGQUIT}
+    old_mask=signal.pthread_sigmask(signal.SIG_BLOCK,cancellation)
+    gate_r=gate_w=child=writer_pidfd=None
+    reaped=False
+    try:
+        gate_r,gate_w=os.pipe()
+        child=os.fork()
+        if child==0:
+            try:
+                os.close(gate_w)
+                allowed=os.read(gate_r,1)==b'1'
+                if allowed:
+                    signal.pthread_sigmask(signal.SIG_SETMASK,old_mask)
+                    if os.write(fd,payload)!=len(payload):os._exit(71)
+                os._exit(0 if allowed else 72)
+            except BaseException:os._exit(70)
+        os.close(gate_r);gate_r=None
+        # The gated child cannot exit normally before its exact pidfd opens.
+        # Supported callers have default SIGCHLD and no global child reaper.
+        writer_pidfd=os.pidfd_open(child,0)
+        ticks=(Path('/proc')/str(child)/'stat').read_text().rsplit(')',1)[1].split()[19]
+        record_writer({'pid':child,'start_ticks':ticks})
+        signal.pthread_sigmask(signal.SIG_SETMASK,old_mask)
+        _memory_need(os.write(gate_w,b'1')==1,'headroom_writer_gate_failed')
+        os.close(gate_w);gate_w=None
+        deadline=time.monotonic()+timeout
+        while time.monotonic()<deadline:
+            got,status=os.waitpid(child,os.WNOHANG)
+            if got:
+                reaped=True
+                _memory_need(os.WIFEXITED(status) and os.WEXITSTATUS(status)==0,
+                             'headroom_writer_failed')
+                return
+            time.sleep(min(0.02,max(0,deadline-time.monotonic())))
+        signal.pidfd_send_signal(writer_pidfd,signal.SIGKILL,None,0)
+        # A timeout never proves the scalar unchanged. Cleanup must acknowledge
+        # exit, including a pathological D-state, before releasing the owner.
+        while not reaped:
+            try:os.waitpid(child,0);reaped=True
+            except ChildProcessError:reaped=True
+            except BaseException:continue
+        raise RuntimeError('headroom_write_timed_out_child_reaped')
+    finally:
+        complete=False
+        while not complete:
+            try:
+                signal.pthread_sigmask(signal.SIG_BLOCK,cancellation)
+                if gate_w is not None:
+                    try:os.close(gate_w)
+                    except OSError as error:
+                        if error.errno!=9:raise
+                    gate_w=None
+                if child is not None and child>0 and not reaped:
+                    got,status=os.waitpid(child,os.WNOHANG)
+                    if not got:
+                        if writer_pidfd is not None:
+                            signal.pidfd_send_signal(writer_pidfd,signal.SIGKILL,None,0)
+                        # Without a pidfd, the closed unopened gate permits
+                        # only child exit, never a scalar write.
+                        os.waitpid(child,0)
+                    reaped=True
+                if gate_r is not None:
+                    try:os.close(gate_r)
+                    except OSError as error:
+                        if error.errno!=9:raise
+                    gate_r=None
+                if writer_pidfd is not None:
+                    try:os.close(writer_pidfd)
+                    except OSError as error:
+                        if error.errno!=9:raise
+                    writer_pidfd=None
+                complete=True
+            except ChildProcessError:reaped=True
+            except BaseException:continue
+        signal.pthread_sigmask(signal.SIG_SETMASK,old_mask)
+
+
+def ensure_memory_headroom(manager,cid,*,reserve_mib,operation='apply',proc_root=Path('/proc'),cgroup_root=Path('/sys/fs/cgroup'),state_root=None,timeout=5):
+    """Inspect, explicitly apply, or revert only memory.high on an exact owner.
+
+    Retain the returned pre-value in the external canary receipt. Rollback
+    accepts only this candidate's exact high value and restores max; it never
+    rewrites hard caps. A changed preexisting admin high value is a conflict.
+    Real cgroup writes can trigger synchronous reclaim on older kernels. The
+    short writer deadline cancels/reaps before this owning call returns. If the
+    kernel cannot acknowledge cancellation, this owner remains pending.
+    """
+    _memory_need(operation in('inspect','apply','rollback'),'headroom_operation_invalid')
+    _memory_need(type(reserve_mib) is int and 0 <= reserve_mib <= 1024, 'headroom_reserve_invalid')
+    desired_high = 'max' if reserve_mib == 0 else str(MAX_BYTES-reserve_mib*1024*1024)
+    state_root = (STATE/'memory-headroom') if state_root is None else Path(state_root)
+    _memory_need(re.fullmatch('[0-9a-f]{64}',cid) is not None,'full_CID_required')
+    if reserve_mib==0 and operation!='rollback' and _private_json(state_root/(cid+'.json'),maximum=16384) is None:
+        # Disabled policy never imposes this candidate's cap/cgroup contract
+        # on an administrator's unrelated runtime or claims its high value.
+        before,_=_memory_binding(manager,cid,Path(proc_root),qualified=False)
+        _memory_need(_memory_binding(manager,cid,Path(proc_root),qualified=False)[0]==before,
+                     'headroom_disabled_owner_changed')
+        return {'ok':True,'changed':False,'skipped':'disabled_no_owned_receipt',
+                'containerId':cid,'hardCapsChanged':False,'cgroupWrites':0}
+    before,relative=_memory_binding(manager,cid,Path(proc_root))
+    folder=Path(cgroup_root)/relative.lstrip('/')
+    fd=os.open(folder,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
+    try:
+        ds=os.fstat(fd);_memory_need(stat.S_ISDIR(ds.st_mode) and _memory_filesystem_type(fd)==0x63677270,'headroom_cgroup_directory_invalid')
+        def read(name):
+            f=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=fd)
+            try:
+                s=os.fstat(f);_memory_need(stat.S_ISREG(s.st_mode) and s.st_dev==ds.st_dev and _memory_filesystem_type(f)==0x63677270,'headroom_cgroup_file_invalid')
+                raw=os.read(f,65537);_memory_need(len(raw)<=65536,'headroom_cgroup_file_oversize');return raw.decode().strip()
+            finally:os.close(f)
+        snapshot={n:read(n)for n in('memory.current','memory.high','memory.max','memory.swap.max','memory.events','memory.pressure','cpu.max')}
+        _memory_need(snapshot['memory.max']==str(MAX_BYTES)and snapshot['memory.swap.max']==str(SWAP_BYTES),
+             'headroom_cgroup_caps_changed')
+        cpu=snapshot['cpu.max'].split();_memory_need(len(cpu)==2 and cpu[0].isdigit()and cpu[1].isdigit()
+             and int(cpu[0])==int(cpu[1])and int(cpu[1])>0,'headroom_cpu_cap_changed')
+        receipt=state_root/(cid+'.json')
+        previous=_private_json(receipt,maximum=16384)
+        if previous is not None:
+            _memory_need(previous.get('schema')=='dev.xenoid.memory-headroom-owner/v1'
+                and previous.get('instance_id')==manager.context.instance_id
+                and previous.get('container_id')==cid and previous.get('image_id')==before[1]
+                and previous.get('original_high')=='max'
+                and previous.get('phase') in ('pending','applied')
+                and type(previous.get('reserve_mib')) is int
+                and 0 <= previous['reserve_mib'] <= 1024
+                and previous.get('desired_high') == ('max' if previous['reserve_mib']==0 else str(MAX_BYTES-previous['reserve_mib']*1024*1024)), 'headroom_receipt_binding_changed')
+            writer=previous.get('writer')
+            if writer is not None:
+                try:
+                    raw=(Path('/proc')/str(writer['pid'])/'stat').read_text().rsplit(')',1)[1].split()
+                    alive=raw[19]==writer['start_ticks'] and raw[0]!='Z'
+                except FileNotFoundError:alive=False
+                _memory_need(not alive,'headroom_prior_writer_still_pending')
+            permitted={'max',str(previous['desired_high'])}
+            if previous.get('phase')=='pending':
+                permitted.add(str(previous.get('previous_high','max')))
+        else:
+            permitted={'max'}
+        _memory_need(snapshot['memory.high']in permitted,'headroom_existing_admin_boundary')
+        target=desired_high if operation=='apply'else'max'
+        if operation=='rollback':
+            _memory_need(previous is not None,'headroom_rollback_requires_original_receipt')
+        _memory_need(_memory_binding(manager,cid,Path(proc_root))[0]==before,'headroom_owner_changed_before_write')
+        changed=operation!='inspect'and snapshot['memory.high']!=target
+        if changed:
+            # Publish crash-resumable intent and the original boundary before
+            # the one cgroup write. No raw process/app state is stored here.
+            intent={'schema':'dev.xenoid.memory-headroom-owner/v1',
+                'instance_id':manager.context.instance_id,'container_id':cid,
+                'image_id':before[1],'original_high':'max','desired_high':target,
+                'reserve_mib':reserve_mib if operation=='apply' else 0,
+                'previous_high':snapshot['memory.high'],'phase':'pending'}
+            _memory_record(receipt,intent)
+            f=os.open('memory.high',os.O_WRONLY|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=fd)
+            try:
+                s=os.fstat(f);_memory_need(stat.S_ISREG(s.st_mode) and s.st_dev==ds.st_dev and _memory_filesystem_type(f)==0x63677270,'headroom_cgroup_file_invalid')
+                _memory_need(read('memory.high')==snapshot['memory.high'],'headroom_high_CAS_changed')
+                payload=(target+'\n').encode()
+                _memory_write(f,payload,lambda writer:_memory_record(receipt,{**intent,'writer':writer}),timeout)
+            finally:os.close(f)
+        after_high=read('memory.high')
+        _memory_need(after_high==(target if operation!='inspect'else snapshot['memory.high']),'headroom_readback_failed')
+        _memory_need(read('memory.max')==snapshot['memory.max']and read('memory.swap.max')==snapshot['memory.swap.max']
+             and read('cpu.max')==snapshot['cpu.max'],'headroom_hard_caps_changed')
+        _memory_need(_memory_binding(manager,cid,Path(proc_root))[0]==before and (os.stat(folder,follow_symlinks=False).st_dev,os.stat(folder,follow_symlinks=False).st_ino)==(ds.st_dev,ds.st_ino),
+             'headroom_owner_changed_after_read')
+        if operation!='inspect':
+            _memory_record(receipt,{'schema':'dev.xenoid.memory-headroom-owner/v1',
+                'instance_id':manager.context.instance_id,'container_id':cid,
+                'image_id':before[1],'original_high':'max','desired_high':target,
+                'reserve_mib':reserve_mib if operation=='apply' else 0,'phase':'applied'})
+        return {'schema':'dev.xenoid.cgroup-reclaim-headroom/v1','ok':True,'operation':operation,'changed':changed,
+                'binding':{'containerId':before[0],'imageId':before[1],'pid':before[2],'StartedAt':before[3],'startTicks':before[4]},
+                'cgroup':relative,'before':snapshot,'afterHigh':after_high,'hardCapsChanged':False,
+                'cacheDrops':0,'processSignals':0,'guestWrites':0}
+    finally:os.close(fd)
+
+
+def ensure_configured_memory_headroom(manager, expected_container_id, *, timeout=5):
+    """Owning UP hook; uses the same central resource policy as the timer.
+
+    The native caller already holds its instance operation lock. No new lock,
+    SDK command, Android command, lifecycle operation or service is launched.
+    """
+    if not CONFIG.exists():
+        return {"ok": True, "skipped": "qa_resource_policy_not_installed"}
+    config = load_config()
+    if not config["enabled"] or config["render_fps"] is None:
+        return {"ok": True, "skipped": "memory_headroom_not_enabled"}
+    return ensure_memory_headroom(manager, expected_container_id,
+                                  reserve_mib=config["memory_reserve_mib"],timeout=timeout)
 
 
 if __name__ == "__main__":

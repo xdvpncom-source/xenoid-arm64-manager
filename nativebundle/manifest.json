@@ -493,6 +493,15 @@
       "before_sha256": [
         null
       ],
+      "bytes": 8277,
+      "mode": "0755",
+      "path": "scripts/test-keybox-reconcile.py",
+      "sha256": "2b291c6e3404045bcd865fa23cc9a8fafadd8775892636613d68906fb7e83995"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
       "bytes": 3534,
       "mode": "0755",
       "path": "scripts/test-profile-boot-id.py",
@@ -632,12 +641,13 @@
         "3de8128936bccd8dca4a0bbdc68264ccf7af72ff4da818a4ccb1682a7dfa918a",
         "d796b9c3e527352d128c59a7c5e2f28eb97fcfa8914d008cf67e210d68ede0af",
         "ec3b086bd3727813f4e10ee1c70cbc2cb9bca9d8e6c330c33c7d2c7265d0cc12",
-        "3eeff84bec5b61dd25294196006f8e58c53b3765001330638b7af279428bde7e"
+        "3eeff84bec5b61dd25294196006f8e58c53b3765001330638b7af279428bde7e",
+        "aa0e87b3f0eb0a53f7fd97bc429ba585084ba3bffab53a8847afbd215927bc3a"
       ],
-      "bytes": 620831,
+      "bytes": 621432,
       "mode": "0644",
       "path": "src/xenoid/backend.py",
-      "sha256": "aa0e87b3f0eb0a53f7fd97bc429ba585084ba3bffab53a8847afbd215927bc3a"
+      "sha256": "7e52bcec8b943a7a307d56336f2bb7a9c481f025a35baf8e916b0621e6eaa8cc"
     },
     {
       "before_sha256": [

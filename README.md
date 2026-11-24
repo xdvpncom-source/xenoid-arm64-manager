@@ -2,18 +2,17 @@
 
 Install Xenoid on an ARM64 Ubuntu server and manage headless Android 13 instances through a local CLI. Each numeric ID maps to an upstream instance name. For example, `2` selects `phone-2`. Xenoid allocates the container, persistent volume, network, and loopback ADB port for each instance.
 
-The [v0.1.33 release notes](docs/releases/v0.1.33.md) describe bounded,
-owner-specific ADB forward reconciliation. A probe on the exact owned runtime
-and recovery of the same operation with original v0.1.32 passed; fleet
-qualification under v0.1.33 remains pending. Runtime image inputs
-and the qualified v0.1.32 components are unchanged.
+The [v0.1.34 release notes](docs/releases/v0.1.34.md) describe same-operation
+regeneration recovery, optional container memory reclaim headroom and additional
+QA close-control recognition. Runtime image inputs and official Xenoid touch
+remain unchanged. Long-running fleet qualification is recorded separately.
 
 ## Install
 
 Use an **ARM64 (aarch64) server running Ubuntu 24.04**, such as a Hetzner CAX server. The installer requires root access, outbound HTTPS, and free disk space for the build toolchain, container images, and Android data. Install and management commands use the same operator account and Xenoid registry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.33/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.34/install.sh | sudo -H bash -s -- --accept-android-licenses
 ```
 
 The `--accept-android-licenses` flag accepts the Android SDK licenses for the pinned build tools from Google. The installer prepares the host and creates fresh Pixel 6a devices up to the host’s reserved capacity. Allow tens of minutes for the first build on a small server. The CLI is installed as `/usr/local/bin/xenoid-fleet` and the managed checkout lives under `/opt/xenoid-fleet/upstream`. Rerunning the installer reuses the toolchain, creates missing IDs and converges existing matching Pixel 6a instances. An incompatible existing profile is rejected; deletion is a separate explicit operation.
@@ -31,7 +30,7 @@ sudo -H xenoid-fleet run 1 -- adb shell getprop sys.boot_completed
 Use `--install-only` to prepare the host before creating the first device or upgrade an existing installation without issuing a device start. Upgrades also refresh enabled proxies on already-running devices when their native control/process revision has not been verified.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.33/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.34/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
 ```
 
 ## Devices
@@ -562,6 +561,26 @@ regeneration's post-actions. Existing cache-only scripts and saved revisions
 retain their prior behavior. Full data reset applies only when explicitly
 requested by the new scenario plan. Official native touch is unchanged.
 
+
+### Container memory reclaim headroom (v0.1.34)
+
+The resource policy accepts `memory_reserve_mib`. A fresh policy uses `256`.
+An existing fresh native `render_fps=15` policy also resolves a missing field
+to `256`; legacy display policies without native pacing keep `0`. An explicit
+`0` disables this reserve. For the qualified 1 CPU,
+2 GiB RAM and 512 MiB swap profile, `256` sets the cgroup-v2 soft reclaim
+threshold `memory.high` to 1792 MiB. The hard CPU, memory and swap limits stay
+unchanged. Configure the same field through the management panel, then apply
+resources to the selected devices. Existing Fleet post-start and periodic
+resource reconciliation retain this setting after a new container starts.
+
+The helper records the original value before writing and checks the exact
+runtime and cgroup. A conflicting administrator setting is rejected. Set the
+field to `0` to restore the owned original value; an unowned limit is untouched.
+A bounded child writer is reaped before its owner releases the operation.
+Unsupported container limits fail explicitly when the reserve is enabled.
+This is an earlier reclaim threshold, not extra memory or an Android LMKD fix;
+an app whose working set exceeds the hard limit can still run out of memory.
 
 ## Per-device JSON profiles
 
