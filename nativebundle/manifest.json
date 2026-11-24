@@ -426,12 +426,13 @@
         null,
         "ae3cf039b788e4479fa7d7b0464c4b1ab64aa65da1c45c9cb81575e6999a1e95",
         "b81ccc6f3b52ea5a09c84a003796bb62483cee85646c6789cc04fa1e3ba48452",
-        "0ad026c0de7468127b14cc7613685f4a5786bd49efd7ab4e5cdc924333e9fccf"
+        "0ad026c0de7468127b14cc7613685f4a5786bd49efd7ab4e5cdc924333e9fccf",
+        "ca41e3bb31f72cb07b370036634bb766ac42503bcb0c76401d39633454030b14"
       ],
-      "bytes": 16052,
+      "bytes": 16144,
       "mode": "0755",
       "path": "scripts/test-cold-profile-defaults.py",
-      "sha256": "ca41e3bb31f72cb07b370036634bb766ac42503bcb0c76401d39633454030b14"
+      "sha256": "678a51ce470c7501db4679eecfdfe6b3e3d67bcc4b67bd03088fb48379c4d626"
     },
     {
       "before_sha256": [
@@ -642,12 +643,13 @@
         "d796b9c3e527352d128c59a7c5e2f28eb97fcfa8914d008cf67e210d68ede0af",
         "ec3b086bd3727813f4e10ee1c70cbc2cb9bca9d8e6c330c33c7d2c7265d0cc12",
         "3eeff84bec5b61dd25294196006f8e58c53b3765001330638b7af279428bde7e",
-        "aa0e87b3f0eb0a53f7fd97bc429ba585084ba3bffab53a8847afbd215927bc3a"
+        "aa0e87b3f0eb0a53f7fd97bc429ba585084ba3bffab53a8847afbd215927bc3a",
+        "7e52bcec8b943a7a307d56336f2bb7a9c481f025a35baf8e916b0621e6eaa8cc"
       ],
-      "bytes": 621432,
+      "bytes": 623239,
       "mode": "0644",
       "path": "src/xenoid/backend.py",
-      "sha256": "7e52bcec8b943a7a307d56336f2bb7a9c481f025a35baf8e916b0621e6eaa8cc"
+      "sha256": "e0c5492c7dffcf297a903519f5608ff65ec338f16436e35fc8ae6e4acb0a69ef"
     },
     {
       "before_sha256": [
@@ -713,12 +715,13 @@
         "12e5f659f17118ca7f9a4bb704c6d56aa69756bdd516706ca2c845a39a91b05b",
         "3f359f93657f28f5b892005ecf69571c5522429b2399d768b35c0f403479546f",
         "b8e409b67b2605c89dd451da233e9d1252fbb05df3ae0608c8b0cb153e91d868",
-        "d6e7d26129b2fda1bb15c9253415fb6af031e245a8944d04b0a406b797b158a2"
+        "d6e7d26129b2fda1bb15c9253415fb6af031e245a8944d04b0a406b797b158a2",
+        "d368756124ff01c16ade3ebd03b8c089319fb9383f2c86accf6720bf986354aa"
       ],
-      "bytes": 48475,
+      "bytes": 48804,
       "mode": "0644",
       "path": "src/xenoid/live_observe.py",
-      "sha256": "d368756124ff01c16ade3ebd03b8c089319fb9383f2c86accf6720bf986354aa"
+      "sha256": "80a49a2ab2d8db0df2494174ba54798258ce6118f3d00d8c2dfdc4c4fe781c8d"
     },
     {
       "before_sha256": [

@@ -518,7 +518,12 @@ class LiveAcceptance:
                 identity_ok = False
         if running is True and getattr(getattr(manager, "cfg", None), "cold_profile", None) is not None:
             profile = self._optional_call(manager, "cold_profile_status", budget)
-            checks.add("coldProfile", profile.get("ok") is True, "cold_profile_mismatch")
+            profile_failure = profile.get("error")
+            if not isinstance(profile_failure, str) or profile_failure not in {
+                    "cold_profile_observation_failed", "cold_profile_observation_invalid",
+                    "cold_profile_observation_timeout"}:
+                profile_failure = "cold_profile_mismatch"
+            checks.add("coldProfile", profile.get("ok") is True, profile_failure)
             identity_ok = identity_ok and profile.get("ok") is True
         checks.add("identity", identity_ok, "identity_not_converged")
 

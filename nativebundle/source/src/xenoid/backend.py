@@ -6671,9 +6671,18 @@ cat >/dev/null
         if selected is None:
             return {"ok": True, "skipped": True}
         properties = expected_properties(selected)
-        command = "\n".join(
-            "printf '%s\\t' " + shlex.quote(name) + "; getprop " + shlex.quote(name)
-            for name in properties
+        # The type enumeration proves actual key existence independently of
+        # user property values, which can contain forged-looking newlines.
+        # Filter both snapshots before bounded/redacted host transport.
+        property_pattern = r"^\[(" + "|".join(re.escape(name) for name in properties) + r")\]"
+        command = (
+            "xenoid_profile_types=$(getprop -T) || exit $?; "
+            "printf '%s\\n' \"$xenoid_profile_types\" | grep -E -- "
+            + shlex.quote(property_pattern) + " || exit $?; "
+            "printf '\\n__PROP_VALUES__\\n'; "
+            "xenoid_profile_props=$(getprop) || exit $?; "
+            "printf '%s\\n' \"$xenoid_profile_props\" | grep -E -- "
+            + shlex.quote(property_pattern) + " || exit $?"
         )
         command += (
             "\nprintf '\\n__WM_SIZE__\\n'; wm size; "
@@ -6694,7 +6703,11 @@ cat >/dev/null
             "printf 'controller\\t'; getprop vendor.bt.rootcanal_mac_address; "
             "printf 'ready\\t'; getprop vendor.bt.xenoid_address_ready"
         )
-        result = self.docker_exec(["sh", "-c", command], timeout=max(0.1, min(timeout, 30.0)))
+        budget = max(0.1, min(timeout, 30.0))
+        deadline = time.monotonic() + budget
+        result = self.docker_exec(["sh", "-c", command], timeout=budget)
+        if time.monotonic() >= deadline or result.get("error") == "docker_exec_timeout":
+            return {"ok": False, "error": "cold_profile_observation_timeout"}
         if result.get("ok") is not True:
             return {"ok": False, "error": "cold_profile_observation_failed"}
         text = str(result.get("stdout") or "")
@@ -6705,8 +6718,22 @@ cat >/dev/null
             memory, tail = tail.split("\n__CPU__\n", 1)
             cpu, input_text = tail.split("\n__INPUT__\n", 1)
             input_text, bluetooth_text = input_text.split("\n__BLUETOOTH__\n", 1)
-            observed = dict(line.split("\t", 1) for line in raw_props.splitlines() if "\t" in line)
-            mismatches = [name for name, expected in properties.items() if observed.get(name) != expected]
+            raw_types, raw_props = raw_props.split("\n__PROP_VALUES__\n", 1)
+            observed = {}
+            present = set()
+            for snapshot, type_snapshot in ((raw_types, True), (raw_props, False)):
+                seen = set()
+                for line in snapshot.splitlines():
+                    entry = re.fullmatch(r"\[([A-Za-z0-9_.-]+)\]: \[(.*)\]", line)
+                    if entry is None or entry[1] not in properties or entry[1] in seen:
+                        raise ValueError("invalid_property_snapshot")
+                    seen.add(entry[1])
+                    if type_snapshot:
+                        present.add(entry[1])
+                    else:
+                        observed[entry[1]] = entry[2]
+            mismatches = [name for name, expected in properties.items()
+                          if name not in present or name not in observed or observed[name] != expected]
             display = selected["display"]
             if re.search(r"Physical size:\s*" + str(display["width"]) + "x" + str(display["height"]) + r"\b", size) is None:
                 mismatches.append("display.physicalSize")
@@ -6738,7 +6765,11 @@ cat >/dev/null
             if target is None or bluetooth.get("persist") != target or bluetooth.get("controller") != target:
                 mismatches.append("bluetooth.controllerAddress")
         except (ValueError, TypeError, KeyError):
+            if time.monotonic() >= deadline:
+                return {"ok": False, "error": "cold_profile_observation_timeout"}
             return {"ok": False, "error": "cold_profile_observation_invalid"}
+        if time.monotonic() >= deadline:
+            return {"ok": False, "error": "cold_profile_observation_timeout"}
         return {"ok": not mismatches, "templateSha256": profile_digest(selected),
                 "checkedProperties": len(properties), "mismatches": mismatches,
                 **({"error": "cold_profile_mismatch"} if mismatches else {})}

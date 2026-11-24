@@ -136,7 +136,8 @@ class ObservationContracts(unittest.TestCase):
     def test_profile_observation_matches_selected_contract(self):
         value=json.loads((ROOT/'examples/fingerprints/pixel-bluejay-android13.json').read_text())
         props=expected_properties(value)
-        text='\n'.join(k+'\t'+v for k,v in props.items())
+        text='\n'.join('['+k+']: [string]' for k in props)
+        text+='\n__PROP_VALUES__\n'+'\n'.join('['+k+']: ['+v+']' for k,v in props.items())
         text+='\n__WM_SIZE__\nPhysical size: 1080x2400\n__WM_DENSITY__\nPhysical density: 420\n__MEMORY__\nMemTotal: 6291456 kB\n__CPU__\n8\n__INPUT__\n'+json.dumps({'ok':True,'xMin':0,'xMax':1079,'yMin':0,'yMax':2399})
         text+='\n__BLUETOOTH__\nsidecar-state\tvalid\nsidecar\t02:13:24:35:46:57\npersist\t02:13:24:35:46:57\ncontroller\t02:13:24:35:46:57\nready\t1\n'
         commands=[]
