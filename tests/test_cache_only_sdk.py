@@ -16,7 +16,7 @@ class CacheOnlyTests(unittest.TestCase):
  def setUp(self):
   self.m=MagicMock();self.m.instance_operation_lock.side_effect=lambda **kw:contextlib.nullcontext();self.m._owned_container_record.return_value=({'Id':'a'*64},None)
   self.b=h.Broker(self.m,lambda *_args:None,config={'expected_container_id':'a'*64,'command_timeout':0})
-  self.b.owned_manager=lambda:contextlib.nullcontext(self.m)
+  self.b.owned_manager=lambda *,deadline=...,allow_stopping=False:contextlib.nullcontext(self.m)
   self.calls=[];self.uid_values=['10024','10024'];self.help=HELP;self.clear_code=0;self.clear_output=b'Success\n';self.help_code=255
   def execute(manager,args,**options):
    self.calls.append((list(args),options));out=b'';code=0

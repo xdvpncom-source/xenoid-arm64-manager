@@ -39,6 +39,10 @@ public Object get(int id) {return fixture.Trace.mode.equals("emptydisplays")?nul
 import fixture.Trace;import android.accessibilityservice.AccessibilityServiceInfo;
 public class UiAutomation {public AccessibilityServiceInfo getServiceInfo(){return new AccessibilityServiceInfo();}
 public void setServiceInfo(AccessibilityServiceInfo i){if(i.flags!=82)throw new RuntimeException("flags");Trace.add("clear_cache_flags");}
+public void waitForIdle(long quiet,long total) throws java.util.concurrent.TimeoutException {
+if(quiet!=250L||total!=1000L)throw new IllegalArgumentException("unbounded bridge wait");Trace.add("bridge_wait");
+if(Trace.mode.equals("idletimeout")||Trace.mode.equals("idletimeout_nullroot"))throw new java.util.concurrent.TimeoutException("busy UI");
+if(Trace.mode.equals("idlefault"))throw new IllegalStateException("connection failed");}
 public android.util.SparseArray getWindowsOnAllDisplays(){Trace.add("windows_metadata");return new android.util.SparseArray();}}''',
 'com/android/uiautomator/core/UiAutomationShellWrapper.java': '''package com.android.uiautomator.core;
 import fixture.Trace;public class UiAutomationShellWrapper {
@@ -55,7 +59,7 @@ public int getId(){return Trace.mode.equals("renumbered")?16:8;}public int getLa
 public void getBoundsInScreen(Rect r){r.left=0;r.top=90;r.right=100;r.bottom=100;}
 public AccessibilityNodeInfo getRoot(int strategy){if(!nav)throw new RuntimeException("app_root_requested");
 if(strategy!=0)throw new RuntimeException("prefetch");Trace.add("root_bypass_0");
-return Trace.mode.equals("nullroot")?null:new AccessibilityNodeInfo(0);}
+return Trace.mode.equals("nullroot")||Trace.mode.equals("idletimeout_nullroot")?null:new AccessibilityNodeInfo(0);}
 public void recycle(){Trace.add(nav?"recycle_nav_window":"recycle_app_window");}}''',
 'android/view/accessibility/AccessibilityNodeInfo.java': '''package android.view.accessibility;
 import fixture.Trace;import android.graphics.Rect;
@@ -222,6 +226,25 @@ class JavaNavigationProtocol(unittest.TestCase):
         self.assertEqual([row['sequence']for row in rows],[2,3]);self.assertEqual(len(frames),6)
         self.assertTrue(all(row['display_id']==0 and row['outcome']=='ok'for row in rows))
         self.assertEqual(trace.count('connect'),2);self.assertEqual(trace.count('disconnect'),2)
+
+    def test_bridge_settle_precedes_windows_and_idle_timeout_is_not_readiness(self):
+        frames, trace = self.run_helper()
+        self.assertLess(trace.index('clear_cache_flags'), trace.index('bridge_wait'))
+        self.assertLess(trace.index('bridge_wait'), trace.index('windows_metadata'))
+        frames, trace = self.run_helper('idletimeout')
+        self.assertEqual(frames[2][1], 0)
+        self.assertEqual(json.loads(frames[2][2])['node_window_id'], json.loads(frames[2][2])['window_id'])
+        frames, trace = self.run_helper('idletimeout_nullroot')
+        self.assertEqual(frames[2], (2, 1, b'nav_root_unavailable'))
+        self.assertEqual(trace.count('disconnect'), 1)
+        self.assertEqual(frames[3][2], b'<hierarchy/>')
+
+    def test_non_timeout_bridge_failure_cannot_establish_node_readiness(self):
+        frames, trace = self.run_helper('idlefault')
+        self.assertEqual(frames[2], (2, 1, b'stock_dump_exception'))
+        self.assertNotIn('windows_metadata', trace)
+        self.assertEqual(trace.count('disconnect'), 1)
+        self.assertEqual(frames[3][2], b'<hierarchy/>')
 
     def test_disconnect_failure_retires_pipe_instead_of_reusing_leaked_connection(self):
         frames, trace = self.run_helper('disconnectfail')

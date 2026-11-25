@@ -48,7 +48,7 @@ class ReadinessTests(unittest.TestCase):
   self.assertTrue(result['ready']);self.b.native_input_rootd.assert_not_called();self.b.adb.assert_not_called();self.manager.daemon_client.assert_not_called()
  def test_public_query_reports_mapping_and_focus_without_repair(self):
   self.manager.instance_operation_lock.return_value=contextlib.nullcontext()
-  self.b.owned_manager=lambda:contextlib.nullcontext(self.manager)
+  self.b.owned_manager=lambda *,deadline=...,allow_stopping=False:contextlib.nullcontext(self.manager)
   self.b.native_interaction_snapshot=MagicMock(return_value=state(False,True))
   self.b.native_input_rootd=MagicMock(side_effect=AssertionError('readonly'))
   result=self.b.dispatch('input-status',[0]);self.assertFalse(result['ready']);self.assertTrue(result['foreground']['ready']);self.assertFalse(result['events_injected']);self.b.native_input_rootd.assert_not_called()

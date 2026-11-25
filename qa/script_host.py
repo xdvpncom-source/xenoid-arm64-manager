@@ -3,7 +3,7 @@
 
 import argparse
 import base64
-from contextlib import closing, contextmanager, nullcontext
+from contextlib import ExitStack, closing, contextmanager, nullcontext
 from datetime import datetime, timezone
 import fcntl
 import gzip
@@ -1753,12 +1753,42 @@ echo retired
 
 
     @contextmanager
-    def owned_manager(self):
-        # The registry binding and native ownership validation are checked for each operation.
-        # If a phone is recreated during a round its old ADB endpoint must never be reused.
+    def owned_manager(self, *, deadline=..., allow_stopping=False):
+        # Wait only before entering the operation; never replay its body/input.
+        # The panel budget is authoritative (0 = unlimited). Explicit operation
+        # deadlines include lock acquisition; native EX ownership is unchanged.
+        from xenoid.config import InstanceError
         manager = self.verify() if self.verify else self.manager
-        with manager.instance_operation_lock(timeout_seconds=6):
-            owned, reason = manager._owned_container_record(timeout=5)
+        if deadline is Ellipsis:
+            seconds = self.config.get("command_timeout", 0)
+            deadline = time.monotonic() + seconds if seconds else None
+        with ExitStack() as stack:
+            while True:
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    raise TransportUnavailable("Native ownership wait exceeded its configured timeout")
+                try:
+                    stack.enter_context(manager.instance_operation_lock(
+                        timeout_seconds=0.25 if remaining is None else min(0.25, remaining)))
+                    break
+                except InstanceError as error:
+                    if error.code != "instance_busy" or str(error) != "instance operation in progress":
+                        raise
+                    if self.stopping.is_set() and not allow_stopping:
+                        raise RuntimeError("Device script is stopping") from error
+            if self.stopping.is_set() and not allow_stopping:
+                raise RuntimeError("Device script is stopping")
+            # Recheck the registered assignment after a potentially long wait.
+            if self.verify:
+                current = self.verify()
+                if any(getattr(current.context, key) != getattr(manager.context, key)
+                       for key in ("instance_id", "resource_tag", "state_root")):
+                    raise RuntimeIdentityError("The registered instance changed while waiting for ownership")
+                manager = current
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                raise TransportUnavailable("Native ownership wait exceeded its configured timeout")
+            owned, reason = manager._owned_container_record(timeout=5 if remaining is None else min(5, remaining))
             if owned is None:
                 raise RuntimeError(reason or "The native runtime ownership check failed")
             if (owned.get("State") or {}).get("Running") is not True:
@@ -1766,13 +1796,19 @@ echo retired
             container = owned.get("Id")
             if not re.fullmatch(r"[0-9a-f]{64}", str(container)) or self.container_id is not None and container != self.container_id:
                 raise RuntimeIdentityError("The assigned Android runtime changed during this iteration")
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TransportUnavailable("Native ownership verification exceeded its configured timeout")
             self.container_id = container
+            if self.stopping.is_set() and not allow_stopping:
+                raise RuntimeError("Device script is stopping")
             yield manager
 
     def owned_call(self, args, timeout):
         # The upstream convenience wrapper applies command/timeout policy. Run
         # ADB directly after validating the live container identity instead.
-        with self.owned_manager() as manager:
+        deadline = time.monotonic() + timeout if timeout else None
+        cleanup = args[:2] == ["forward", "--remove"]
+        with self.owned_manager(deadline=deadline, allow_stopping=cleanup) as manager:
             executable = shutil.which("adb")
             if not executable:
                 raise RuntimeError("ADB executable is unavailable on the device host")
@@ -1782,8 +1818,13 @@ echo retired
                 command = [executable, *args]
             else:
                 command = [executable, "-s", manager.adb_target, *args]
+            if self.stopping.is_set() and not cleanup:
+                raise RuntimeError("Device script is stopping")
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                raise TransportUnavailable("ADB command deadline expired before sending")
             result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, timeout=timeout, check=False)
+                                    stderr=subprocess.PIPE, timeout=remaining, check=False)
             return {"ok": result.returncode == 0, "code": result.returncode,
                     "stdout": result.stdout.decode(errors="replace"),
                     "stderr": result.stderr.decode(errors="replace")}
@@ -1795,7 +1836,7 @@ echo retired
             raise RuntimeError("Device script is stopping")
         seconds = self.config.get("command_timeout", 0)
         deadline = time.monotonic() + seconds if seconds else None
-        with self.owned_manager() as manager:
+        with self.owned_manager(deadline=deadline) as manager:
             state = self.ensure_native_interaction(manager, deadline, repair=True)
             raw_x, raw_y, _ = native_touch_point(state["dump"], state["profile"], x, y)
             remaining = None if deadline is None else deadline - time.monotonic()
@@ -2006,7 +2047,7 @@ echo retired
         deadline = time.monotonic() + seconds if seconds else None
         manager = self.verify() if self.verify else self.manager
         with manager.instance_operation_lock(timeout_seconds=seconds or None):
-            with self.owned_manager() as manager:
+            with self.owned_manager(deadline=deadline) as manager:
                 state = self.native_interaction_snapshot(manager, deadline, foreground=True)
         return {"ready": state["ready"], "backend": "xenoid_native", "mapping": state["mapping"],
                 "foreground": state["foreground"], "events_injected": False}
@@ -2030,7 +2071,7 @@ echo retired
             raise TransportUnavailable("Package cache-only operation exceeded its configured timeout")
         manager = self.verify() if self.verify else self.manager
         with manager.instance_operation_lock(timeout_seconds=None if deadline is None else max(0.0, deadline - time.monotonic())):
-            with self.owned_manager() as manager:
+            with self.owned_manager(deadline=deadline) as manager:
                 def execute(args):
                     return self.native_display_exec(manager, args, deadline=deadline, check=False)
 
@@ -2408,7 +2449,7 @@ echo retired
             raise RuntimeError("Bundled display library failed its integrity check")
         seconds = self.config.get("command_timeout", 0) if timeout is None else timeout
         deadline = time.monotonic() + seconds if seconds else None
-        with self.owned_manager() as manager:
+        with self.owned_manager(deadline=deadline) as manager:
             def execute(args, **options):
                 return self.native_display_exec(manager, args, deadline=deadline, **options)
 
@@ -2577,7 +2618,7 @@ echo retired
         self._hierarchy_focus = None
         self._hierarchy_geometry = None
         try:
-            with self.owned_manager() as manager:
+            with self.owned_manager(deadline=deadline) as manager:
                 current = self._ui_reader
                 if (current is None or current.pipe is None or current.pipe.closed or
                         current.pipe.process.poll() is not None or current.priority != priority):
@@ -2808,9 +2849,30 @@ echo retired
             offer["verification_stages"] = {}
             nav_started = time.monotonic()
             try:
-                proof = reader.navigation(manager, offer["display_id"], proof_deadline)
-            except DumpFailed:
-                reject("navigation_fresh_back_unavailable")
+                # A status-1 reply completed its Java disconnect and leaves the
+                # same pipe synchronized. Reacquire at most once for a narrowly
+                # unavailable provider result, within this offer's original lease.
+                # Never retry a changed/ambiguous node, transport, or input call.
+                for attempt in range(2):
+                    fresh()
+                    if (self._ui_reader is not reader or reader.closed or not reader.started or
+                            reader.pipe is None or reader.pipe.closed or reader.pipe.process.poll() is not None):
+                        reject("navigation_reader_unavailable")
+                    offer["verification_stages"]["fresh_node_attempts"] = attempt + 1
+                    try:
+                        proof = reader.navigation(manager, offer["display_id"], proof_deadline)
+                        break
+                    except DumpFailed as error:
+                        code = str(error)
+                        offer["verification_stages"]["fresh_node_error_code"] = (
+                            code if re.fullmatch(r"nav_[a-z_]{1,72}", code)
+                            else "unrecognized_navigation_dump_failure")
+                        if attempt or code not in {"nav_display_unavailable", "nav_bar_unavailable",
+                                                   "nav_root_unavailable", "nav_back_unavailable"}:
+                            reject("navigation_fresh_back_unavailable")
+                        # The next navigation() repeats native ownership, epoch,
+                        # helper and frame checks before its fresh provider read.
+                        fresh()
             except (UiReaderError, OSError, TimeoutError) as error:
                 # An unreadable epoch proves no runtime transition. Reject this
                 # consumed offer only after fenced cleanup is positively complete;

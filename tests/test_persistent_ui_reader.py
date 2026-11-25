@@ -302,7 +302,7 @@ class BrokerTests(unittest.TestCase):
  def broker(self):
   b=h.Broker(object(),Mock(),config={'command_timeout':0});b.container_id='a'*64
   @contextlib.contextmanager
-  def owned():yield object()
+  def owned(*,deadline=...,allow_stopping=False):yield object()
   b.owned_manager=owned
   return b
  def test_default_is_persistent_reuses_process_and_unlimited_timeout(self):

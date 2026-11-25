@@ -380,6 +380,9 @@ def native_proxy_maintenance(manager, owned, config, document, *, broker=None):
     deadline = time.monotonic() + seconds if seconds else None
     result = dict(document)
     summary = {"ready": False, "reconciled": False, "code": "proxy_maintenance_pending"}
+    bootstrap_summary = {"ready": False, "attempted": False, "recovered": False,
+                         "code": "bootstrap_status_unreadable"}
+    bootstrap_attempted = False
     if broker is None:
         broker = Broker(manager, lambda *_args: None,
                         config={"expected_container_id": owned["Id"], "command_timeout": seconds})
@@ -393,6 +396,27 @@ def native_proxy_maintenance(manager, owned, config, document, *, broker=None):
         current, _ = active._owned_container_record(timeout=5 if value is None else min(5, value))
         if current is None or current.get("Id") != owned["Id"] or current.get("State", {}).get("Running") is not True:
             raise RuntimeIdentityError("The owned runtime changed during proxy maintenance")
+    def bootstrap_status(active):
+        # The native client validates instance identity, epoch, component names
+        # and typed component states. A failed GET never authorizes recovery.
+        value = remaining()
+        options = {"timeout": 3 if value is None else min(3, value)}
+        status = active.daemon_client(**options).bootstrap_status(**options)
+        if not isinstance(status, dict) or status.get("schema") != "dev.xenoid.daemon-bootstrap/v1":
+            return None
+        return status
+    def bootstrap_view(status):
+        if status is None:
+            return {"ready": False, "attempted": bootstrap_attempted, "recovered": False,
+                    "code": "bootstrap_status_unreadable"}
+        components = status["components"]
+        failed = sorted(name for name, component in components.items()
+                        if component.get("ok") is False and component.get("state") in
+                        ("failed", "timed_out", "cancelled"))
+        ready = status.get("ok") is True and status.get("state") == "ready" and all(
+            component.get("ok") is True for component in components.values())
+        return {"ready": ready, "attempted": bootstrap_attempted, "recovered": False,
+                "state": status["state"], "failed_components": failed}
     try:
         with broker.owned_manager() as active:
             same_owner(active)
@@ -409,6 +433,8 @@ def native_proxy_maintenance(manager, owned, config, document, *, broker=None):
                     status.get("enabled") is False or status.get("configured") is False):
                 summary = {"ready": None, "reconciled": False, "skipped": "disabled_or_unconfigured",
                            "enabled": status.get("enabled"), "configured": status.get("configured")}
+                bootstrap_summary = {"ready": None, "attempted": False, "recovered": False,
+                                     "skipped": "proxy_disabled_or_unconfigured"}
             else:
                 if not isinstance(status, dict) or not status.get("runtimeEpoch"):
                     # Official control bootstrap can establish the current
@@ -416,6 +442,7 @@ def native_proxy_maintenance(manager, owned, config, document, *, broker=None):
                     from xenoid.util import command_timeout
                     value = remaining()
                     budget = contextlib.nullcontext() if value is None else command_timeout(value)
+                    bootstrap_attempted = True
                     with budget:
                         bootstrap = active.reconcile_bootstrap(**({} if value is None else {"timeout": remaining()}))
                     if not isinstance(bootstrap, dict) or bootstrap.get("transportReady") is not True or bootstrap.get("controlReady") is not True:
@@ -423,10 +450,64 @@ def native_proxy_maintenance(manager, owned, config, document, *, broker=None):
                         same_owner(active)
                         if result.get("code") == "proxy_recovery_pending":
                             result.pop("code")
-                        result.update(ok=True, resource_ok=True, proxy_pending=True, proxy_watchdog=summary)
+                        bootstrap_summary.update(attempted=True, code="bootstrap_control_pending")
+                        result.update(ok=True, resource_ok=True, proxy_pending=True, proxy_watchdog=summary,
+                                      bootstrap_pending=True, bootstrap_watchdog=bootstrap_summary)
                         return result
                 same_owner(active)
                 summary = broker.display_proxy_reconcile(active, deadline, stopping=False)
+                try:
+                    observed = bootstrap_status(active)
+                    bootstrap_summary = bootstrap_view(observed)
+                    if (not bootstrap_attempted and observed is not None and
+                            observed.get("runtimeEpoch") != status.get("runtimeEpoch")):
+                        summary = {"ok": False, "ready": False, "reconciled": summary.get("reconciled") is True,
+                                   "code": "proxy_bootstrap_epoch_unconfirmed"}
+                    # A ready proxy cannot hide a terminal failed component.
+                    # Retry at most once per ordinary tick, using only the
+                    # owning native API. Its same-epoch coordinator preserves
+                    # already-ready components and retries failed ones.
+                    if (not bootstrap_attempted and observed is not None and
+                            observed.get("state") in ("degraded", "failed") and
+                            bootstrap_summary["failed_components"]):
+                        if observed.get("runtimeEpoch") != status.get("runtimeEpoch"):
+                            bootstrap_summary["code"] = "bootstrap_epoch_unconfirmed"
+                        else:
+                            same_owner(active)
+                            from xenoid.util import command_timeout
+                            value = remaining()
+                            budget = contextlib.nullcontext() if value is None else command_timeout(value)
+                            bootstrap_attempted = True
+                            # Bootstrap can change control/proxy state or its
+                            # userspace epoch. Never retain readiness sampled
+                            # before this mutation. The next ordinary tick
+                            # obtains fresh daemon AND host proxy proof.
+                            summary = {"ok": False, "ready": False, "reconciled": summary.get("reconciled") is True,
+                                       "code": "proxy_post_bootstrap_unverified"}
+                            with budget:
+                                recovered = active.reconcile_bootstrap(**({} if value is None else {"timeout": remaining()}))
+                            same_owner(active)
+                            fresh = bootstrap_status(active)
+                            bootstrap_summary = bootstrap_view(fresh)
+                            # API ok/controlReady alone is not aggregate ready.
+                            # Require a fresh ready snapshot of its exact result.
+                            matched = (fresh is not None and isinstance(recovered, dict) and
+                                       recovered.get("ready") is True and recovered.get("state") == "ready" and
+                                       type(recovered.get("generation")) is int and
+                                       fresh.get("instanceId") == recovered.get("instanceId") and
+                                       fresh.get("generation") == recovered.get("generation") and
+                                       fresh.get("runtimeEpoch") == recovered.get("runtimeEpoch"))
+                            bootstrap_summary["ready"] = bootstrap_summary["ready"] and matched
+                            bootstrap_summary["recovered"] = bootstrap_summary["ready"]
+                            bootstrap_summary["runtime_epoch_changed"] = (fresh is not None and
+                                fresh.get("runtimeEpoch") != observed.get("runtimeEpoch"))
+                            if not matched:
+                                bootstrap_summary["code"] = "bootstrap_result_unconfirmed"
+                except RuntimeIdentityError:
+                    raise
+                except Exception:
+                    bootstrap_summary = {"ready": False, "attempted": bootstrap_attempted, "recovered": False,
+                                         "code": "bootstrap_maintenance_pending"}
             same_owner(active)
     except RuntimeIdentityError:
         raise
@@ -436,7 +517,9 @@ def native_proxy_maintenance(manager, owned, config, document, *, broker=None):
     pending = not summary.get("skipped") and summary.get("ready") is not True
     if result.get("code") == "proxy_recovery_pending":
         result.pop("code")
-    result.update(ok=True, resource_ok=True, proxy_pending=pending, proxy_watchdog=summary)
+    result.update(ok=True, resource_ok=True, proxy_pending=pending, proxy_watchdog=summary,
+                  bootstrap_pending=not bootstrap_summary.get("skipped") and bootstrap_summary.get("ready") is not True,
+                  bootstrap_watchdog=bootstrap_summary)
     return result
 
 

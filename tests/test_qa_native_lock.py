@@ -136,7 +136,7 @@ QA = runpy.run_path(str(ROOT / "qa" / "qa_resources.py"))
 RECONCILE = QA["reconcile"]
 GLOBALS = RECONCILE.__globals__
 # Use the release's actual Broker.owned_manager rather than imitating its inner
-# six-second lock or runtime binding checks.
+# acquisition slices or runtime binding checks.
 with patch.object(sys, "path", [str(ROOT / "qa"), *sys.path]):
     spec = importlib.util.spec_from_file_location("qa_native_real_script_host", ROOT / "qa" / "script_host.py")
     HOST = importlib.util.module_from_spec(spec)
@@ -167,6 +167,12 @@ class NativeLockIntegrationTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.manager = NativeManager(self.root / "immutable-instance-1")
+        # The real Broker imports the same error type as the pinned native
+        # provider. Isolate only that dependency for this test's lifetime.
+        self.native_error = patch.dict(sys.modules, {
+            "xenoid.config": types.SimpleNamespace(InstanceError=InstanceError)})
+        self.native_error.start()
+        self.addCleanup(self.native_error.stop)
         self.actions = []
         actions = self.actions
 
@@ -238,7 +244,7 @@ class NativeLockIntegrationTest(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual(errors, [])
         self.assertTrue(results[0]["ok"])
-        self.assertEqual(self.manager.requests, [expected_native_timeout, 6, 6])
+        self.assertEqual(self.manager.requests, [expected_native_timeout, .25, .25])
         self.assertEqual(self.actions, ["guard_under_native_lock", "fps_entered", "fps_under_native_lock", "metrics_entered", "metrics_under_native_lock"])
         self.assertFalse(NATIVE.operation_lock_is_held(self.manager.context.instance_id))
 

@@ -80,7 +80,7 @@ class NativeNavigation(unittest.TestCase):
         self.manager = types.SimpleNamespace(daemon_client=lambda **_: self.daemon)
 
         @contextlib.contextmanager
-        def owned():
+        def owned(*, deadline=..., allow_stopping=False):
             with self.operation:
                 self.owner_depth += 1
                 try:

@@ -75,6 +75,16 @@ public final class StockUiServer {
         return value.getClass().getMethod(method).invoke(value);
     }
 
+    private static void waitForBridge(Object automation) throws Exception {
+        try {
+            automation.getClass().getMethod("waitForIdle", long.class, long.class)
+                    .invoke(automation, 250L, 1000L);
+        } catch (InvocationTargetException exception) {
+            if (!(exception.getCause() instanceof java.util.concurrent.TimeoutException)) throw exception;
+            // Busy UI is not readiness: the following fresh window/node proof is still required.
+        }
+    }
+
     private static int integer(Object value, String method) throws Exception {
         return ((Integer) call(value, method)).intValue();
     }
@@ -204,6 +214,7 @@ public final class StockUiServer {
             // Android13 UiAutomation.setServiceInfo clears this connection's
             // AccessibilityInteractionClient cache before sending the flags.
             automation.getClass().getMethod("setServiceInfo", infoClass).invoke(automation, info);
+            waitForBridge(automation);
             Object displays = call(automation, "getWindowsOnAllDisplays");
             int displayCount = integer(displays, "size");
             diagnostic.displayCount = displayCount;
