@@ -369,12 +369,13 @@
         null,
         "d6a2d3547574c436305fd17fcf1d9a076992aa872064cdb1465c96925c39b17b",
         "234f0a9ba75e9076b1a26e08277ae670d967348a94cfa90bd76a76d42024da07",
-        "6beb351b9516da11c51aa5f7f43f99d050f2f05f589f69b6d87fad19ec099afd"
+        "6beb351b9516da11c51aa5f7f43f99d050f2f05f589f69b6d87fad19ec099afd",
+        "f601ae8a2f19dd46b5581f1e21d9c5b5a34738d882016fe54141cda5e03680b9"
       ],
-      "bytes": 21302,
+      "bytes": 21341,
       "mode": "0755",
       "path": "scripts/seed-cold-profile.py",
-      "sha256": "f601ae8a2f19dd46b5581f1e21d9c5b5a34738d882016fe54141cda5e03680b9"
+      "sha256": "6454e0bd4af2a13c37cf42703dff507e6b295c27b60ff42293c515140cecd0fb"
     },
     {
       "before_sha256": [

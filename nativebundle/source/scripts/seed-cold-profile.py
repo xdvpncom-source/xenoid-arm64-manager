@@ -256,11 +256,11 @@ def classify_seed(image, profile, *, policy):
                 require(actual == data, "profile_seed_conflict")
             mode = 0o600 if name in {"bluetooth_address", "hostname", "device_name"} else 0o644
             if not image.metadata_matches(path, 0, 0, mode, FILE_LABEL):
-                # Recover only the missing xattr caused by the old pre-init
-                # atomically replaced nonunique leaves. Every ID, JSON byte,
-                # directory and leaf value is verified before any repair.
-                nonunique = name.startswith(("cpu_", "memory_", "battery_", "display_", "input_", "thermal_")) or name in {"usb_manufacturer", "usb_product", "usb_vendor_id", "usb_product_id"}
-                require(nonunique and image.ownership_matches(path, 0, 0, 0o644)
+                # Restore only an absent label on known atomic-writer leaves.
+                # All profile/leaf values are validated before seed_image writes
+                # any labels; current/GEN-owned sidecar values stay unchanged.
+                repairable = name.startswith(("cpu_", "memory_", "battery_", "display_", "input_", "thermal_")) or name in {"usb_manufacturer", "usb_product", "usb_vendor_id", "usb_product_id", "statfs_fsid", "hostname"}
+                require(repairable and image.ownership_matches(path, 0, 0, mode)
                         and re.search(r"Links:\s*1\b", image.info(path)) is not None
                         and image.label(path) in (None, b""), "profile_metadata_mismatch")
                 repairs.append(path)
