@@ -396,12 +396,13 @@
     },
     {
       "before_sha256": [
-        "fbdfb6c9ba90a938501a69093d307e01bbc3a315ff83998f919ff9d178b9db0c"
+        "fbdfb6c9ba90a938501a69093d307e01bbc3a315ff83998f919ff9d178b9db0c",
+        "a790a9ce0cc7df54013bdcdff0571838d3c7b25a3b6e0446351dada4bf570eef"
       ],
-      "bytes": 40587,
+      "bytes": 41512,
       "mode": "0755",
       "path": "scripts/test-bootstrap-contract.py",
-      "sha256": "a790a9ce0cc7df54013bdcdff0571838d3c7b25a3b6e0446351dada4bf570eef"
+      "sha256": "9e099a00b30a32c5e7c2767c684cad889d63e7e4848a5d6bf5e373e5b7807411"
     },
     {
       "before_sha256": [
@@ -456,12 +457,13 @@
     },
     {
       "before_sha256": [
-        "dc40e79806de84f9ec9929487df56aa0bc342dfd62f9166d9d39a8962a4aa1a3"
+        "dc40e79806de84f9ec9929487df56aa0bc342dfd62f9166d9d39a8962a4aa1a3",
+        "6c1e5a26c25c7beecb234703b87f8bdab3a014f3477169f0f6b26ba584b8bbfe"
       ],
-      "bytes": 118877,
+      "bytes": 118941,
       "mode": "0755",
       "path": "scripts/test-convergence.py",
-      "sha256": "6c1e5a26c25c7beecb234703b87f8bdab3a014f3477169f0f6b26ba584b8bbfe"
+      "sha256": "eab8a07bfd59403a32d1c967b06823f69d71d7daace6fe6bb0f71cfa7594837b"
     },
     {
       "before_sha256": [
@@ -644,12 +646,13 @@
         "ec3b086bd3727813f4e10ee1c70cbc2cb9bca9d8e6c330c33c7d2c7265d0cc12",
         "3eeff84bec5b61dd25294196006f8e58c53b3765001330638b7af279428bde7e",
         "aa0e87b3f0eb0a53f7fd97bc429ba585084ba3bffab53a8847afbd215927bc3a",
-        "7e52bcec8b943a7a307d56336f2bb7a9c481f025a35baf8e916b0621e6eaa8cc"
+        "7e52bcec8b943a7a307d56336f2bb7a9c481f025a35baf8e916b0621e6eaa8cc",
+        "e0c5492c7dffcf297a903519f5608ff65ec338f16436e35fc8ae6e4acb0a69ef"
       ],
-      "bytes": 623239,
+      "bytes": 625197,
       "mode": "0644",
       "path": "src/xenoid/backend.py",
-      "sha256": "e0c5492c7dffcf297a903519f5608ff65ec338f16436e35fc8ae6e4acb0a69ef"
+      "sha256": "1ffa4aa43d176d145a301158d1d574190cc65747def1e4cdae25ff942db40861"
     },
     {
       "before_sha256": [

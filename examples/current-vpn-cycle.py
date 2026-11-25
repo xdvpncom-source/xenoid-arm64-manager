@@ -81,6 +81,8 @@ AD_LANDING_RETURN_LIMIT = 1            # Tap only an observed native Android Bac
 AD_LANDING_ORIGIN_BACK_LIMIT = 1       # After store Back, dismiss only the same originating ad.
 AD_MISSING_CLOSE_BACK_SECONDS = 15     # Grace after the initial dwell when a real AdActivity exposes no Close.
 AD_MISSING_CLOSE_BACK_LIMIT = 1        # Per semantic ad state, using only an observed native Back control.
+AD_NAV_SNAPSHOT_MAX_SECONDS = 5       # Client receipt age; broker independently checks its one-shot offer.
+AD_RECOVERY_VERIFY_SECONDS = 60       # One post-Back verification allowance; 0 adds no allowance.
 AD_LANDING_PROVENANCE_SECONDS = 120    # A store already foreground before an ad click is not recovered.
 AD_SAME_TARGET_ATTEMPT_LIMIT = 2        # Do not keep clicking an unchanged accessibility target.
 AD_ACTIVITY_HINTS = ("AdActivity", "Interstitial", "RewardedAd", "RewardedVideo", "AdUnitActivity")
@@ -236,6 +238,19 @@ def choose_ad_close(scored):
 def controls(window):
     return [control for control in window.get("controls", ())
             if control.get("enabled", False) and bounds(control)]
+
+
+def application_hierarchy_missing(window):
+    """A stable WM focus is not proof of an active app accessibility window."""
+    proof = window.get("focus_observation")
+    if isinstance(proof, dict) and proof.get("schema") == "xenoid.wm-focus-observation/v1":
+        return proof.get("hierarchy_state") in {"partial_application_window_missing", "partial_application_root_missing",
+                                                "partial_application_owner_mismatch"}
+    # Preserve old single-hierarchy consumers; a nonempty all-window result can
+    # still explicitly prove that it contains no active application window.
+    windows = window.get("windows")
+    return bool(windows) and not any(item.get("window_type") == "TYPE_APPLICATION" and
+        (item.get("window_active") is True or item.get("window_focused") is True) for item in windows)
 
 
 def explicit_control(window, selectors):
@@ -394,6 +409,13 @@ class Cycle:
         self.user = "current" if self.user is None else str(self.user)
         self.last_action = float("-inf")
         self.last_observation_error = None
+        self.latest_observation_window = None
+        self.last_snapshot_record = None
+        self.last_read_stats = None
+        self.missing_close_reason = "not_observed"
+        self.missing_close_grace_seconds = 0.0
+        self.last_navigation_result = None
+        self.last_navigation_reported_reason = None
         self.last_permission_error = None
         self.last_crash_error = None
         self.last_crash_probe_error = None
@@ -415,19 +437,88 @@ class Cycle:
         self.device.log(message)
 
     def observe(self):
+        started = time.monotonic()
+        self.latest_observation_window = None
         try:
             options = {"windows": True} if UI_ALL_WINDOWS else {}
             if UI_INSPECTION_PRIORITY is not None:
                 options["priority"] = UI_INSPECTION_PRIORITY
             window = self.device.inspect_window(**options)
+            finished = time.monotonic()
+            self.last_read_stats = {"rpc_seconds": max(0.0, finished - started),
+                                    "stable_focus": window.get("stable") is True,
+                                    "application_hierarchy_missing": application_hierarchy_missing(window)}
             self.last_observation_error = None
-            return window if window.get("stable") else None
+            if window.get("stable"):
+                self.latest_observation_window = window
+                self.last_snapshot_record = window, finished, dict(self.last_read_stats)
+                return window
+            return None
         except (RuntimeError, OSError) as error:
+            self.last_read_stats = {"rpc_seconds": max(0.0, time.monotonic() - started),
+                                    "stable_focus": False, "error_class": type(error).__name__}
             detail = str(error)
             if detail != self.last_observation_error:
                 self.log("Waiting for readable Android UI: " + detail)
                 self.last_observation_error = detail
             return None
+
+    def paired_focus(self, window):
+        proof = window.get("focus_observation")
+        if (window.get("stable") is not True or not isinstance(proof, dict)
+                or proof.get("schema") != "xenoid.wm-focus-observation/v1"
+                or proof.get("exact_match") is not True or proof.get("geometry_match") is not True
+                or type(proof.get("display_id")) is not int or proof["display_id"] != window.get("display_id")
+                or proof.get("package") != window.get("package")
+                or not isinstance(proof.get("component"), str) or not isinstance(window.get("component"), str)
+                or self.canonical_component(proof.get("component", "")) != self.canonical_component(window.get("component", ""))
+                or not isinstance(proof.get("token"), str) or not re.fullmatch(r"[0-9a-fA-F]{1,32}", proof["token"])
+                or type(proof.get("user")) is not int or proof["user"] < 0):
+            return None
+        elapsed = proof.get("elapsed_seconds")
+        if type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed < 0:
+            return None
+        return proof
+
+    def tap_observed_navigation(self, window, reason):
+        """Choose a fresh one-shot native action; never fall back to coordinates or an ADB key."""
+        proof = self.paired_focus(window)
+        record = self.last_snapshot_record
+        now = time.monotonic()
+        if proof is None:
+            self.missing_close_reason = "focus_or_geometry_unproven"
+            return False
+        if (record is None or self.latest_observation_window is not window or record[0] is not window or
+                not 0 <= now - record[1] <= AD_NAV_SNAPSHOT_MAX_SECONDS or self.last_action > record[1]):
+            self.missing_close_reason = "snapshot_not_latest_or_expired"
+            return False
+        if self.observed_navigation_back(window) is None:
+            self.missing_close_reason = "native_back_not_observed"
+            return False
+        token = window.get("native_navigation_observation")
+        handler = getattr(self.device, "click_window_action", None)
+        if not isinstance(token, str) or not token.startswith("xenoid-native-navigation/v1:") or not callable(handler):
+            self.missing_close_reason = "native_navigation_offer_unavailable"
+            return False
+        result = handler({"observation": token}, "back")
+        if not isinstance(result, dict) or result.get("official_backend") != "xenoid_native":
+            raise RuntimeError("Official native navigation was not confirmed")
+        self.last_navigation_result = {key: result.get(key) for key in
+            ("handled", "action", "reason", "official_backend", "input_sent", "verification_seconds", "observation_age_seconds", "verification_stages")}
+        if result.get("reason") != self.last_navigation_reported_reason:
+            self.log("Native navigation verification " + json.dumps(self.last_navigation_result, separators=(",", ":")))
+            self.last_navigation_reported_reason = result.get("reason")
+        if result.get("handled") is not True:
+            code = result.get("reason", "native_navigation_not_sent")
+            self.missing_close_reason = code if isinstance(code, str) and re.fullmatch(r"[a-z_]{1,96}", code) else "native_navigation_not_sent"
+            return False
+        if result.get("input_sent") is not True or result.get("action") != "back":
+            raise RuntimeError("Official native navigation input was not confirmed")
+        self.invalidate_idle_monitor()
+        self.last_action = time.monotonic()
+        self.missing_close_reason = "observed_native_navigation_sent"
+        self.log("Input sent: " + reason)
+        return True
 
 
     def tap(self, control, reason):
@@ -585,30 +676,40 @@ class Cycle:
                 or is_terms(window) or is_notification(window) or is_crash_dialog(window)
                 or window.get("package") == VPN_PACKAGE):
             self.missing_ad_close = None
+            self.missing_close_reason = "not_a_confirmed_ad"
             return False
         # An ambiguous pair of real Close controls is not an absent Close.
         if any(self.close_control({**window, "controls": [control]}, AD_CLOSE_SELECTORS,
                                   geometric=False) is not None for control in controls(window)):
             self.missing_ad_close = None
+            self.missing_close_reason = "semantic_close_present_or_ambiguous"
             return False
         def semantic_text(value):
             return re.sub(r"\d+(?:\.\d+)?", "#", normalized(value))
         content = tuple(sorted({(control.get("class_name", ""), control.get("resource_id", ""),
                                  semantic_text(control.get("text", "")), semantic_text(control.get("content_desc", "")),
                                  bool(control.get("clickable"))) for control in controls(window)}))
-        key = (window.get("package"), self.canonical_component(window.get("component", "")), content)
+        proof = self.paired_focus(window)
+        identity = ((proof["token"], proof["user"], proof["display_id"]) if proof is not None else None)
+        key = (window.get("package"), self.canonical_component(window.get("component", "")), identity, content)
         now = time.monotonic()
         if self.missing_ad_close is None or self.missing_ad_close[0] != key:
-            self.missing_ad_close = key, now
-            return False
+            # Only the broker's matched independent WM samples may credit a
+            # slow inspection. Time before RPC dispatch/setup cannot count.
+            credited = (min(AD_MISSING_CLOSE_BACK_SECONDS, proof["elapsed_seconds"])
+                        if proof is not None and proof.get("basis") == "independent_wm_focus_pair" else 0.0)
+            self.missing_ad_close = key, now - credited
+        self.missing_close_grace_seconds = max(0.0, now - self.missing_ad_close[1])
         if (now - self.missing_ad_close[1] < AD_MISSING_CLOSE_BACK_SECONDS
                 or now - self.last_action < ACTION_COOLDOWN_SECONDS
                 or self.missing_ad_close_backs.get(key, 0) >= AD_MISSING_CLOSE_BACK_LIMIT):
+            self.missing_close_reason = ("grace_not_elapsed" if self.missing_close_grace_seconds < AD_MISSING_CLOSE_BACK_SECONDS
+                else "action_cooldown" if now - self.last_action < ACTION_COOLDOWN_SECONDS else "back_attempt_budget_exhausted")
             return False
-        back = self.observed_navigation_back(window)
-        if back is None:
+        reason = ("leave confirmed ad with partial app hierarchy via observed Android Back"
+                  if application_hierarchy_missing(window) else "dismiss ad with no exposed Close via observed Android Back")
+        if not self.tap_observed_navigation(window, reason):
             return False
-        self.tap(back, "dismiss ad with no exposed Close via observed Android Back")
         self.missing_ad_close_backs[key] = self.missing_ad_close_backs.get(key, 0) + 1
         self.missing_ad_close = None
         return True
@@ -634,10 +735,9 @@ class Cycle:
                 if (origin["attempts"] >= AD_LANDING_ORIGIN_BACK_LIMIT
                         or now - self.last_action < ACTION_COOLDOWN_SECONDS):
                     return False
-                selected = self.observed_navigation_back(window)
-                if selected is None:
+                if not self.tap_observed_navigation(window,
+                        "dismiss originating ad after store return via observed Android Back"):
                     return False
-                self.tap(selected, "dismiss originating ad after store return via observed Android Back")
                 origin["attempts"] += 1
                 return True
             elif window.get("package") == self.package and not is_ad(window):
@@ -649,13 +749,13 @@ class Cycle:
         self.ad_unsafe_targets.add(previous["target"])
         if self.ad_landing_returns >= AD_LANDING_RETURN_LIMIT:
             raise RuntimeError("Configured ad landing return limit exhausted; assigned app is not ready")
-        selected = self.observed_navigation_back(window)
-        if selected is None or now - self.last_action < ACTION_COOLDOWN_SECONDS:
+        if now - self.last_action < ACTION_COOLDOWN_SECONDS:
+            return False
+        if not self.tap_observed_navigation(window, "return from ad landing via observed Android Back"):
             return False
         self.ad_landing_returns += 1
         self.log("Ad close reached configured external package: " + window["package"]
                  + "; using observed Android Back without reset")
-        self.tap(selected, "return from ad landing via observed Android Back")
         self.ad_landing_origin = {"package": previous["package"],
                                   "component": self.canonical_component(previous["component"]),
                                   "at": time.monotonic(), "attempts": 0}
@@ -699,7 +799,8 @@ class Cycle:
         available = self.ad_close_control(window)
         candidates = sum(self.close_control({**window, "controls": [item]}, AD_CLOSE_SELECTORS,
                                             geometric=False) is not None for item in controls(window))
-        reason = ("no_semantic_close" if not candidates else "ambiguous_semantic_close" if selected is None
+        reason = ("application_hierarchy_unavailable" if application_hierarchy_missing(window) else
+                  "no_semantic_close" if not candidates else "ambiguous_semantic_close" if selected is None
                   else "close_attempt_budget_exhausted" if available is None else "close_still_observed")
         vocabulary = CLOSE_LABEL_TOKENS | CLOSE_REJECT_TOKENS | AD_CLOSE_INFO_TOKENS
         rows, used = [], 0
@@ -727,13 +828,53 @@ class Cycle:
                 continue
             rows.append(line)
             used += len(line.encode()) + 1
+        proof = self.paired_focus(window)
+        back = self.observed_navigation_back(window)
+        record = self.last_snapshot_record
+        held_age = (max(0.0, time.monotonic() - record[1]) if record is not None and record[0] is window else None)
+        snapshot_sha = hashlib.sha256(encoded).hexdigest()
+        window_rows, window_used = [], 0
+        for index, item in enumerate(window.get("windows", ())[:16]):
+            row = {key: item.get(key) for key in
+                   ("window_id", "window_layer", "window_type", "window_bounds", "window_active", "window_focused",
+                    "display_id", "root_node_present_in_XML", "root_package", "raw_node_count")}
+            row.update(snapshot_sha256=snapshot_sha, index=index, control_count=len(item.get("controls", ())))
+            line = "Ad window evidence " + json.dumps(row, separators=(",", ":"))
+            if len(line.encode()) > 1600 or window_used + len(line.encode()) + 1 > 8192:
+                continue
+            window_rows.append(line)
+            window_used += len(line.encode()) + 1
+        observation = "Ad observation evidence " + json.dumps({
+            "schema": "xenoid.ad-observation-evidence/v1", "snapshot_sha256": snapshot_sha,
+            "held_snapshot_age_seconds": held_age, "last_read": self.last_read_stats,
+            "fallback_reason": self.missing_close_reason, "grace_seconds": self.missing_close_grace_seconds,
+            "focus_pair": ({key: proof.get(key) for key in
+                ("exact_match", "basis", "elapsed_seconds", "hierarchy_read_seconds", "hierarchy_inspection_seconds",
+                 "geometry_match", "geometry", "hierarchy_state", "application_windows", "active_application_windows",
+                 "node_age_basis")} if proof is not None else None)}, separators=(",", ":"))
+        navigation = "Ad navigation evidence " + json.dumps({
+            "schema": "xenoid.ad-navigation-evidence/v1", "snapshot_sha256": snapshot_sha,
+            "last_native_navigation": self.last_navigation_result,
+            "native_back_bounds": back.get("bounds") if back else None,
+            "native_back_window_bounds": back.get("window_bounds") if back else None}, separators=(",", ":"))
+        observation_ok, navigation_ok = len(observation.encode()) <= 1600, len(navigation.encode()) <= 1600
         self.log("Ad close evidence " + json.dumps({"schema": "xenoid.ad-close-evidence/v1",
-                 "snapshot_sha256": hashlib.sha256(encoded).hexdigest(), "reason": reason,
+                 "snapshot_sha256": snapshot_sha, "reason": reason,
                  "controls_total": len(items), "controls_recorded": len(rows),
                  "controls_omitted": len(items) - len(rows), "semantic_candidates": candidates,
                  "observed_native_back": self.observed_navigation_back(window) is not None,
                  "back_attempts": sum(self.missing_ad_close_backs.values()),
+                 "application_hierarchy_missing": application_hierarchy_missing(window),
+                 "window_count": len(window.get("windows", ())), "windows_recorded": len(window_rows),
+                 "windows_omitted": max(0, len(window.get("windows", ())) - len(window_rows)),
+                 "observation_recorded": observation_ok, "navigation_recorded": navigation_ok,
                  "source": "held_snapshot_no_additional_read"}, separators=(",", ":")))
+        if observation_ok:
+            self.log(observation)
+        if navigation_ok:
+            self.log(navigation)
+        for line in window_rows:
+            self.log(line)
         for line in rows:
             self.log(line)
 
@@ -914,7 +1055,11 @@ class Cycle:
         return window
 
     def dismiss_ads(self):
+        if (type(AD_RECOVERY_VERIFY_SECONDS) not in (int, float) or
+                not math.isfinite(AD_RECOVERY_VERIFY_SECONDS) or AD_RECOVERY_VERIFY_SECONDS < 0):
+            raise ValueError("Use a nonnegative finite post-Back verification allowance")
         deadline = time.monotonic() + AD_READY_SECONDS if AD_READY_SECONDS else None
+        recovery_verification_used = False
         quiet_since = None
         while deadline is None or time.monotonic() < deadline:
             window = self.observe()
@@ -939,7 +1084,11 @@ class Cycle:
                 quiet_since = None
             elif window and self.service_missing_ad_close(window):
                 quiet_since = None
-            elif window and not loading and not is_blocking_ad(window, self.package) and window.get("package") == self.package:
+                if deadline is not None and not recovery_verification_used:
+                    deadline = max(deadline, time.monotonic() + AD_RECOVERY_VERIFY_SECONDS)
+                    recovery_verification_used = True
+            elif (window and not loading and not application_hierarchy_missing(window)
+                  and not is_blocking_ad(window, self.package) and window.get("package") == self.package):
                 if quiet_since is None:
                     quiet_since = time.monotonic()
                 if time.monotonic() - quiet_since >= POST_ACTION_QUIET_SECONDS:
@@ -1005,6 +1154,7 @@ class Cycle:
                        or (not loading and self.service_dialog(window, ads=ads))))
             self.check_target_crash()
             blocked = (not window or loading or is_crash_dialog(window) or is_terms(window) or is_notification(window)
+                       or application_hierarchy_missing(window)
                        or window.get("package") == VPN_PACKAGE or (ads and is_blocking_ad(window, self.package)))
             if handled or blocked:
                 quiet_since = None
@@ -1029,15 +1179,15 @@ class Cycle:
                 window = self.prepare_screen(remaining)
                 if deadline is not None and time.monotonic() >= deadline:
                     break
-            selected = explicit_control(window, CONNECT_SELECTORS)
-            if selected is None:
+            selected = explicit_control(window, CONNECT_SELECTORS) if not application_hierarchy_missing(window) else None
+            if selected is None and not application_hierarchy_missing(window):
                 selected = choose_unique([(1, control) for control in controls(window)
                                           if control.get("package", self.package) == self.package
                                           and labels(control) & CONNECT_WORDS])
             if selected:
                 self.tap(selected, "Connect button")
                 return
-            if CONNECT_POSITION is not None:
+            if CONNECT_POSITION is not None and not application_hierarchy_missing(window):
                 point = CONNECT_POSITION
                 if (not isinstance(point, (tuple, list)) or len(point) != 2
                         or any(type(value) is not int for value in point)):
@@ -1080,6 +1230,7 @@ class Cycle:
                 self.check_target_crash()
                 # After any click, obtain a fresh hierarchy before declaring authorization.
                 unobstructed = (not last_loading and window.get("package") == self.package and not is_crash_dialog(window)
+                                and not application_hierarchy_missing(window)
                                 and not is_terms(window) and not is_notification(window) and not is_blocking_ad(window, self.package))
                 if not handled and unobstructed and self.vpn_allowed():
                     self.log("Android VPN permission confirmed (including previously authorized apps)")

@@ -47,6 +47,18 @@ def window_snapshot(hierarchy, display_id=0):
     windows, active, navigation = [], [], []
     for window in displays[0].iter("window"):
         box = ANDROID_BOUNDS.fullmatch(window.get("bounds", ""))
+        # Stock Android --windows places its root under a direct hierarchy
+        # wrapper. Older readers can put the node directly under this window.
+        # Never borrow a descendant child-window root or resolve mixed roots.
+        direct_roots = [child for child in window if child.tag == "node"]
+        hierarchies = [child for child in window if child.tag == "hierarchy"]
+        wrapped_roots = [child for hierarchy in hierarchies for child in hierarchy
+                         if child.tag == "node"]
+        roots = direct_roots + wrapped_roots
+        unambiguous_root = ((len(direct_roots) == 1 and not hierarchies)
+                            or (not direct_roots and len(hierarchies) == 1 and len(wrapped_roots) == 1))
+        root_package = roots[0].get("package", "") if unambiguous_root else ""
+        root_package = root_package if ANDROID_PACKAGE.fullmatch(root_package) else ""
         metadata = {"display_id": display_id,
                     "window_id": int(window.get("id")) if window.get("id") is not None else None,
                     "window_layer": int(window.get("layer", "0")),
@@ -56,13 +68,17 @@ def window_snapshot(hierarchy, display_id=0):
                     "window_active": window.get("active") == "true",
                     "window_focused": window.get("focused") == "true"}
         controls = []
+        raw_node_count = 0
         stack = list(reversed(list(window)))
         while stack:
             node = stack.pop()
             if node.tag == "window":
                 continue  # Child windows are enumerated separately, never duplicated.
             stack.extend(reversed(list(node)))
-            if node.tag != "node" or node.get("visible-to-user") == "false":
+            if node.tag != "node":
+                continue
+            raw_node_count += 1
+            if node.get("visible-to-user") == "false":
                 continue
             bounds = ANDROID_BOUNDS.fullmatch(node.get("bounds", ""))
             if not bounds:
@@ -76,7 +92,8 @@ def window_snapshot(hierarchy, display_id=0):
                              "package": node.get("package", ""), "bounds": [left, top, right, bottom],
                              "enabled": node.get("enabled") == "true", "clickable": node.get("clickable") == "true"})
         is_navigation = metadata["window_type"] == "TYPE_SYSTEM" and metadata["window_title"] == "Navigation bar"
-        windows.append({**metadata, "controls": controls})
+        windows.append({**metadata, "root_node_present_in_XML": bool(roots), "root_package": root_package,
+                        "raw_node_count": raw_node_count, "controls": controls})
         if is_navigation:
             navigation.extend(controls)
         elif metadata["window_active"] or metadata["window_focused"]:

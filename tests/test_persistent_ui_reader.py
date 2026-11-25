@@ -36,6 +36,12 @@ while True:
  if not data:break
  magic,seq,flags=struct.unpack('>IIB',data)
  if flags==127:reply(seq,0,b'BYE');break
+ if flags==4:
+  display=struct.unpack('>i',inp.read(4))[0]
+  if mode=='navslow':time.sleep(20)
+  if mode=='navoversize':out.write(struct.pack('>IIBI',MAGIC,seq,0,17000));out.flush();continue
+  if mode=='naverror':reply(seq,1,b'nav_back_unavailable');continue
+  reply(seq,0,b'{"schema":"xenoid.nav-node-proof/v1","display_id":'+str(display).encode()+b'}');continue
  if mode=='slow':time.sleep(20)
  if mode=='error':reply(seq,1,b'stock_dump_no_xml');continue
  if mode=='badmagic':out.write(struct.pack('>IIBI',0,seq,0,0));out.flush();continue
@@ -54,6 +60,27 @@ class PipeTests(unittest.TestCase):
   self.assertEqual(p.process.pid,pid);self.assertIsNone(p.process.poll())
  def test_split_frames_and_diagnostics_do_not_require_one_os_read(self):
   p,_=self.process('split');self.assertEqual(p.request(False,time.monotonic()+1),b'<hierarchy></hierarchy>')
+ def test_navigation_and_legacy_stock_requests_share_ordered_pipe_without_app_dump(self):
+  p,_=self.process('split');pid=p.process.pid
+  self.assertIn(b'"display_id":3',p.navigation(3,time.monotonic()+1))
+  self.assertEqual(p.request(True,None),b'<displays></displays>')
+  self.assertIn(b'"display_id":0',p.navigation(0,None))
+  self.assertEqual(p.request(False,None),b'<hierarchy></hierarchy>')
+  self.assertEqual(p.process.pid,pid);self.assertEqual(p.sequence,4)
+ def test_navigation_error_preserves_framing_but_oversize_timeout_reap_owned_pipe(self):
+  p,cleaned=self.process('naverror')
+  with self.assertRaisesRegex(u.DumpFailed,'nav_back_unavailable'):p.navigation(0,None)
+  self.assertEqual(p.request(False,None),b'<hierarchy></hierarchy>');self.assertFalse(cleaned)
+  for mode in ('navoversize','navslow'):
+   with self.subTest(mode=mode):
+    p,cleaned=self.process(mode)
+    with self.assertRaises((u.UiReaderError,TimeoutError)):p.navigation(0,time.monotonic()+.03)
+    self.assertTrue(p.closed);self.assertIsNotNone(p.process.poll());self.assertEqual(len(cleaned),1)
+ def test_navigation_rejects_invalid_display_without_poisoning_framing(self):
+  p,_=self.process()
+  for invalid in (-1,True,2147483648,'0'):
+   with self.assertRaises(ValueError):p.navigation(invalid,None)
+  self.assertEqual(p.sequence,0);self.assertEqual(p.request(False,None),b'<hierarchy></hierarchy>')
  def test_stock_error_never_returns_previous_xml_and_keeps_framing(self):
   p,cleaned=self.process('error')
   for _ in range(2):
@@ -98,7 +125,30 @@ class PipeTests(unittest.TestCase):
 
 class NativeFenceTests(unittest.TestCase):
  def reader(self):
-  r=object.__new__(u.PersistentUiReader);r.pipe=Mock();r.closed=False;r.manager=object();r._verify=Mock();r._helper=Mock();r.close=Mock();return r
+  r=object.__new__(u.PersistentUiReader);r.pipe=Mock();r.pipe.closed=False;r.closed=False;r.started=True;r.manager=object();r._verify=Mock();r._helper=Mock();r.close=Mock();return r
+ def test_navigation_timeout_cleanup_keeps_same_existing_instance_owner_without_recursion(self):
+  r=self.reader();operation=threading.Lock();failure=TimeoutError('fixture navigation timeout')
+  r.pipe.navigation.side_effect=failure
+  def cleanup(**kwargs):
+   self.assertFalse(operation.acquire(blocking=False),'cleanup must not reacquire the owner')
+   self.assertEqual(kwargs,{'force':True})
+  r.close.side_effect=cleanup
+  with operation:
+   with self.assertRaises(TimeoutError)as caught:r.navigation(object(),0,time.monotonic()+1)
+  self.assertIs(caught.exception,failure);r.close.assert_called_once_with(force=True)
+ def test_navigation_runtime_change_and_cleanup_failure_keep_original_exception(self):
+  r=self.reader();failure=u.UiReaderError('ui_reader_runtime_changed')
+  r._verify.side_effect=[None,failure];r.pipe.navigation.return_value=b'{"schema":"xenoid.nav-node-proof/v1"}'
+  cleanup=RuntimeError('fixture cleanup failure');r.close.side_effect=cleanup
+  with self.assertRaises(u.UiReaderError)as caught:r.navigation(object(),0,None)
+  self.assertIs(caught.exception,failure);self.assertIs(caught.exception.cleanup_error,cleanup)
+ def test_navigation_never_starts_missing_reader_and_stock_failure_remains_synchronized(self):
+  r=self.reader();r.started=False;r.start=Mock()
+  with self.assertRaisesRegex(u.UiReaderError,'unavailable'):r.navigation(object(),0,None)
+  r.start.assert_not_called();r.close.assert_not_called()
+  r.started=True;r.pipe.navigation.side_effect=u.DumpFailed('nav_root_unavailable')
+  with self.assertRaises(u.DumpFailed):r.navigation(object(),0,None)
+  r.close.assert_not_called()
  def test_runtime_changed_after_read_discards_xml_and_closes(self):
   r=self.reader();r._verify.side_effect=[None,u.UiReaderError('ui_reader_runtime_changed')];r.pipe.request.return_value=b'<hierarchy/>'
   with self.assertRaisesRegex(u.UiReaderError,'runtime_changed'):r.read(object(),False,None)

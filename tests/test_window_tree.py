@@ -65,6 +65,57 @@ class WindowTreeTests(unittest.TestCase):
         result=window_snapshot(source)
         self.assertEqual(sum(c['text']=='Child Close' for c in result['controls']),1)
 
+    def stock_window(self, content):
+        return ('<displays><display id="0"><window id="9" type="TYPE_APPLICATION" '
+                'bounds="[0,0][100,100]" active="true" focused="true">' + content
+                + '</window></display></displays>')
+
+    def stock_node(self, package="com.example.vpn"):
+        return ('<node package="' + package + '" bounds="[0,0][100,100]" '
+                'enabled="true"><node text="Connect" package="' + package + '" '
+                'bounds="[10,10][30,30]" enabled="true"/></node>')
+
+    def test_stock_hierarchy_wrapper_proves_same_window_root_and_preserves_controls(self):
+        node = self.stock_node()
+        wrapped = window_snapshot(self.stock_window('<hierarchy rotation="0">' + node + '</hierarchy>'))
+        direct = window_snapshot(self.stock_window(node))
+        self.assertEqual(wrapped, direct)
+        self.assertTrue(wrapped['windows'][0]['root_node_present_in_XML'])
+        self.assertEqual(wrapped['windows'][0]['root_package'], 'com.example.vpn')
+        self.assertEqual(len(wrapped['controls']), 2)
+
+    def test_stock_null_root_remains_missing(self):
+        for content in ('', '<hierarchy rotation="0"/>'):
+            item = window_snapshot(self.stock_window(content))['windows'][0]
+            self.assertFalse(item['root_node_present_in_XML'])
+            self.assertEqual(item['root_package'], '')
+
+    def test_mixed_and_duplicate_root_encodings_cannot_claim_owner(self):
+        node = self.stock_node()
+        for content in (node + '<hierarchy>' + node + '</hierarchy>',
+                        '<hierarchy>' + node + node + '</hierarchy>',
+                        '<hierarchy>' + node + '</hierarchy><hierarchy/>', node + node):
+            with self.subTest(content=content):
+                item = window_snapshot(self.stock_window(content))['windows'][0]
+                self.assertTrue(item['root_node_present_in_XML'])
+                self.assertEqual(item['root_package'], '')
+
+    def test_child_window_root_is_not_borrowed_by_parent(self):
+        nested = ('<window id="10" type="TYPE_APPLICATION" active="false" focused="false">'
+                  '<hierarchy>' + self.stock_node() + '</hierarchy></window>')
+        result = window_snapshot(self.stock_window(nested))
+        self.assertFalse(result['windows'][0]['root_node_present_in_XML'])
+        self.assertEqual(result['windows'][0]['controls'], [])
+        self.assertTrue(result['windows'][1]['root_node_present_in_XML'])
+        self.assertEqual(result['windows'][1]['root_package'], 'com.example.vpn')
+
+    def test_unrecognized_descendant_wrapper_cannot_claim_root(self):
+        content = '<other><hierarchy>' + self.stock_node() + '</hierarchy></other>'
+        item = window_snapshot(self.stock_window(content))['windows'][0]
+        self.assertFalse(item['root_node_present_in_XML'])
+        self.assertEqual(item['root_package'], '')
+        self.assertEqual(len(item['controls']), 2)
+
     def test_legacy_hierarchy_shape_kept(self):
         result=window_snapshot('<hierarchy><node text="Allow" bounds="[1,1][5,5]" enabled="true"/></hierarchy>')
         self.assertEqual(result['controls'][0]['text'],'Allow')

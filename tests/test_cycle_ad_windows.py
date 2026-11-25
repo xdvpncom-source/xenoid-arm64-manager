@@ -38,7 +38,21 @@ class Replay:
     def __init__(self,window,on_tap=None,on_back=MAIN,on_ad_back=None):
         self.window=window;self.on_tap=on_tap;self.on_back=on_back;self.on_ad_back=on_ad_back;self.actions=[];self.logs=[]
     def settings(self):return {'android_user':0}
-    def inspect_window(self,**kwargs):self.actions.append(('read',));return self.window
+    def inspect_window(self,**kwargs):
+        self.actions.append(('read',));self.snapshot=copy.deepcopy(self.window)
+        self.snapshot['native_navigation_observation']='xenoid-native-navigation/v1:local-landing-fixture'
+        self.snapshot['focus_observation']={'schema':'xenoid.wm-focus-observation/v1','exact_match':True,
+            'geometry_match':True,'display_id':self.snapshot.get('display_id',0),'token':'a123','user':0,
+            'package':self.snapshot['package'],'component':self.snapshot['component'],'elapsed_seconds':0}
+        return self.snapshot
+    def click_window_action(self,window,action):
+        assert action=='back' and window['observation']==self.snapshot['native_navigation_observation']
+        selected=m.Cycle.observed_navigation_back(self.snapshot)
+        assert selected is not None
+        if getattr(self,'reject_navigation',False):
+            return {'handled':False,'input_sent':False,'action':'back','official_backend':'xenoid_native','reason':'navigation_back_node_changed_or_unproven'}
+        self.tap(*m.center(m.bounds(selected)))
+        return {'handled':True,'input_sent':True,'action':'back','official_backend':'xenoid_native'}
     def tap(self,x,y):
         self.actions.append(('native_tap',x,y))
         if self.window.get('package')=='com.android.vending' and (x,y)==(42,345):self.window=self.on_back
@@ -126,7 +140,7 @@ class AdTests(unittest.TestCase):
     def test_second_back_requires_same_origin_component_and_live_provenance(self):
         d=Replay(W_AD,on_tap=STORE,on_back=W_AD);c=self.cycle(d)
         c.close_ad_control(W_AD,c.ad_close_control(W_AD));self.clock.now+=3
-        self.assertTrue(c.return_from_ad_landing(STORE));self.clock.now+=3
+        self.assertTrue(c.return_from_ad_landing(c.observe()));self.clock.now+=3
         different={**W_AD,'component':'v2.vpn.fast/another.AdActivity'}
         self.assertFalse(c.return_from_ad_landing(different))
         self.clock.now+=m.AD_LANDING_PROVENANCE_SECONDS+1
@@ -135,7 +149,7 @@ class AdTests(unittest.TestCase):
     def test_second_back_requires_fresh_real_navigation_control(self):
         d=Replay(W_AD,on_tap=STORE,on_back=W_AD);c=self.cycle(d)
         c.close_ad_control(W_AD,c.ad_close_control(W_AD));self.clock.now+=3
-        self.assertTrue(c.return_from_ad_landing(STORE));self.clock.now+=3
+        self.assertTrue(c.return_from_ad_landing(c.observe()));self.clock.now+=3
         for window in ({**W_AD,'navigation_controls':[]},{**W_AD,'stable':False}):
             self.assertFalse(c.return_from_ad_landing(window))
         self.assertEqual(d.actions.count(('native_tap',42,345)),1)
@@ -148,7 +162,7 @@ class AdTests(unittest.TestCase):
         self.assertTrue(m.is_ad(inline));self.assertFalse(m.is_ad_activity(inline))
         d=Replay(inline,on_tap=STORE,on_back=inline);c=self.cycle(d)
         c.close_ad_control(inline,c.ad_close_control(inline));self.clock.now+=3
-        self.assertTrue(c.return_from_ad_landing(STORE));self.clock.now+=3
+        self.assertTrue(c.return_from_ad_landing(c.observe()));self.clock.now+=3
         self.assertFalse(c.return_from_ad_landing(inline))
         self.assertEqual(d.actions.count(('native_tap',42,345)),1)
     def test_same_unresponsive_semantic_target_is_bounded(self):
@@ -169,7 +183,7 @@ class AdTests(unittest.TestCase):
     def test_new_accessibility_window_id_does_not_unblock_redirecting_target(self):
         d=Replay(W_AD,on_tap=STORE);c=self.cycle(d)
         c.close_ad_control(W_AD,c.ad_close_control(W_AD));self.clock.now+=3
-        self.assertTrue(c.return_from_ad_landing(STORE))
+        self.assertTrue(c.return_from_ad_landing(c.observe()))
         changed=copy.deepcopy(W_AD)
         for control in changed['controls']:control['window_id']+=100
         self.assertIsNone(c.ad_close_control(changed))
@@ -193,6 +207,18 @@ class AdTests(unittest.TestCase):
     def test_expired_provenance_is_not_reused(self):
         d=Replay(ad());c=self.cycle(d);c.close_ad_control(d.window,d.window['controls'][-1]);self.clock.now=121
         self.assertFalse(c.return_from_ad_landing(STORE));self.assertNotIn(('native_tap',42,345),d.actions)
+    def test_rejected_fresh_landing_back_does_not_consume_return_or_origin_attempts(self):
+        d=Replay(W_AD,on_tap=STORE,on_back=W_AD);c=self.cycle(d)
+        c.close_ad_control(W_AD,c.ad_close_control(W_AD));self.clock.now+=3
+        d.reject_navigation=True
+        self.assertFalse(c.return_from_ad_landing(c.observe()))
+        self.assertEqual(c.ad_landing_returns,0);self.assertIsNone(c.ad_landing_origin)
+        d.reject_navigation=False
+        self.assertTrue(c.return_from_ad_landing(c.observe()));self.clock.now+=3
+        d.reject_navigation=True
+        self.assertFalse(c.return_from_ad_landing(c.observe()))
+        self.assertEqual(c.ad_landing_returns,1);self.assertEqual(c.ad_landing_origin['attempts'],0)
+        self.assertEqual(d.actions.count(('native_tap',42,345)),1)
     def test_return_does_not_loop_when_store_stays_foreground(self):
         d=Replay(ad(),on_tap=STORE,on_back=STORE);c=self.cycle(d)
         with self.assertRaisesRegex(RuntimeError,'return limit exhausted'):c.dismiss_ads()

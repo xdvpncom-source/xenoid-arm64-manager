@@ -11,6 +11,7 @@ class Headroom(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name)
         self.proc=self.root/'proc';self.proc.mkdir();p=self.proc/'123';p.mkdir();(p/'stat').write_text('123 (init) '+' '.join(['S']+['0']*18+['67890'])+'\n');(p/'cgroup').write_text('0::/system.slice/docker-'+CID+'.scope\n')
+        boot=self.proc/'sys/kernel/random/boot_id';boot.parent.mkdir(parents=True);boot.write_text('11111111-2222-4333-8444-555555555555\n')
         self.cg=self.root/'cgroup';self.folder=self.cg/'system.slice'/('docker-'+CID+'.scope');self.folder.mkdir(parents=True)
         for k,v in {'memory.current':'1700000000','memory.max':str(q.MAX_BYTES),'memory.high':'max','memory.swap.max':str(q.SWAP_BYTES),'memory.events':'oom 0\noom_kill 0','memory.pressure':'some avg10=0.00','cpu.max':'100000 100000'}.items():(self.folder/k).write_text(v+'\n')
         self.owned={'Id':CID,'Image':'sha256:'+'b'*64,'State':{'Running':True,'Pid':123,'StartedAt':'2026-01-01T00:00:00Z'},'Config':{'Labels':{'dev.xenoid.owner':'xenoid','dev.xenoid.instance_id':IID,'dev.xenoid.resource_tag':TAG}},'HostConfig':{'NanoCpus':1000000000,'Memory':q.MAX_BYTES,'MemorySwap':q.MAX_BYTES+q.SWAP_BYTES}}
@@ -22,7 +23,16 @@ class Headroom(unittest.TestCase):
         real_write=os.write
         def cgroup_write(fd,body):
             result=real_write(fd,body);os.ftruncate(fd,len(body));return result
-        self.writer=patch.object(q,'_memory_write',side_effect=lambda fd,body,record,timeout:cgroup_write(fd,body));self.writer.start();self.addCleanup(self.writer.stop)
+        self.systemd_high='infinity';self.systemd_calls=[]
+        self.scope_reader=patch.object(q,'_memory_scope_read',side_effect=lambda unit,relative,timeout:{
+            'unit':unit,'control_group':relative,'memory_high':self.systemd_high,'other_definitions':{}})
+        self.scope_reader.start();self.addCleanup(self.scope_reader.stop)
+        def writer(fd,body,record,timeout,*,command=None):
+            if command is None:return cgroup_write(fd,body)
+            self.systemd_calls.append(command)
+            self.systemd_high=command[-1].split('=',1)[1]
+            (self.folder/'memory.high').write_text(('max'if self.systemd_high=='infinity'else self.systemd_high)+'\n')
+        self.writer=patch.object(q,'_memory_write',side_effect=writer);self.writer.start();self.addCleanup(self.writer.stop)
     def apply(self,**kw):return q.ensure_memory_headroom(self.manager,CID,reserve_mib=kw.pop('reserve_mib',256),proc_root=self.proc,cgroup_root=self.cg,state_root=self.state,**kw)
     def test_actual_write_readback_receipt_and_rollback(self):
         caps=[(self.folder/n).read_bytes()for n in('memory.max','memory.swap.max','cpu.max')]
@@ -155,6 +165,143 @@ class Headroom(unittest.TestCase):
             wait.assert_called_once_with(987654,os.WNOHANG)
         for fd in created:
             with self.assertRaises(OSError):os.fstat(fd)
+
+    @unittest.skipUnless(Path('/proc/self/stat').exists() and hasattr(os,'fork'),'Linux fork/proc required')
+    def test_actual_gated_command_exec_is_reaped(self):
+        import sys
+        self.writer.stop();record=[];output=self.root/'command-output'
+        command=(sys.executable,'-c','from pathlib import Path;Path('+repr(str(output))+').write_text("owned")')
+        q._memory_write(-1,b'',record.append,1,command=command)
+        self.assertEqual(output.read_text(),'owned')
+        with self.assertRaises(ChildProcessError):os.waitpid(record[0]['pid'],os.WNOHANG)
+
+    @unittest.skipUnless(Path('/proc/self/stat').exists() and hasattr(os,'fork'),'Linux fork/proc required')
+    def test_actual_gated_command_timeout_has_no_late_side_effect(self):
+        import sys,time
+        self.writer.stop();record=[];output=self.root/'late-command-output'
+        command=(sys.executable,'-c','import time;from pathlib import Path;time.sleep(1);Path('+repr(str(output))+').write_text("late")')
+        with self.assertRaisesRegex(RuntimeError,'timed_out_child_reaped'):
+            q._memory_write(-1,b'',record.append,0.05,command=command)
+        time.sleep(0.1);self.assertFalse(output.exists())
+        with self.assertRaises(ChildProcessError):os.waitpid(record[0]['pid'],os.WNOHANG)
+
+    def test_high_dropin_cannot_hide_foreign_policy_or_unresolved_value(self):
+        high=str(q.HIGH_BYTES)
+        q._memory_high_definition(('# systemd runtime property\n\n[Scope]\nMemoryHigh='+high+'\n').encode(),high)
+        for raw in (('[Scope]\nMemoryHigh='+high+'\nMemoryLow=1G\n').encode(),
+                    b'[Unit]\nDescription=admin\n[Scope]\nMemoryHigh=infinity\n',
+                    b'[Scope]\nMemoryHigh=1792M\n',
+                    ('[Scope]\nMemoryHigh='+high+'\nMemoryHigh='+high+'\n').encode()):
+            with self.assertRaisesRegex(RuntimeError,'high_definition_unqualified'):
+                q._memory_high_definition(raw,high)
+        self.assertFalse(self.state.exists());self.assertEqual(self.systemd_calls,[])
+
+    def test_invalid_setter_budget_rejects_before_property_read(self):
+        for budget in (0,-1,11,float('inf'),True):
+            with patch.object(q,'_memory_scope_read')as read:
+                with self.assertRaisesRegex(RuntimeError,'write_budget_invalid'):self.apply(timeout=budget)
+                read.assert_not_called()
+        self.assertFalse(self.state.exists())
+
+    def test_systemd_property_survives_manager_reapplication(self):
+        # A manager reload replays the unit property. It must agree with the
+        # kernel scalar instead of silently reverting an otherwise valid high.
+        self.apply()
+        self.assertEqual(self.systemd_high,str(q.HIGH_BYTES))
+        self.assertEqual(self.systemd_calls,[('/usr/bin/systemctl','set-property','--runtime','docker-'+CID+'.scope','MemoryHigh='+str(q.HIGH_BYTES))])
+        (self.folder/'memory.high').write_text(self.systemd_high+'\n')
+        self.assertFalse(self.apply()['changed'])
+        self.assertEqual(len(self.systemd_calls),1)
+
+    def test_legacy_scalar_receipt_preserved_when_unit_property_migrates(self):
+        legacy={'schema':'dev.xenoid.memory-headroom-owner/v1','instance_id':IID,
+                'container_id':CID,'image_id':self.owned['Image'],'original_high':'max',
+                'desired_high':str(q.HIGH_BYTES),'reserve_mib':256,'phase':'applied'}
+        q._memory_record(self.state/(CID+'.json'),legacy)
+        (self.folder/'memory.high').write_text(str(q.HIGH_BYTES)+'\n')
+        raw=(self.state/(CID+'.json')).read_bytes();inode=(self.state/(CID+'.json')).stat().st_ino
+        self.assertTrue(self.apply()['changed'])
+        self.assertEqual((self.state/(CID+'.json')).read_bytes(),raw)
+        self.assertEqual((self.state/(CID+'.json')).stat().st_ino,inode)
+        owner=json.loads((self.state/(CID+'.systemd.json')).read_text())
+        self.assertEqual(owner['original_unit_high'],'infinity')
+        self.assertEqual(owner['original_raw_high'],'max')
+        self.assertEqual(owner['observed_raw_before'],str(q.HIGH_BYTES))
+        self.apply(reserve_mib=0)
+        self.assertEqual(self.systemd_high,'infinity')
+        self.assertEqual((self.folder/'memory.high').read_text(),'max\n')
+        self.assertEqual(json.loads((self.state/(CID+'.systemd.json')).read_text())['phase'],'restored')
+
+    def test_lost_raw_high_keeps_existing_same_target_scalar_owner_exact(self):
+        self.apply();receipt=self.state/(CID+'.json');raw=receipt.read_bytes();inode=receipt.stat().st_ino
+        # Reproduce the observed unit/kernel divergence without rebasing the
+        # receipt: an old manager policy has restored max while owner stays1792.
+        (self.state/(CID+'.systemd.json')).unlink()
+        self.systemd_high='infinity';(self.folder/'memory.high').write_text('max\n')
+        self.assertTrue(self.apply()['changed'])
+        self.assertEqual(receipt.read_bytes(),raw);self.assertEqual(receipt.stat().st_ino,inode)
+        self.assertEqual(json.loads(receipt.read_text())['phase'],'applied')
+
+    def test_unknown_setter_ack_is_not_replayed(self):
+        with patch.object(q,'_memory_write',side_effect=RuntimeError('setter_ack_unknown'))as setter:
+            with self.assertRaisesRegex(RuntimeError,'setter_ack_unknown'):self.apply()
+            self.assertEqual(json.loads((self.state/(CID+'.systemd.json')).read_text())['phase'],'pending')
+            with self.assertRaisesRegex(RuntimeError,'pending_ack_unknown'):self.apply()
+            self.assertEqual(setter.call_count,1)
+        self.assertEqual((self.folder/'memory.high').read_text(),'max\n')
+
+    def test_accepted_unknown_ack_reconciles_without_duplicate_setter(self):
+        actual=q._memory_write
+        def accepted(*args,**kwargs):
+            actual(*args,**kwargs)
+            raise RuntimeError('lost_setter_ack')
+        with patch.object(q,'_memory_write',side_effect=accepted)as setter:
+            with self.assertRaisesRegex(RuntimeError,'lost_setter_ack'):self.apply()
+            self.assertFalse(self.apply()['changed'])
+            self.assertEqual(setter.call_count,1)
+        self.assertEqual(json.loads((self.state/(CID+'.systemd.json')).read_text())['phase'],'applied')
+
+    def test_foreign_unit_property_rejected_before_any_owner_write(self):
+        self.systemd_high=str(q.HIGH_BYTES)
+        with self.assertRaisesRegex(RuntimeError,'systemd_existing_admin_boundary'):self.apply()
+        self.assertFalse(self.state.exists());self.assertEqual(self.systemd_calls,[])
+
+    def test_unsupported_systemd_has_no_scalar_fallback(self):
+        with patch.object(q,'_memory_scope_read',side_effect=RuntimeError('headroom_systemd_unavailable')):
+            with self.assertRaisesRegex(RuntimeError,'systemd_unavailable'):self.apply()
+        self.assertFalse(self.state.exists());self.assertEqual((self.folder/'memory.high').read_text(),'max\n')
+        self.assertEqual(self.systemd_calls,[])
+
+    def test_other_unit_definitions_change_blocks_reapplication(self):
+        self.apply();before=len(self.systemd_calls)
+        with patch.object(q,'_memory_scope_read',return_value={'unit':'docker-'+CID+'.scope',
+                'control_group':'/system.slice/docker-'+CID+'.scope','memory_high':str(q.HIGH_BYTES),
+                'other_definitions':{'foreign':{'sha256':'c'*64,'mode':0o644}}}):
+            with self.assertRaisesRegex(RuntimeError,'systemd_receipt_binding_changed'):self.apply()
+        self.assertEqual(len(self.systemd_calls),before)
+
+    def test_scope_reader_rejects_wrong_manager_ownership_before_files(self):
+        import subprocess
+        unit='docker-'+CID+'.scope';relative='/system.slice/'+unit
+        fields={'Id':unit,'LoadState':'loaded','ActiveState':'active','Transient':'yes',
+                'ControlGroup':'/foreign.slice/'+unit,'MemoryHigh':'infinity',
+                'MemoryMax':str(q.MAX_BYTES),'MemorySwapMax':str(q.SWAP_BYTES),
+                'FragmentPath':'/not/read','DropInPaths':''}
+        self.scope_reader.stop()
+        with patch.object(subprocess,'run',return_value=types.SimpleNamespace(returncode=0,
+                stdout=''.join(k+'='+v+'\n'for k,v in fields.items()).encode())),patch.object(q.os,'open')as opened:
+            with self.assertRaisesRegex(RuntimeError,'systemd_owner_or_caps_changed'):
+                q._memory_scope_read(unit,relative,1)
+            opened.assert_not_called()
+
+    def test_pending_inspection_does_not_publish_reconciliation(self):
+        actual=q._memory_write
+        def accepted(*args,**kwargs):actual(*args,**kwargs);raise RuntimeError('lost_setter_ack')
+        with patch.object(q,'_memory_write',side_effect=accepted):
+            with self.assertRaisesRegex(RuntimeError,'lost_setter_ack'):self.apply()
+        before={p.name:p.read_bytes()for p in self.state.iterdir()}
+        self.apply(operation='inspect')
+        self.assertEqual({p.name:p.read_bytes()for p in self.state.iterdir()},before)
 
     def test_owning_policy_hook_and_disabled_skip(self):
         with patch.object(q,'CONFIG',self.root/'settings.json'),patch.object(q,'load_config',return_value=q.validate_config({'enabled':False})),patch.object(q,'ensure_memory_headroom')as apply:

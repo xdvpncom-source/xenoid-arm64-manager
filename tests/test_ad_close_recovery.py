@@ -133,10 +133,13 @@ class Tests(unittest.TestCase):
     def test_failure_output_is_bounded_and_omissions_truthful(self):
         self.c.ad_failure_evidence(window(*[close() for _ in range(200)]))
         header = json.loads(self.d.lines[0].split('Ad close evidence ', 1)[1])
-        self.assertEqual(header['controls_recorded'], len(self.d.lines) - 1)
+        control_lines = [line for line in self.d.lines if line.startswith('Ad control evidence ')]
+        self.assertEqual(header['controls_recorded'], len(control_lines))
         self.assertEqual(header['controls_omitted'], 200 - header['controls_recorded'])
-        self.assertLess(sum(len(line.encode()) + 1 for line in self.d.lines), 26000)
-        self.assertTrue(all(len(line.encode()) < 2048 for line in self.d.lines))
+        self.assertLessEqual(sum(len(line.encode()) + 1 for line in control_lines), 24576)
+        self.assertLess(sum(len(line.encode()) + 1 for line in self.d.lines), 65536)
+        self.assertLessEqual(len(self.d.lines), 250)
+        self.assertTrue(all(len(line.encode()) <= 1600 for line in self.d.lines))
 
 
 if __name__ == '__main__': unittest.main()

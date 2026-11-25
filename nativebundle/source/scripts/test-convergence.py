@@ -2436,6 +2436,7 @@ def journaled_start_pins_container_and_image_digests() -> None:
         _inspect_docker_object=lambda kind, name: (image, None),
         _republish_statfs_fsid_after_start=lambda _result: None,
         _qa_host_vm_isolation=lambda _container_id: {"ok": True},
+        _qa_memory_headroom=lambda _container_id: {"ok": True},
     )
     started = RuntimeManager.start_owned_container(
         manager,

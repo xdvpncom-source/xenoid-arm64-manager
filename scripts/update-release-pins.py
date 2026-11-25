@@ -8,7 +8,7 @@ root = Path(__file__).resolve().parents[1]
 required_host_modules = {
     "script_host.py", "script_runtime.py", "shared_policy.py",
     "qa_lifecycle.py", "qa_vpn_probe.py", "qa_input_ready.py", "qa_ui_reader.py", "qa_google_reset.py",
-    "qa_device_profile.py", "qa_profile_runtime.py", "qa_resource_runtime.py", "qa_fresh6a.py",
+    "qa_device_profile.py", "qa_profile_runtime.py", "qa_resource_runtime.py", "qa_host_memory.py", "qa_fresh6a.py",
 }
 missing = sorted(name for name in required_host_modules if not (root / "qa" / name).is_file())
 if missing:

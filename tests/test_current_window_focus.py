@@ -92,12 +92,21 @@ class CurrentWindowTests(unittest.TestCase):
  def test_sdk_source_contains_no_unfiltered_focus_query(self):
   # Inspect literal shell fragments and argument lists, covering future reader additions.
   tree=ast.parse(Path(h.__file__).read_text())
+  navigation_guard=next(node for node in ast.walk(tree) if isinstance(node,ast.FunctionDef) and node.name=='native_navigation_guard')
+  navigation_nodes={id(node) for node in ast.walk(navigation_guard)}
+  routing_queries=0
   for node in ast.walk(tree):
    if isinstance(node,ast.Constant) and isinstance(node.value,str) and 'dumpsys window' in node.value:
     self.assertNotRegex(node.value,r'dumpsys window(?! displays)')
    if isinstance(node,ast.List) and all(isinstance(item,ast.Constant) and isinstance(item.value,str) for item in node.elts):
     values=[item.value for item in node.elts]
     if 'dumpsys' in values and 'window' in values:
-     self.assertEqual(values[values.index('window')+1],'displays')
+     getter=values[values.index('window')+1]
+     if getter=='windows':
+      # Window metadata is a separate input-routing proof. It must never
+      # become the focus getter (which includes archived ANR focus entries).
+      self.assertIn(id(node),navigation_nodes);self.assertEqual(values,['dumpsys','window','windows']);routing_queries+=1
+     else:self.assertEqual(getter,'displays')
+  self.assertEqual(routing_queries,1)
 
 if __name__=='__main__':unittest.main()

@@ -54,8 +54,8 @@ class BootUiTests(unittest.TestCase):
     def test_normal_profile_none_has_no_commands(self):
         m=Owner(profile=False);r,_=self.call(m);self.assertEqual(r,{'ok':True,'skipped':True});self.assertEqual(m.commands,[])
     def test_real_start_orders_hook_before_boot_wait_and_skips_nonwait_legacy(self):
-        for profile,wait,cold,expected in((True,True,True,['dockerStart','statfs','ui','boot']),(True,True,False,['statfs','boot']),(False,True,False,['statfs','boot']),(True,False,False,['statfs'])):
-            m=Owner(profile=profile);m.lease=types.SimpleNamespace(android_adb_port=5555);events=[];m.ensure_instance_lease=lambda:None;m._container_matches_lease=lambda *a,**k:True;m._qa_host_vm_isolation=lambda *a:{'ok':True};m._republish_statfs_fsid_after_start=lambda *a:events.append('statfs');m._ensure_initial_boot_ui_defaults=lambda *a,**k:(events.append('ui')or{'ok':True});m.docker_wait_boot=lambda **k:(events.append('boot')or{'ok':True})
+        for profile,wait,cold,expected in((True,True,True,['dockerStart','memory','statfs','ui','boot']),(True,True,False,['memory','statfs','boot']),(False,True,False,['memory','statfs','boot']),(True,False,False,['memory','statfs'])):
+            m=Owner(profile=profile);m.lease=types.SimpleNamespace(android_adb_port=5555);events=[];m.ensure_instance_lease=lambda:None;m._container_matches_lease=lambda *a,**k:True;m._qa_host_vm_isolation=lambda *a:{'ok':True};m._qa_memory_headroom=lambda *a:(events.append('memory')or{'ok':True});m._republish_statfs_fsid_after_start=lambda *a:events.append('statfs');m._ensure_initial_boot_ui_defaults=lambda *a,**k:(events.append('ui')or{'ok':True});m.docker_wait_boot=lambda **k:(events.append('boot')or{'ok':True})
             if cold:
                 m.running=False
                 def owned(**kw):return {'Id':CID,'Image':'sha256:fixed','State':{'Running':m.running,'Pid':123}},None

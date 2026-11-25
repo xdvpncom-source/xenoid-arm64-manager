@@ -286,13 +286,27 @@ def delayed_transport_launches_activity_once() -> None:
             self.force_stops = 0
             self.forwards = 0
             self.client = TransportClient(clock)
+            self.owned = {
+                "Id": "1" * 64,
+                "State": {"Running": True, "Pid": 123, "StartedAt": "fixture-start"},
+            }
+
+        def _owned_container_record(
+            self, *, timeout: float | None = None
+        ) -> tuple[dict[str, Any], None]:
+            require(timeout is not None and 0 < timeout <= 30, "ownership escaped transport deadline")
+            return self.owned, None
 
         def daemon_client(self, timeout: float = 10.0) -> TransportClient:
             del timeout
             return self.client
 
-        def forward_daemon_port(self, timeout: float | None = None) -> dict[str, Any]:
+        def forward_daemon_port(
+            self, timeout: float | None = None, *,
+            expected_runtime: tuple[str, int, str] | None = None,
+        ) -> dict[str, Any]:
             require(timeout is not None and timeout <= 30, "forward escaped transport deadline")
+            require(expected_runtime == ("1" * 64, 123, "fixture-start"), "forward lost its runtime binding")
             self.forwards += 1
             return {"ok": True}
 
@@ -304,7 +318,10 @@ def delayed_transport_launches_activity_once() -> None:
             return {"ok": True}
 
         def adb(self, args: list[str], timeout: float = 0) -> dict[str, Any]:
-            del args, timeout
+            require(0 < timeout <= 30, "ADB escaped transport deadline")
+            if args == ["get-state"]:
+                return {"ok": True, "stdout": "device\n"}
+            require(args == ["shell", "am", "force-stop", "dev.xenoid.daemon"], "unexpected ADB action")
             self.force_stops += 1
             return {"ok": True}
 
@@ -867,6 +884,7 @@ def outer_deadline() -> None:
 def regeneration_restart_receipt_precedes_reboot() -> None:
     probe = object.__new__(backend.RuntimeManager)
     probe.lease = SimpleNamespace(rootd_port=42870)
+    probe.cfg = SimpleNamespace(cold_profile=None)
     client = SimpleNamespace(
         read_private_token=lambda force, timeout: TOKEN,
         health=lambda timeout: {"ok": True},

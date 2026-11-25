@@ -125,6 +125,8 @@ DISPLAY_RATE_FILE = "/data/local/tmp/xenoid-qa-refresh-rate"
 DISPLAY_STAGE_DIR = "/data/local/tmp/xenoid-qa-display"
 
 ANDROID_FOCUS = re.compile(r"^Window\{([0-9a-fA-F]+) u([0-9]{1,6}) ([^/\s]+)/([.\w$]+)\}$", re.ASCII)
+NATIVE_NAV_PREFIX = "xenoid-native-navigation/v1:"
+NATIVE_NAV_MAX_AGE_SECONDS = 5.0
 UNIT_CONTENT = """[Unit]
 Description=Xenoid device script supervisor for phone-%i
 After=docker.service network-online.target
@@ -555,6 +557,13 @@ class TransportUnavailable(RuntimeError):
     """Temporary device/transport failure; callers may wait before retrying."""
 
 
+class NativeObservationRejected(TransportUnavailable):
+    """A consumed navigation observation was rejected before pointer injection."""
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(reason)
+
+
 class RuntimeIdentityError(RuntimeError):
     """The assigned container identity changed; never retry against a new target."""
 
@@ -567,8 +576,8 @@ class RegenerationPending(RuntimeError):
         super().__init__("Official regeneration pending: " + self.code)
 
 
-def foreground_window(dump, display_id=0):
-    """Parse current display output; archived ANR windows are never actionable."""
+def current_display_dump(dump, display_id=0):
+    """Select one current display; archived/ambiguous output is not actionable."""
     if type(display_id) is not int or display_id < 0:
         return None
     if (re.search(r"(?im)^\s*WINDOW MANAGER LAST ANR\b", dump)
@@ -584,6 +593,14 @@ def foreground_window(dump, display_id=0):
         dump = dump[start:end]
     elif display_id != 0:
         return None
+    return dump
+
+
+def foreground_window(dump, display_id=0):
+    """Parse current display output; archived ANR windows are never actionable."""
+    dump = current_display_dump(dump, display_id)
+    if dump is None:
+        return None
     focused = re.findall(r"(?m)^[ \t]*mCurrentFocus=(\S.*)$", dump)
     if len(focused) != 1:
         return None
@@ -596,6 +613,161 @@ def foreground_window(dump, display_id=0):
         token, user, title = generic.groups()
         return token, user, "", title
     return None
+
+
+def current_display_geometry(dump, display_id=0):
+    dump = current_display_dump(dump, display_id)
+    if dump is None:
+        return None
+    frames = re.findall(r"(?m)^[ \t]*DisplayFrames w=(\d+) h=(\d+) r=([0-3])\s*$", dump)
+    if len(frames) != 1:
+        return None
+    width, height, rotation = map(int, frames[0])
+    return (width, height, rotation) if width > 0 and height > 0 else None
+
+
+def native_navigation_back(snapshot):
+    """Return one exact, observed SystemUI Back; never infer screen coordinates."""
+    if snapshot.get("stable") is not True or type(snapshot.get("display_id")) is not int:
+        return None
+    found = []
+    for control in snapshot.get("navigation_controls", ()):
+        box, viewport = control.get("bounds"), control.get("window_bounds")
+        if (control.get("resource_id") != "com.android.systemui:id/back"
+                or control.get("package") != "com.android.systemui"
+                or control.get("enabled") is not True or control.get("clickable") is not True
+                or control.get("window_type") != "TYPE_SYSTEM"
+                or control.get("window_title") != "Navigation bar"
+                or type(control.get("window_id")) is not int or type(control.get("window_layer")) is not int
+                or control.get("display_id") != snapshot["display_id"]
+                or not isinstance(box, (list, tuple)) or len(box) != 4
+                or not isinstance(viewport, (list, tuple)) or len(viewport) != 4
+                or any(type(value) is not int for value in (*box, *viewport))
+                or not (viewport[0] <= box[0] < box[2] <= viewport[2]
+                        and viewport[1] <= box[1] < box[3] <= viewport[3])):
+            continue
+        found.append(control)
+    return found[0] if len(found) == 1 else None
+
+
+def native_navigation_node_matches(proof, offer):
+    """Match Back semantics/geometry and IDs within the fresh connection.
+
+    Android reassigns accessibility window IDs when its interaction connection
+    is registered again. They cannot identify a window across DumpCommand and
+    the fresh UiAutomation connection. Current WM/dispatcher routing still
+    proves which real window owns the point immediately before official input.
+    """
+    expected = {"schema": "xenoid.nav-node-proof/v1", "display_id": offer["display_id"],
+                "window_layer": offer["window_layer"],
+                "window_id_scope": "current_ui_automation_connection",
+                "window_type": "TYPE_SYSTEM", "window_title": "Navigation bar",
+                "window_bounds": offer["window_bounds"], "bounds": offer["bounds"],
+                "package": "com.android.systemui", "resource_id": "com.android.systemui:id/back",
+                "visible": True, "enabled": True, "clickable": True,
+                "cache_bypass": "new_connection_setServiceInfo_root_target_refresh"}
+    return (isinstance(proof, dict) and all(type(proof.get(k)) is type(v) and proof[k] == v
+            for k, v in expected.items()) and type(proof.get("window_id")) is int
+            and proof["window_id"] >= 0 and type(proof.get("node_window_id")) is int
+            and proof["node_window_id"] == proof["window_id"]
+            and type(proof.get("nodes_visited")) is int
+            and 1 <= proof["nodes_visited"] <= 128)
+
+
+def native_navigation_routing(display_dump, window_dump, input_dump, offer):
+    """Fail closed unless current WM/dispatcher route this point to SystemUI.
+
+    This proves current touch ownership, not Back semantics. The independent
+    cache-bypassing navigation-node proof supplies those semantics. Text formats
+    beyond the qualified Android13 rectangle format are deliberately unproven.
+    """
+    def need(value):
+        if not value:
+            raise ValueError("navigation_routing_changed_or_unproven")
+
+    rect_pattern = r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"
+    def rect(value):
+        found = re.fullmatch(rect_pattern, value)
+        need(found is not None)
+        return tuple(map(int, found.groups()))
+
+    def one(pattern, value, flags=0):
+        found = list(re.finditer(pattern, value, flags))
+        need(len(found) == 1)
+        return found[0]
+
+    need(all(isinstance(value, str) and len(value) <= 1024 * 1024
+             for value in (display_dump, window_dump, input_dump)))
+    display = current_display_dump(display_dump, offer["display_id"])
+    need(display is not None)
+    nav = one(r"(?m)^\s*mNavigationBar=Window\{([0-9a-fA-F]+) u(\d+) NavigationBar\d*\}\s*$", display)
+    token = nav[1]
+    windows = list(re.finditer(r"(?m)^  Window #\d+ Window\{([0-9a-fA-F]+) u(\d+) (NavigationBar\d*)\}:\n", window_dump))
+    blocks = []
+    for entry in windows:
+        end = re.search(r"(?m)^  Window #\d+ ", window_dump[entry.end():])
+        block = window_dump[entry.end():entry.end() + end.start()] if end else window_dump[entry.end():]
+        if re.search(r"\bmDisplayId=" + str(offer["display_id"]) + r"\b", block):
+            blocks.append((entry, block))
+    need(len(blocks) == 1)
+    entry, block = blocks[0]
+    need(entry[1] == token and entry[2] == nav[2])
+    owner = one(r"\bmOwnerUid=(\d+)\b[^\n]*\bpackage=com\.android\.systemui\b", block)
+    session = one(r"\bmSession=Session\{\S+ (\d+):[^}\n]+\}", block)
+    need("ty=NAVIGATION_BAR" in block and "mViewVisibility=0x0 mHaveFrame=true" in block
+         and "mHasSurface=true isReadyForDisplay()=true" in block
+         and re.search(r"\bSurface: shown=true\b[^\n]*\balpha=1\.0(?:\s|$)", block)
+         and "mDrawState=HAS_DRAWN" in block and "mLastHidden=false" in block
+         and re.search(r"\bisOnScreen=true\b", block) and re.search(r"(?m)^\s*isVisible=true\s*$", block))
+    frame = one(r"(?m)^\s*Frames:[^\n]*\bframe=(" + rect_pattern + r")", block)
+    need(rect(frame[1]) == tuple(offer["window_bounds"]))
+    dispatcher = one(r"(?s)(?:^|\n)Input Dispatcher State:\n(.*?)(?:\n[A-Za-z][^\n]*:\n|\Z)", input_dump)[1]
+    need("DispatchEnabled: true" in dispatcher and "DispatchFrozen: false" in dispatcher
+         and "InputFilterEnabled: false" in dispatcher and "Pointer Capture Requested: false" in dispatcher)
+    rows = list(re.finditer(r"(?m)^      (\d+): name='([^'\n]+)', id=(\d+), displayId=(\d+), inputConfig=([^\n]+)$", dispatcher))
+    need(bool(rows) and len(rows) <= 256)
+    # Reject silently unparsed window records, including malformed visibility.
+    need(len(rows) == len(re.findall(r"(?m)^      \d+: name=", dispatcher)))
+    display_rows = [row for row in rows if int(row[4]) == offer["display_id"]]
+    need([int(row[1]) for row in display_rows] == list(range(len(display_rows))))
+    parsed = []
+    known = {"NOT_FOCUSABLE", "TRUSTED_OVERLAY", "WATCH_OUTSIDE_TOUCH", "SLIPPERY", "NO_INPUT_CHANNEL",
+             "NOT_VISIBLE", "NOT_TOUCHABLE", "PREVENT_SPLITTING", "IS_WALLPAPER", "SPY", "DROP_INPUT",
+             "DROP_INPUT_IF_OBSCURED", "DUPLICATE_TOUCH_TO_WALLPAPER", "DISABLE_USER_ACTIVITY",
+             "PAUSE_DISPATCHING", "INTERCEPTS_STYLUS", "REPLACE_TOUCHABLE_REGION_WITH_CROP",
+             "NOT_TOUCH_MODAL", "0x0"}
+    for row in rows:
+        if int(row[4]) != offer["display_id"]:
+            continue
+        fields = one(r"^(.+?), alpha=([0-9.]+), frame=(" + rect_pattern + r"), globalScale=([0-9.]+), "
+                     r"applicationInfo\.name=.*?, applicationInfo\.token=.*?, touchableRegion=(.+?), "
+                     r"ownerPid=(\d+), ownerUid=(\d+), dispatchingTimeout=\d+ms, hasToken=(true|false), "
+                     r"touchOcclusionMode=([A-Z_]+)$", row[5])
+        config = set(fields[1].split(" | "))
+        need(config <= known)
+        region = None if fields[9] == "<empty>" else rect(fields[9])
+        parsed.append({"name": row[2], "config": config, "alpha": fields[2], "frame": rect(fields[3]),
+                       "scale": fields[8], "region": region, "pid": int(fields[10]), "uid": int(fields[11]),
+                       "has_token": fields[12] == "true"})
+    wanted = token + " " + entry[3]
+    selected = [i for i, row in enumerate(parsed) if row["name"] == wanted]
+    need(len(selected) == 1)
+    index = selected[0]
+    row = parsed[index]
+    need(row["config"] <= {"NOT_FOCUSABLE", "TRUSTED_OVERLAY", "WATCH_OUTSIDE_TOUCH", "SLIPPERY"}
+         and row["alpha"] in {"1.0", "1.00"} and row["scale"] == "1.000000" and row["has_token"]
+         and row["frame"] == tuple(offer["window_bounds"]) and row["region"] == row["frame"]
+         and row["pid"] == int(session[1]) and row["uid"] == int(owner[1]))
+    x = (offer["bounds"][0] + offer["bounds"][2]) // 2
+    y = (offer["bounds"][1] + offer["bounds"][3]) // 2
+    def contains(box):
+        return box is not None and box[0] <= x < box[2] and box[1] <= y < box[3]
+    need(contains(row["region"]))
+    for above in parsed[:index]:
+        if above["config"] & {"NOT_VISIBLE", "NOT_TOUCHABLE", "NO_INPUT_CHANNEL"}:
+            continue
+        need(not contains(above["region"]))
+    return {"systemui_pid": row["pid"], "systemui_uid": row["uid"], "navigation_token": token}
 
 
 def native_touch_point(dump, profile, x, y):
@@ -756,6 +928,9 @@ class Broker:
         self.config = options
         self.configure_callback = None
         self.window_offer = None
+        self._native_navigation_lock = threading.Lock()
+        self._native_navigation_generation = 0
+        self._native_navigation_offer = None
         self._native_display_id = 0
         self.container_id = options.get("expected_container_id")
         self.forward_lock = threading.Lock()
@@ -808,6 +983,10 @@ class Broker:
         self.resolved_app = self.window_offer = self.url = None
         self._hierarchy_focus_observed = False
         self._hierarchy_focus = None
+        self._hierarchy_geometry = None
+        with self._native_navigation_lock:
+            self._native_navigation_generation += 1
+            self._native_navigation_offer = None
 
     def regeneration_data_fence(self, manager):
         owned, _reason = manager._owned_container_record(timeout=8)
@@ -1609,7 +1788,7 @@ echo retired
                     "stdout": result.stdout.decode(errors="replace"),
                     "stderr": result.stderr.decode(errors="replace")}
 
-    def official_tap(self, x, y):
+    def official_tap(self, x, y, *, input_guard=None):
         if type(x) is not int or type(y) is not int:
             raise ValueError("Touch coordinates must be integers")
         if self.stopping.is_set():
@@ -1622,8 +1801,14 @@ echo retired
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
                 raise TransportUnavailable("Native touch mapping timed out before injection")
-            options = {} if remaining is None else {"timeout": remaining}
-            result = manager.daemon_client(**options).tap(raw_x, raw_y)
+            # A navigation guard runs after native mapping, under this same
+            # instance owner. It never acquires the instance lock recursively.
+            with input_guard(manager, state, deadline) if input_guard else nullcontext():
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    raise TransportUnavailable("Native touch deadline expired before injection")
+                options = {} if remaining is None else {"timeout": remaining}
+                result = manager.daemon_client(**options).tap(raw_x, raw_y)
         shared_policy("native_tap", result=result)
         self.log("action", f"Xenoid native tap logical ({x}, {y}) → raw ({raw_x}, {raw_y}) via /dev/uinput")
         return result
@@ -2390,6 +2575,7 @@ echo retired
         deadline = time.monotonic() + seconds if seconds else None
         self._hierarchy_focus_observed = False
         self._hierarchy_focus = None
+        self._hierarchy_geometry = None
         try:
             with self.owned_manager() as manager:
                 current = self._ui_reader
@@ -2447,6 +2633,7 @@ echo retired
             body = shlex.join(["nice", "-n", str(priority), "sh", "-c", body])
         self._hierarchy_focus_observed = False
         self._hierarchy_focus = None
+        self._hierarchy_geometry = None
         try:
             xml = self.adb(["shell", body], timeout=seconds)
         except RuntimeIdentityError:
@@ -2456,6 +2643,7 @@ echo retired
         if marker in xml:
             xml, focus_dump = xml.rsplit(marker, 1)
             self._hierarchy_focus = foreground_window(focus_dump, self._native_display_id)
+            self._hierarchy_geometry = current_display_geometry(focus_dump, self._native_display_id)
             self._hierarchy_focus_observed = True
         root_tag = "displays" if windows else "hierarchy"
         start, end = xml.find("<" + root_tag), xml.rfind("</" + root_tag + ">")
@@ -2473,19 +2661,30 @@ echo retired
             not isinstance(package, str) or len(package) > 255 or not ANDROID_PACKAGE.fullmatch(package)
         ):
             raise ValueError("Supply an Android package name")
-        focus = foreground_window(self.adb(self.focus_command(priority)), self._native_display_id)
+        # Starting any newer hierarchy read retires older navigation offers.
+        # No instance/operation lock is acquired while holding this short lock.
+        with self._native_navigation_lock:
+            self._native_navigation_generation += 1
+            generation = self._native_navigation_generation
+            self._native_navigation_offer = None
+        focus_dump = self.adb(self.focus_command(priority))
+        focus = foreground_window(focus_dump, self._native_display_id)
+        geometry_before = current_display_geometry(focus_dump, self._native_display_id)
+        focus_before_complete = time.monotonic()
         snapshot = {"package": "", "component": "", "stable": False, "controls": [], "truncated": False}
         if focus is not None:
             _, _, current_package, activity = focus
             component = f"{current_package}/{activity}" if current_package else activity
             snapshot.update(package=current_package, component=component, stable=True)
         self._hierarchy_focus_observed = False
+        hierarchy_started = time.monotonic()
         try:
             if windows:
                 kwargs = {"priority": priority, "windows": True}
                 if reader is not None:
                     kwargs["reader"] = reader
                 hierarchy = self.ui_hierarchy(None, **kwargs)
+                hierarchy_received = time.monotonic()
                 window_data = shared_policy("window_snapshot", hierarchy=hierarchy,
                                             display_id=self._native_display_id if self._native_display_id is not None else 0)
                 controls, truncated = window_data["controls"], window_data["truncated"]
@@ -2494,6 +2693,7 @@ echo retired
                     hierarchy = self.ui_hierarchy(None, priority=priority, reader=reader)
                 else:
                     hierarchy = self.ui_hierarchy(None) if priority is None else self.ui_hierarchy(None, priority=priority)
+                hierarchy_received = time.monotonic()
                 controls, truncated = shared_policy("visible_controls", hierarchy=hierarchy, package=package)
                 window_data = {}
         except TransportUnavailable:
@@ -2501,15 +2701,176 @@ echo retired
         except (RuntimeError, ValueError, ElementTree.ParseError):
             snapshot["stable"] = False
             return snapshot
-        current = (self._hierarchy_focus if self._hierarchy_focus_observed else
-                   foreground_window(self.adb(self.focus_command(priority)), self._native_display_id))
+        hierarchy_complete = time.monotonic()
+        # Count only the gap AFTER the first verified focus response and BEFORE
+        # the final independent focus query. Setup/transport before that first
+        # response, and the final query's own duration, cannot become ad grace.
+        focus_after_started = time.monotonic()
+        compound_focus = self._hierarchy_focus_observed
+        if compound_focus:
+            current = self._hierarchy_focus
+            geometry_after = getattr(self, "_hierarchy_geometry", None)
+        else:
+            current_dump = self.adb(self.focus_command(priority))
+            current = foreground_window(current_dump, self._native_display_id)
+            geometry_after = current_display_geometry(current_dump, self._native_display_id)
         snapshot["stable"] = focus is not None and current == focus
         if not snapshot["package"]:
             snapshot["package"] = next((control.get("package", "") for control in controls
                                         if control.get("package")), "")
         snapshot.update(window_data)
         snapshot.update(controls=controls, truncated=truncated)
+        display_id = self._native_display_id if self._native_display_id is not None else 0
+        app_windows = [item for item in window_data.get("windows", ())
+                       if item.get("window_type") == "TYPE_APPLICATION"]
+        active_apps = [item for item in app_windows
+                       if item.get("window_active") is True or item.get("window_focused") is True]
+        owned_roots = [item for item in active_apps if item.get("root_node_present_in_XML") is True
+                       and item.get("root_package") == snapshot["package"]]
+        hierarchy_state = ("not_requested" if not windows else
+                           "unknown_legacy_root" if not hierarchy.startswith("<displays") else
+                           "partial_application_window_missing" if not active_apps else
+                           "partial_application_root_missing" if not any(item.get("root_node_present_in_XML") for item in active_apps) else
+                           "available" if owned_roots else "partial_application_owner_mismatch")
+        snapshot["focus_observation"] = {
+            "schema": "xenoid.wm-focus-observation/v1", "exact_match": snapshot["stable"],
+            "basis": "legacy_compound_uncredited" if compound_focus else "independent_wm_focus_pair",
+            "display_id": display_id, "token": focus[0] if focus else None,
+            "user": int(focus[1]) if focus else None,
+            "package": snapshot["package"], "component": snapshot["component"],
+            "geometry_match": geometry_before is not None and geometry_before == geometry_after,
+            "geometry": list(geometry_before) if geometry_before is not None else None,
+            "elapsed_seconds": max(0.0, focus_after_started - focus_before_complete)
+                               if snapshot["stable"] and not compound_focus else 0.0,
+            "hierarchy_read_seconds": max(0.0, hierarchy_received - hierarchy_started),
+            "hierarchy_inspection_seconds": max(0.0, hierarchy_complete - hierarchy_started),
+            "hierarchy_state": hierarchy_state,
+            "application_windows": len(app_windows), "active_application_windows": len(active_apps),
+            # Stock collection has no per-node timestamp. This is NOT a claim
+            # that every node was collected at RPC completion.
+            "node_age_basis": "within_stock_collection_interval",
+        }
+        back = native_navigation_back(snapshot)
+        if (back is not None and focus is not None and focus[2] and snapshot["stable"] and
+                geometry_before is not None and geometry_before == geometry_after):
+            token = NATIVE_NAV_PREFIX + secrets.token_urlsafe(24)
+            offer = {"token": token, "generation": generation, "focus": focus, "display_id": display_id,
+                     "geometry": geometry_before,
+                     "created_at": time.monotonic(), "bounds": list(back["bounds"]),
+                     "window_bounds": list(back["window_bounds"]), "window_id": back["window_id"],
+                     "window_layer": back["window_layer"]}
+            with self._native_navigation_lock:
+                if self._native_navigation_generation == generation:
+                    self._native_navigation_offer = offer
+                    snapshot["native_navigation_observation"] = token
         return snapshot
+
+    @contextmanager
+    def native_navigation_guard(self, offer, manager, state, deadline):
+        # Lock ordering is instance/operation -> navigation. All offer creation
+        # and consumption releases navigation before acquiring instance locks.
+        # Holding this through injection serializes competing observations.
+        with self._native_navigation_lock:
+            def reject(reason):
+                raise NativeObservationRejected(reason)
+
+            def fresh():
+                age = time.monotonic() - offer["created_at"]
+                if (self._native_navigation_generation != offer["generation"] or
+                        not 0 <= age <= NATIVE_NAV_MAX_AGE_SECONDS):
+                    reject("navigation_observation_stale")
+                if self.stopping.is_set() or deadline is not None and time.monotonic() >= deadline:
+                    reject("navigation_operation_expired")
+
+            fresh()
+            mapping = state.get("mapping") or {}
+            size = mapping.get("logical_size")
+            box, viewport = offer["bounds"], offer["window_bounds"]
+            if (type(mapping.get("display_id")) is not int or mapping["display_id"] != offer["display_id"] or
+                    not isinstance(size, (list, tuple)) or len(size) != 2 or
+                    any(type(value) is not int or value <= 0 for value in size) or
+                    tuple(size) != offer["geometry"][:2] or type(mapping.get("orientation")) is not int or
+                    mapping["orientation"] != offer["geometry"][2] or
+                    not (0 <= viewport[0] <= box[0] < box[2] <= viewport[2] <= size[0] and
+                         0 <= viewport[1] <= box[1] < box[3] <= viewport[3] <= size[1])):
+                reject("navigation_display_geometry_changed_or_unproven")
+            proof_deadline = offer["created_at"] + NATIVE_NAV_MAX_AGE_SECONDS
+            if deadline is not None:
+                proof_deadline = min(proof_deadline, deadline)
+            # Reacquire only the real navigation window in the already-running
+            # serialized reader. Never start it, dump the app, or recursively
+            # acquire the instance owner from this guard.
+            from qa_ui_reader import DumpFailed, UiReaderError
+            reader = self._ui_reader
+            if (reader is None or reader.closed or not reader.started or reader.pipe is None
+                    or reader.pipe.closed or reader.pipe.process.poll() is not None):
+                reject("navigation_reader_unavailable")
+            offer["verification_stages"] = {}
+            nav_started = time.monotonic()
+            try:
+                proof = reader.navigation(manager, offer["display_id"], proof_deadline)
+            except DumpFailed:
+                reject("navigation_fresh_back_unavailable")
+            except (UiReaderError, OSError, TimeoutError) as error:
+                # Preserve cleanup/transport failures, including their cause;
+                # the consumed offer can never be replayed by the caller.
+                raise TransportUnavailable("Navigation reader verification failed: " + str(error)) from error
+            finally:
+                offer["verification_stages"]["fresh_node_read_seconds"] = max(0.0, time.monotonic() - nav_started)
+            if not native_navigation_node_matches(proof, offer):
+                reject("navigation_back_node_changed_or_unproven")
+            fresh()
+            routing_started = time.monotonic()
+            windows = self.native_display_exec(manager, ["dumpsys", "window", "windows"], deadline=proof_deadline)
+            routing = self.native_display_exec(manager, ["dumpsys", "input"], deadline=proof_deadline)
+            current = self.native_display_exec(manager, ["dumpsys", "window", "displays"], deadline=proof_deadline)
+            current_dump = current.stdout.decode(errors="strict")
+            if foreground_window(current_dump, offer["display_id"]) != offer["focus"]:
+                reject("navigation_focus_changed")
+            if current_display_geometry(current_dump, offer["display_id"]) != offer["geometry"]:
+                reject("navigation_display_geometry_changed_or_unproven")
+            latest_input = routing.stdout.decode(errors="strict")
+            try:
+                native_navigation_routing(current_dump, windows.stdout.decode(errors="strict"), latest_input, offer)
+            except ValueError:
+                reject("navigation_routing_changed_or_unproven")
+            center = ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
+            if (native_touch_point(latest_input, state["profile"], *center) !=
+                    native_touch_point(state["dump"], state["profile"], *center)):
+                reject("navigation_native_mapping_changed")
+            fresh()
+            offer["verification_stages"].update(
+                routing_read_seconds=max(0.0, time.monotonic() - routing_started),
+                maximum_node_age_before_input_seconds=max(0.0, time.monotonic() - nav_started))
+            yield
+
+    def handle_native_navigation(self, observation, action):
+        started = time.monotonic()
+        with self._native_navigation_lock:
+            offer = self._native_navigation_offer
+            if offer is None or observation != offer["token"]:
+                return {"handled": False, "action": action, "reason": "navigation_observation_not_current",
+                        "official_backend": "xenoid_native", "input_sent": False}
+            # Consume before mapping, any failure, or a lost input acknowledgement.
+            self._native_navigation_offer = None
+        if action != "back":
+            return {"handled": False, "action": action, "reason": "navigation_action_not_observed",
+                    "official_backend": "xenoid_native", "input_sent": False}
+        left, top, right, bottom = offer["bounds"]
+        try:
+            result = self.official_tap((left + right) // 2, (top + bottom) // 2,
+                input_guard=lambda manager, state, deadline: self.native_navigation_guard(offer, manager, state, deadline))
+        except NativeObservationRejected as error:
+            return {"handled": False, "action": action, "reason": error.reason,
+                    "official_backend": "xenoid_native", "input_sent": False,
+                    "verification_seconds": max(0.0, time.monotonic() - started),
+                    "verification_stages": offer.get("verification_stages", {}),
+                    "observation_age_seconds": max(0.0, time.monotonic() - offer["created_at"])}
+        return {"handled": True, "action": action, "reason": "observed_native_navigation_sent",
+                "official_backend": "xenoid_native", "input_sent": True, "result": result,
+                "verification_seconds": max(0.0, time.monotonic() - started),
+                "verification_stages": offer.get("verification_stages", {}),
+                "observation_age_seconds": max(0.0, time.monotonic() - offer["created_at"])}
 
     def discover_shared_app(self):
         listing = self.adb(["shell", "pm", "list", "packages", "--user", self.android_user(), "-f"])
@@ -2650,6 +3011,8 @@ done
                 "actions": [{"name": name, "label": label} for name, (label, _) in choices.items()]}
 
     def handle_window(self, observation, action):
+        if isinstance(observation, str) and observation.startswith(NATIVE_NAV_PREFIX):
+            return self.handle_native_navigation(observation, action)
         if not self.window_offer or observation != self.window_offer[0]:
             return {"handled": False, "action": action, "reason": "Observe the window before choosing an action"}
         choices = self.window_offer[1]

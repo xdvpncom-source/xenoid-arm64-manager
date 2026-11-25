@@ -5791,6 +5791,29 @@ cat >/dev/null
             return {"ok": False, "error": code if re.fullmatch(r"[a-z][a-z0-9_]{0,100}", code)
                     else "qa_host_vm_isolation_failed"}
 
+    def _qa_memory_headroom(self, expected_container_id: str) -> dict[str, Any]:
+        """Apply an installed QA memory policy before waiting for Android boot."""
+        import importlib.util
+        path = Path("/opt/xenoid-fleet/panel-scripts/qa_resource_runtime.py")
+        if not path.exists():
+            return {"ok": True, "skipped": "qa_memory_addon_not_installed"}
+        try:
+            info = path.lstat()
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                    or info.st_nlink != 1 or info.st_mode & 0o022):
+                return {"ok": False, "error": "qa_memory_helper_invalid"}
+            spec = importlib.util.spec_from_file_location("xenoid_qa_memory_headroom", path)
+            if spec is None or spec.loader is None:
+                return {"ok": False, "error": "qa_memory_helper_unavailable"}
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            with self.instance_operation_lock(timeout_seconds=30):
+                return module.ensure_configured_memory_headroom(self, expected_container_id)
+        except Exception as exc:
+            code = str(exc)
+            return {"ok": False, "error": code if re.fullmatch(r"[a-z][a-z0-9_]{0,100}", code)
+                    else "qa_memory_headroom_failed"}
+
     def start_owned_container(
         self,
         expected_container_id: Optional[str] = None,
@@ -5976,6 +5999,15 @@ cat >/dev/null
                             "ok": False,
                             "error": "container_start_failed",
                         }
+        # A running systemd scope exists now. Persist its soft reclaim policy
+        # before statfs/readiness waits or any Google/app provisioning, including
+        # already-running and wait=False paths. Failure leaves the started
+        # container available for the existing journaled resume; never replay
+        # Docker start or silently claim that the policy is ready.
+        headroom = self._qa_memory_headroom(container_id)
+        result["memoryHeadroom"] = headroom
+        if headroom.get("ok") is not True:
+            return {**result, "ok": False, "error": headroom.get("error", "qa_memory_headroom_failed")}
         # Every create/start/recreate builds a fresh network namespace with
         # zeroed per-net state while the staged statfs leaf persists; replay
         # it before any readiness verdict. The kmod rejects writes until

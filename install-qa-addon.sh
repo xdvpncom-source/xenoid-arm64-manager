@@ -12,7 +12,7 @@ install -d -o root -g root -m 0755 "$qa_target"
 exec 8>"$qa_target/.installer-lock"
 flock 8
 # Publish host dependencies before the entrypoint that imports them.
-for qa_file in qa_vpn_probe.py qa_lifecycle.py qa_input_ready.py qa_host_memory.py qa_ui_reader.py qa_google_reset.py qa_fresh6a.py qa_device_profile.py qa_profile_runtime.py qa_resource_runtime.py qa_resources.py script_runtime.py shared_policy.py script_host.py shared-app-script.py vpn-cycle.py qa_proxy_routing.py restore-display.py restore-default-display.py restore-host-memory.py; do
+for qa_file in qa_vpn_probe.py qa_lifecycle.py qa_input_ready.py qa_host_memory.py qa_ui_reader.py qa_google_reset.py qa_fresh6a.py qa_device_profile.py qa_profile_runtime.py qa_resource_runtime.py qa_memory_persistence.py qa_resources.py script_runtime.py shared_policy.py script_host.py shared-app-script.py vpn-cycle.py qa_proxy_routing.py restore-display.py restore-default-display.py restore-host-memory.py; do
     qa_temp=$(mktemp "$qa_target/.install.XXXXXXXX")
     install -o root -g root -m 0755 "$qa_source/qa/$qa_file" "$qa_temp"
     mv -f "$qa_temp" "$qa_target/$qa_file"
@@ -43,7 +43,9 @@ for qa_unit in xenoid-qa-zram.service xenoid-qa-resources.service xenoid-qa-reso
     install -o root -g root -m 0644 "$qa_source/deploy/$qa_unit" "/etc/systemd/system/$qa_unit"
 done
 python3 "$qa_target/qa_proxy_routing.py" ensure-default
+python3 "$qa_target/qa_memory_persistence.py" --apply
 systemctl daemon-reload
+python3 "$qa_target/qa_memory_persistence.py" --verify
 systemctl enable --now xenoid-qa-zram.service xenoid-qa-resources.timer
 sha256sum "$qa_source/qa/manifest.sha256" | cut -d' ' -f1 >/opt/xenoid-fleet/.qa-addon-installed
 chmod 0644 /opt/xenoid-fleet/.qa-addon-installed

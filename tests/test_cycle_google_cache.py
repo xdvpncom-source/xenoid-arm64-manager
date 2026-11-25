@@ -199,8 +199,9 @@ class GoogleCacheWorkflowTests(unittest.TestCase):
                 self.assertEqual(len([r for r in device.trace if r[0]=='native_rotation']),1)
                 self.assertEqual(len([r for r in device.trace if r[0]=='cache']),2)
 
-    def test_bundled_production_source_matches_reviewed_unseeded_workflow(self):
-        self.assertEqual(hashlib.sha256(SOURCE.read_bytes()).hexdigest(),'8c9c2007b1947b06fa3ac5efa7621585c63bdc3939c2bbb1d4e515b7c2f666d9')
+    def test_bundled_candidate_source_matches_pinned_unseeded_workflow(self):
+        # Static source integrity only; this pin does not qualify a live release.
+        self.assertEqual(hashlib.sha256(SOURCE.read_bytes()).hexdigest(),'722ef321a5ab3cd23258478d603109c510314bdb69a105663a514fde1df14651')
         self.assertNotIn('random.seed(',SOURCE.read_text())
 
 
