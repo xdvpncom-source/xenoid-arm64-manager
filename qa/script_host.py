@@ -425,6 +425,108 @@ def trusted_device(number, config):
     return RuntimeManager(context, settings, lease)
 
 
+def native_identity_observation(target, *, request_id, manager=None):
+    """One bounded read-only observation, with no run/APK or lifecycle action."""
+    from types import SimpleNamespace
+    if (not isinstance(target, dict) or set(target) != {"device_id", "instance_id", "resource_tag", "container_id"}
+            or type(target["device_id"]) is not int
+            or not isinstance(request_id, str) or not re.fullmatch("[0-9a-f]{32}", request_id)
+            or not isinstance(target["instance_id"], str) or not re.fullmatch("[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", target["instance_id"])
+            or not isinstance(target["resource_tag"], str) or not re.fullmatch("[0-9a-f]{12}", target["resource_tag"])
+            or not isinstance(target["container_id"], str) or not re.fullmatch("[0-9a-f]{64}", target["container_id"])):
+        raise ValueError("Invalid identity observation binding")
+    device_number(target["device_id"])
+    skipped = {"binding": dict(target), "request_id": request_id}
+    fd = None
+    try:
+        if manager is None:
+            os.chdir(UPSTREAM)
+            adopt_native_environment()
+            manager = trusted_device(target["device_id"], target)
+        if manager.context.instance_id != target["instance_id"] or manager.context.resource_tag != target["resource_tag"]:
+            raise ValueError("identity_observation_owner_changed")
+        path = manager.context.state_root / "operation.lock"
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        before = os.fstat(fd)
+        def lock_owned():
+            now = path.lstat()
+            return (stat.S_ISREG(now.st_mode) and now.st_uid == 0 and stat.S_IMODE(now.st_mode) == 0o600 and now.st_nlink == 1
+                    and (now.st_dev, now.st_ino) == (before.st_dev, before.st_ino))
+        if not lock_owned():
+            raise ValueError("identity_observation_lock_changed")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return {**skipped, "status": "skipped", "reason": "native_busy"}
+        if not lock_owned():
+            raise ValueError("identity_observation_lock_changed")
+        if any(os.path.lexists(manager.context.state_root / name) for name in (
+                "device-regenerate-v3.json", "device-regenerate-v2.json", "device-regenerate.json", "convergence-v1.json")):
+            return {**skipped, "status": "skipped", "reason": "native_pending"}
+        deadline = time.monotonic() + 8
+        def remaining(wanted):
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError("identity_observation_deadline")
+            return min(float(wanted or 5), left)
+        def owned(timeout=5):
+            return manager._owned_container_record(timeout=remaining(timeout))
+        def docker(args, timeout=5):
+            return manager.docker_exec(args, timeout=remaining(timeout))
+        def daemon(timeout=5):
+            client = manager.daemon_client(timeout=remaining(timeout))
+            return SimpleNamespace(location_status=lambda timeout=5: client.location_status(timeout=remaining(timeout)))
+        reader = SimpleNamespace(context=manager.context, cfg=manager.cfg,
+                                 _owned_container_record=owned, docker_exec=docker, daemon_client=daemon)
+        from identity_reservations import observe, signed, process_binding
+        first, _ = owned()
+        if not first or first.get("Id") != target["container_id"] or first.get("State", {}).get("Running") is not True:
+            raise ValueError("identity_observation_runtime_changed")
+        runtime = process_binding(first)
+        values, build = observe(reader)
+        last, _ = owned()
+        if not last or last.get("Id") != target["container_id"] or process_binding(last) != runtime or not lock_owned():
+            raise ValueError("identity_observation_runtime_changed")
+        remaining(1)
+        observation = signed({"schema": "dev.xenoid.native-identity-inventory-observation/v1",
+                              "binding": dict(target), "request_id": request_id, "runtime": runtime,
+                              "values": values, "build": build, "captured_at": time.time()}, "proof_sha256")
+        return {**skipped, "status": "observed", "observation": observation}
+    except Exception as error:
+        return {**skipped, "status": "unavailable", "reason": type(error).__name__}
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def poll_items(value):
+    modern = isinstance(value, dict)
+    if modern:
+        if set(value) != {"runs", "identity_targets"} or not isinstance(value["identity_targets"], list) or len(value["identity_targets"]) > 1:
+            raise ValueError("Invalid identity poll request")
+        items, targets = value["runs"], value["identity_targets"]
+    else:
+        items, targets = value, []
+    if not isinstance(items, list) or len(items) > 150:
+        raise ValueError("Invalid poll request")
+    results = []
+    for item in items:
+        number = device_number(item["device_id"])
+        run = item["run_id"]
+        if not RUN_ID.fullmatch(run):
+            raise ValueError("Invalid run ID")
+        results.append(snapshot(STATE / str(number), number, run, integer(item.get("after", 0), 0, 2**63-1),
+                                limit=max(1, min(32, 110 // max(1, len(items))))))
+    answer = {"items": results}
+    if modern:
+        answer["identity_observations"] = []
+        for target in targets:
+            if not isinstance(target, dict) or set(target) != {"binding", "request_id"}:
+                raise ValueError("Invalid identity target")
+            answer["identity_observations"].append(native_identity_observation(target["binding"], request_id=target["request_id"]))
+    return answer
+
+
 def manage(action, folder, number, run):
     if action == "start":
         config = validate(json.load(sys.stdin))
@@ -3708,18 +3810,7 @@ def main():
     if args.run_id and not RUN_ID.fullmatch(args.run_id):
         raise ValueError("Invalid run ID")
     if args.action == "poll":
-        items = read_json(65536)
-        if not isinstance(items, list) or len(items) > 150:
-            raise ValueError("Invalid poll request")
-        results = []
-        for item in items:
-            number = device_number(item["device_id"])
-            run = item["run_id"]
-            if not RUN_ID.fullmatch(run):
-                raise ValueError("Invalid run ID")
-            results.append(snapshot(STATE / str(number), number, run, integer(item.get("after", 0), 0, 2**63-1),
-                                    limit=max(1, min(32, 110 // max(1, len(items))))))
-        return {"items": results}
+        return poll_items(read_json(65536))
     number = device_number(args.device)
     folder = STATE / str(number)
     if args.action == "identity-ack":
