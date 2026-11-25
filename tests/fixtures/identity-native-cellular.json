@@ -1,0 +1,243 @@
+{
+  "dataset_sha256": "3aa19173c09f91921b51ebb78b5a46a2319573d06cb68b2918e83ef1b84df8f1",
+  "note": "Synthetic test seeds only; no observed device identifiers. Generated and encoded by pinned native cellular functions; carrier pin preserved.",
+  "profiles": [
+    {
+      "profile": {
+        "callingCode": "+65",
+        "carrier": {
+          "apn": "e-ideas",
+          "bands": [
+            1,
+            3,
+            7,
+            8
+          ],
+          "mcc": "525",
+          "mnc": "01",
+          "name": "Singtel"
+        },
+        "cell": {
+          "band": 3,
+          "bandwidthKhz": 10000,
+          "cqi": 8,
+          "earfcn": 1884,
+          "eci": 228437891,
+          "pci": 284,
+          "rsrp": -91,
+          "rsrq": -18,
+          "rssnr": 108,
+          "tac": 12646,
+          "technology": "LTE",
+          "timingAdvance": 56
+        },
+        "dataCall": {
+          "addresses": [],
+          "dnses": [
+            "1.1.1.1"
+          ],
+          "gateways": [],
+          "iface": "rmnet_data0",
+          "mtu": 1500,
+          "protocol": "IPV4V6",
+          "state": "CONNECTED"
+        },
+        "identityDigest": "f8b495145ef14e147782362d0368f3c4f2ec2cd17401ac18b28dc056ed6715c2",
+        "locale": [
+          "en-SG",
+          "zh-Hans-SG"
+        ],
+        "locationKey": "SG/Asia/Singapore",
+        "operator": {
+          "alphaLong": "Singtel",
+          "alphaShort": "Singtel",
+          "isoCountry": "sg",
+          "isoNetwork": "sg",
+          "numeric": "52501",
+          "roaming": false
+        },
+        "schema": "dev.xenoid.cellular-profile/v2",
+        "sim": {
+          "ad": "",
+          "gid1": "",
+          "iccid": "89525017413172552388",
+          "imsi": "525013558867459",
+          "mncLength": 2,
+          "msisdn": "+6581613487",
+          "spn": "Singtel"
+        },
+        "slot": {
+          "embedded": false,
+          "logicalSlotIndex": 0,
+          "portId": 0,
+          "present": true,
+          "ready": true,
+          "slotId": 0
+        },
+        "timezone": "Asia/Singapore"
+      },
+      "seed_sha256": "cf4d36ebd2dae0d7effc387a7210ae03b9fc4a9b771cd28d7ba40b4904cd3323",
+      "wire_base64": "WEVOT0lEX1BST0ZJTEVfVjEAAAAAAQAAABUAAQAAAAM1MjUAAgAAAAIwMQADAAAADzUyNTAxMzU1ODg2NzQ1OQAEAAAAFDg5NTI1MDE3NDEzMTcyNTUyMzg4AAUAAAALKzY1ODE2MTM0ODcABgAAAAdTaW5ndGVsAAcAAAAHZS1pZGVhcwAIAAAABAAAMWYACQAAAAQNna+DAAoAAAAEAAABHAALAAAABAAAB1wADAAAAAQAAAADAA0AAAAE////pQAOAAAABP///+4ADwAAAAQAAABsABAAAAAEAAAACAARAAAABAAAADgAEgAAABBlbi1TRyx6aC1IYW5zLVNHABMAAAAOQXNpYS9TaW5nYXBvcmUAFAAAAEBmOGI0OTUxNDVlZjE0ZTE0Nzc4MjM2MmQwMzY4ZjNjNGYyZWMyY2QxNzQwMWFjMThiMjhkYzA1NmVkNjcxNWMyABUAAAAEAAAnEJyKEbDYqL9KIio2S9IAyoi9cZPhP6sBt7YlODXtC0k7",
+      "wire_sha256": "3728316385f89714f65e6b8a3f90fa4c8baf161fc297747154cad004d6f7c7f1"
+    },
+    {
+      "profile": {
+        "callingCode": "+65",
+        "carrier": {
+          "apn": "e-ideas",
+          "bands": [
+            1,
+            3,
+            7,
+            8
+          ],
+          "mcc": "525",
+          "mnc": "01",
+          "name": "Singtel"
+        },
+        "cell": {
+          "band": 8,
+          "bandwidthKhz": 10000,
+          "cqi": 9,
+          "earfcn": 3460,
+          "eci": 169364245,
+          "pci": 365,
+          "rsrp": -83,
+          "rsrq": -9,
+          "rssnr": 58,
+          "tac": 64322,
+          "technology": "LTE",
+          "timingAdvance": 47
+        },
+        "dataCall": {
+          "addresses": [],
+          "dnses": [
+            "1.1.1.1"
+          ],
+          "gateways": [],
+          "iface": "rmnet_data0",
+          "mtu": 1500,
+          "protocol": "IPV4V6",
+          "state": "CONNECTED"
+        },
+        "identityDigest": "d2da2abcbbef99c552774944788dfca8df04dd1b201cab516f4fefae997c47c0",
+        "locale": [
+          "en-SG",
+          "zh-Hans-SG"
+        ],
+        "locationKey": "SG/Asia/Singapore",
+        "operator": {
+          "alphaLong": "Singtel",
+          "alphaShort": "Singtel",
+          "isoCountry": "sg",
+          "isoNetwork": "sg",
+          "numeric": "52501",
+          "roaming": false
+        },
+        "schema": "dev.xenoid.cellular-profile/v2",
+        "sim": {
+          "ad": "",
+          "gid1": "",
+          "iccid": "89525017887752671314",
+          "imsi": "525016312609294",
+          "mncLength": 2,
+          "msisdn": "+6581982190",
+          "spn": "Singtel"
+        },
+        "slot": {
+          "embedded": false,
+          "logicalSlotIndex": 0,
+          "portId": 0,
+          "present": true,
+          "ready": true,
+          "slotId": 0
+        },
+        "timezone": "Asia/Singapore"
+      },
+      "seed_sha256": "e00b989f3651feb02559ce3e24f5ad6b14f55801913a1dcdf5862bdfe4f3bba1",
+      "wire_base64": "WEVOT0lEX1BST0ZJTEVfVjEAAAAAAQAAABUAAQAAAAM1MjUAAgAAAAIwMQADAAAADzUyNTAxNjMxMjYwOTI5NAAEAAAAFDg5NTI1MDE3ODg3NzUyNjcxMzE0AAUAAAALKzY1ODE5ODIxOTAABgAAAAdTaW5ndGVsAAcAAAAHZS1pZGVhcwAIAAAABAAA+0IACQAAAAQKGEsVAAoAAAAEAAABbQALAAAABAAADYQADAAAAAQAAAAIAA0AAAAE////rQAOAAAABP////cADwAAAAQAAAA6ABAAAAAEAAAACQARAAAABAAAAC8AEgAAABBlbi1TRyx6aC1IYW5zLVNHABMAAAAOQXNpYS9TaW5nYXBvcmUAFAAAAEBkMmRhMmFiY2JiZWY5OWM1NTI3NzQ5NDQ3ODhkZmNhOGRmMDRkZDFiMjAxY2FiNTE2ZjRmZWZhZTk5N2M0N2MwABUAAAAEAAAnEGqda+1W7wuRANSPBqX7yrbSED+zY7wa3AsYe4jG9gtf",
+      "wire_sha256": "565fe35b2a3000f1934c1136f5e873dfcac57f942798a50d62057c51a7876f3b"
+    },
+    {
+      "profile": {
+        "callingCode": "+65",
+        "carrier": {
+          "apn": "e-ideas",
+          "bands": [
+            1,
+            3,
+            7,
+            8
+          ],
+          "mcc": "525",
+          "mnc": "01",
+          "name": "Singtel"
+        },
+        "cell": {
+          "band": 1,
+          "bandwidthKhz": 10000,
+          "cqi": 11,
+          "earfcn": 554,
+          "eci": 71476639,
+          "pci": 435,
+          "rsrp": -81,
+          "rsrq": -11,
+          "rssnr": 77,
+          "tac": 33263,
+          "technology": "LTE",
+          "timingAdvance": 24
+        },
+        "dataCall": {
+          "addresses": [],
+          "dnses": [
+            "1.1.1.1"
+          ],
+          "gateways": [],
+          "iface": "rmnet_data0",
+          "mtu": 1500,
+          "protocol": "IPV4V6",
+          "state": "CONNECTED"
+        },
+        "identityDigest": "204cf378719460df284a16c5b0eb7293dc9a2c2b4de421d5cd7cd6d388d398f8",
+        "locale": [
+          "en-SG",
+          "zh-Hans-SG"
+        ],
+        "locationKey": "SG/Asia/Singapore",
+        "operator": {
+          "alphaLong": "Singtel",
+          "alphaShort": "Singtel",
+          "isoCountry": "sg",
+          "isoNetwork": "sg",
+          "numeric": "52501",
+          "roaming": false
+        },
+        "schema": "dev.xenoid.cellular-profile/v2",
+        "sim": {
+          "ad": "",
+          "gid1": "",
+          "iccid": "89525018363280599111",
+          "imsi": "525019699791437",
+          "mncLength": 2,
+          "msisdn": "+6581678547",
+          "spn": "Singtel"
+        },
+        "slot": {
+          "embedded": false,
+          "logicalSlotIndex": 0,
+          "portId": 0,
+          "present": true,
+          "ready": true,
+          "slotId": 0
+        },
+        "timezone": "Asia/Singapore"
+      },
+      "seed_sha256": "80dac3e390a1ab47cb20491628bc26f008d35576d7675dffd2b1301706a2fc4f",
+      "wire_base64": "WEVOT0lEX1BST0ZJTEVfVjEAAAAAAQAAABUAAQAAAAM1MjUAAgAAAAIwMQADAAAADzUyNTAxOTY5OTc5MTQzNwAEAAAAFDg5NTI1MDE4MzYzMjgwNTk5MTExAAUAAAALKzY1ODE2Nzg1NDcABgAAAAdTaW5ndGVsAAcAAAAHZS1pZGVhcwAIAAAABAAAge8ACQAAAAQEQqWfAAoAAAAEAAABswALAAAABAAAAioADAAAAAQAAAABAA0AAAAE////rwAOAAAABP////UADwAAAAQAAABNABAAAAAEAAAACwARAAAABAAAABgAEgAAABBlbi1TRyx6aC1IYW5zLVNHABMAAAAOQXNpYS9TaW5nYXBvcmUAFAAAAEAyMDRjZjM3ODcxOTQ2MGRmMjg0YTE2YzViMGViNzI5M2RjOWEyYzJiNGRlNDIxZDVjZDdjZDZkMzg4ZDM5OGY4ABUAAAAEAAAnECmr+dsK2kzhuW4pKa8jhecDDEyAUgmBQeZpKrFHdSaR",
+      "wire_sha256": "fd1443f65e27f8c061db43a454a99913d03f3dcd86b1e18e893e2a31bd24f4d9"
+    }
+  ],
+  "schema": "dev.xenoid.synthetic-cellular-test-fixture/v1",
+  "source_path": "src/xenoid/cellular.py",
+  "source_sha256": "2d6ff3a2331ff89851f1cbb8e060e7b6b4bd383406f504e75b582f4c571228ff"
+}

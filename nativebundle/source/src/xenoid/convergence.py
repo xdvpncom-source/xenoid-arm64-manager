@@ -1276,6 +1276,16 @@ class ConvergencePlanner:
                 recreate_reasons.append("location_pending_recreate")
 
         location_host = location_component.get("host")
+        if (
+            runtime_action in {"create", "recreate"}
+            and location_action == "reuse"
+            and isinstance(location_host, Mapping)
+            and isinstance(location_host.get("active"), Mapping)
+        ):
+            # An active profile can be reused, but its verification epoch is
+            # bound to the old container ID. Verify it on the replacement via
+            # the existing location owner; do not generate a new SIM profile.
+            location_action = "converge"
         location_pending = (
             location_host.get("pending")
             if isinstance(location_host, Mapping)

@@ -88,11 +88,11 @@ static char*read_fd(int fd,size_t limit,size_t*length){
  char*data=calloc(1,(size_t)s.st_size+1);if(!data)return NULL;size_t done=0;while(done<(size_t)s.st_size){ssize_t n=read(fd,data+done,(size_t)s.st_size-done);if(n<=0){free(data);return NULL;}done+=(size_t)n;}*length=done;return data;
 }
 static int load_at(int directory,const char*name,struct json*j){int fd=openat(directory,name,O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);if(fd<0)return 0;size_t n=0;j->s=read_fd(fd,MAX_JSON,&n);close(fd);j->length=(int)n;return j->s&&parse(j);}
-static int nonunique(const char*name){return !strncmp(name,"cpu_",4)||!strncmp(name,"memory_",7)||!strncmp(name,"battery_",8)||!strncmp(name,"display_",8)||!strncmp(name,"input_",6)||!strncmp(name,"thermal_",8)||!strcmp(name,"usb_manufacturer")||!strcmp(name,"usb_product")||!strcmp(name,"usb_vendor_id")||!strcmp(name,"usb_product_id");}
+static int nonunique(const char*name){return !strcmp(name,"build_hardware")||!strncmp(name,"cpu_",4)||!strncmp(name,"memory_",7)||!strncmp(name,"battery_",8)||!strncmp(name,"display_",8)||!strncmp(name,"input_",6)||!strncmp(name,"thermal_",8)||!strcmp(name,"usb_manufacturer")||!strcmp(name,"usb_product")||!strcmp(name,"usb_vendor_id")||!strcmp(name,"usb_product_id");}
 static int add(struct leaf*plan,int*count,const struct json*j,const char*name,const char*path){
  if(*count==MAX_PLAN||!nonunique(name)||strlen(name)>=sizeof(plan[0].name))return 0;
  int token=lookup(j,path);if(token<0)return 0;
- int text=!strcmp(name,"cpu_implementer")||strstr(name,"_part")||strstr(name,"_model")||!strcmp(name,"battery_technology")||!strcmp(name,"input_name")||!strncmp(name,"usb_",4)||strstr(name,"_type");
+ int text=!strcmp(name,"build_hardware")||!strcmp(name,"cpu_implementer")||strstr(name,"_part")||strstr(name,"_model")||!strcmp(name,"battery_technology")||!strcmp(name,"input_name")||!strncmp(name,"usb_",4)||strstr(name,"_type");
  if(j->t[token].type!=(text?'s':'n'))return 0;
  struct leaf*p=&plan[(*count)++];strcpy(p->name,name);if(!scalar(j,token,p->value,sizeof(p->value)-1))return 0;
  if(!text){char*end;errno=0;(void)strtoll(p->value,&end,10);if(errno||*end)return 0;}
@@ -117,6 +117,10 @@ static int verify_ids(int dir,const struct json*j){
  return 1;
 }
 static int plan_leaves(struct leaf*p,int*count,const struct json*j){
+ char hardware[32];
+ if(!scalar(j,lookup(j,"build.hardware"),hardware,sizeof(hardware))
+  ||(strcmp(hardware,"bluejay")&&strcmp(hardware,"raven"))
+  ||!add(p,count,j,"build_hardware","build.hardware"))return 0;
  if(!add(p,count,j,"cpu_implementer","cpu.implementer"))return 0;
  snprintf(p[*count].name,sizeof(p[*count].name),"cpu_count");snprintf(p[(*count)++].value,sizeof(p[0].value),"8\n");
  const char*cpu[]={"processor","part","model","minimumFrequencyKhz","maximumFrequencyKhz"};

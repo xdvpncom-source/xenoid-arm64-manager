@@ -3288,8 +3288,11 @@ def _execute_device_regeneration(args: argparse.Namespace) -> dict[str, Any]:
     journal = RegenerationJournal(context)
     manager = runtime(args)
     state = journal.load()
+    identity_hook = getattr(args, "_identity_reservation_hook", None)
     resumed = state is not None
     if state is not None:
+        if identity_hook is not None:
+            identity_hook.resume(state)
         engine = manager.ensure_engine_started()
         if engine.get("ok") is not True:
             return _regeneration_result(
@@ -3348,7 +3351,7 @@ def _execute_device_regeneration(args: argparse.Namespace) -> dict[str, Any]:
         manager.assert_regeneration_single_user()
     if state is None:
         identity = identity_store.load()
-        transaction_id = secrets.token_hex(16)
+        transaction_id = identity_hook.transaction_id() if identity_hook is not None else secrets.token_hex(16)
         # Deterministic host-only gates run before anything can mutate: the
         # Google provider/binding preflight reads only local state, and the
         # runtime preflight accepts only a verified no-op dry-run plan.
@@ -3378,37 +3381,45 @@ def _execute_device_regeneration(args: argparse.Namespace) -> dict[str, Any]:
                 "device identity must be initialized before regeneration",
             )
         before = manager.regeneration_snapshot()
-        sim_epoch = secrets.token_hex(16)
-        while sim_epoch == before["simEpoch"]:
+        def new_target():
             sim_epoch = secrets.token_hex(16)
-        statfs_fsid = secrets.token_hex(8)
-        while statfs_fsid == before["statfsFsid"] or int(statfs_fsid, 16) == 0:
+            while sim_epoch == before["simEpoch"]:
+                sim_epoch = secrets.token_hex(16)
             statfs_fsid = secrets.token_hex(8)
-        drm_id = secrets.token_hex(16)
-        while drm_id == before["drmDeviceUniqueId"]:
+            while statfs_fsid == before["statfsFsid"] or int(statfs_fsid, 16) == 0:
+                statfs_fsid = secrets.token_hex(8)
             drm_id = secrets.token_hex(16)
-        location_target = LocationStateStore(
-            context.state_root, manager.cfg.network_dns_servers
-        ).regeneration_target(sim_epoch)
-        stable_target = generate_stable_target(identity["stable"])
-        target = {
-            "stableDigest": stable_identity_digest(stable_target),
-            "stable": stable_target,
-            "simEpoch": sim_epoch,
-            "locationProfileDigest": location_target["profileDigest"],
-            "bootId": generate_boot_id(),
-            "statfsFsid": statfs_fsid,
-            "bluetoothAddress": _generate_bluetooth_address(before["bluetoothAddress"]),
-            "deviceName": _generate_device_name(
-                before["deviceName"],
-                cold_profile=getattr(manager.cfg, "cold_profile", None),
-            ),
-            "hostname": _generate_hostname(before["hostname"]),
-            "googleBindingDigest": before["googleBindingDigest"],
-            "drmDeviceUniqueId": drm_id,
-        }
+            while drm_id == before["drmDeviceUniqueId"]:
+                drm_id = secrets.token_hex(16)
+            location_target = LocationStateStore(
+                context.state_root, manager.cfg.network_dns_servers
+            ).regeneration_target(sim_epoch)
+            stable_target = generate_stable_target(identity["stable"])
+            target = {
+                "stableDigest": stable_identity_digest(stable_target),
+                "stable": stable_target,
+                "simEpoch": sim_epoch,
+                "locationProfileDigest": location_target["profileDigest"],
+                "bootId": generate_boot_id(),
+                "statfsFsid": statfs_fsid,
+                "bluetoothAddress": _generate_bluetooth_address(before["bluetoothAddress"]),
+                "deviceName": _generate_device_name(
+                    before["deviceName"],
+                    cold_profile=getattr(manager.cfg, "cold_profile", None),
+                ),
+                "hostname": _generate_hostname(before["hostname"]),
+                "googleBindingDigest": before["googleBindingDigest"],
+                "drmDeviceUniqueId": drm_id,
+            }
+            if identity_hook is not None:
+                identity_hook.location_target(location_target)
+            return target
+
+        target = identity_hook.reserve(before, new_target) if identity_hook is not None else new_target()
         # The journal owns every fixed target before any identity store
         state = journal.prepare(transaction_id, before, target)
+        if identity_hook is not None:
+            identity_hook.prepared(state)
     else:
         pending = identity_store.load()
         pending_stable = (

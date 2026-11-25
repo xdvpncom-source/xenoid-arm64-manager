@@ -19,14 +19,17 @@ class HostHelperClosure(unittest.TestCase):
     def test_declared_worker_closure_includes_the_lazy_vm_guard_dependency(self):
         self.assertIn('qa_host_memory.py', REQUIRED)
         self.assertIn('qa_control_routes.py', REQUIRED)
-        self.assertEqual(len(REQUIRED | {'default-bluejay-policy.json'}), 15)
+        self.assertIn('identity_reservations.py', REQUIRED)
+        self.assertEqual(len(REQUIRED | {'default-bluejay-policy.json'}), 16)
         self.assertTrue(all((ROOT / 'qa' / name).is_file() for name in REQUIRED))
 
-    def probe(self, include_vm, include_control=True):
+    def probe(self, include_vm, include_control=True, include_identity=True):
         with tempfile.TemporaryDirectory(prefix='xenoid-worker-startup-') as temporary:
             folder = Path(temporary)
             for name in REQUIRED:
-                if (include_vm or name != 'qa_host_memory.py') and (include_control or name != 'qa_control_routes.py'):
+                if ((include_vm or name != 'qa_host_memory.py')
+                        and (include_control or name != 'qa_control_routes.py')
+                        and (include_identity or name != 'identity_reservations.py')):
                     (folder / name).write_bytes((ROOT / 'qa' / name).read_bytes())
             (folder / 'default-bluejay-policy.json').write_bytes((ROOT / 'qa/default-bluejay-policy.json').read_bytes())
             (folder / 'disabled-fixture-config.json').write_text('{"enabled":false}\n')
@@ -51,6 +54,14 @@ exec(compile(ast.Module(body=[route_import],type_ignores=[]),'<actual-resource-r
 import qa_control_routes
 assert Path(qa_control_routes.__file__).resolve().parent==root
 assert ensure_control_routes is qa_control_routes.ensure_control_routes
+worker=ast.parse((root/'script_host.py').read_text())
+broker=next(n for n in worker.body if isinstance(n,ast.ClassDef)and n.name=='Broker')
+gate=next(n for n in broker.body if isinstance(n,ast.FunctionDef)and n.name=='managed_identity_gate')
+identity_import=next(n for n in ast.walk(gate)if isinstance(n,ast.ImportFrom)and n.module=='identity_reservations')
+exec(compile(ast.Module(body=[identity_import],type_ignores=[]),'<actual-identity-reservation-import>','exec'))
+import identity_reservations
+assert Path(identity_reservations.__file__).resolve().parent==root
+assert NativeGate is identity_reservations.NativeGate
 if sys.argv[2]=='yes':
  import qa_host_memory
  assert Path(qa_host_memory.__file__).resolve().parent==root
@@ -75,7 +86,12 @@ print(json.dumps({'answer':answer,'module_sha256':hashlib.sha256((root/'qa_host_
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("No module named 'qa_control_routes'", result.stderr)
 
-    def test_15_file_worker_loads_real_route_module_and_runs_resource_vm_guard(self):
+    def test_worker_without_identity_dependency_fails_actual_managed_import(self):
+        result = self.probe(True, include_identity=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No module named 'identity_reservations'", result.stderr)
+
+    def test_16_file_worker_loads_real_modules_and_runs_resource_vm_guard(self):
         result = self.probe(True)
         self.assertEqual(result.returncode, 0, result.stderr)
         observed = json.loads(result.stdout)

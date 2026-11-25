@@ -65,6 +65,23 @@ def valid_bluetooth_sidecar(value):
     return isinstance(value, bytes) and re.fullmatch(rb"[0-9A-F]{2}(?::[0-9A-F]{2}){5}\n", value) is not None
 
 
+def initial_runtime_identity(stable, model):
+    """Deterministic initial sidecars from already-owned stable identity."""
+    serial = stable["serial"]
+    android_id = stable.get("androidId", stable.get("android_id"))
+    if (not isinstance(serial, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{5,31}", serial) is None
+            or not isinstance(android_id, str) or re.fullmatch(r"[0-9a-f]{16}", android_id) is None
+            or not isinstance(model, str) or re.fullmatch(r"[ -~]{1,50}", model) is None):
+        raise ValueError("initial_identity_input_invalid")
+    seed = b"xenoid.initial-runtime/v1\0" + serial.encode("ascii") + b"\0" + android_id.encode("ascii") + b"\0"
+    def derive(name):
+        return hashlib.sha256(seed + name).hexdigest()
+    fsid = derive(b"statfs")[:16]
+    return {"statfs_fsid": fsid if int(fsid, 16) else "0000000000000001",
+            "hostname": "android-" + derive(b"hostname")[:16],
+            "device_name": model + " " + derive(b"device-name")[:12].upper()}
+
+
 def profile_leaves(profile):
     require(isinstance(profile, dict) and profile.get("schema") == "dev.xenoid.fingerprint/v1", "profile_schema_invalid")
     require(profile.get("build", {}).get("device") == "bluejay", "profile_product_invalid")
@@ -78,6 +95,7 @@ def profile_leaves(profile):
     require(re.fullmatch(r"[0-9]{2}", ids["imeisv"] or "") is not None, "identity_invalid")
     output = {key: scalar(value) for key, value in ids.items()}
     output["bluetooth_address"] = scalar(initial_bluetooth_address(ids))
+    output.update({key: scalar(value) for key, value in initial_runtime_identity(ids, profile["build"]["model"]).items()})
     cpu = profile["cpu"]
     require(len(cpu["cores"]) == 8, "cpu_profile_invalid")
     output.update(cpu_count=b"8\n", cpu_implementer=scalar(cpu["implementer"]))
@@ -224,13 +242,19 @@ def classify_seed(image, profile, *, policy):
                 require(UUID.fullmatch(actual.decode().strip()) is not None, "profile_seed_conflict")
             elif name == "effective.json":
                 require(json.loads(actual) == expected, "profile_seed_conflict")
+            elif name in {"statfs_fsid", "hostname", "device_name"}:
+                text = actual.decode("ascii").strip()
+                valid = (re.fullmatch(r"[0-9a-f]{16}", text) is not None and int(text, 16) != 0 if name == "statfs_fsid"
+                         else re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,62}", text) is not None if name == "hostname"
+                         else re.fullmatch(r"[ -~]{1,64}", text) is not None)
+                require(valid and actual == (text + "\n").encode(), "profile_seed_conflict")
             elif name == "bluetooth_address":
                 # Completed/pending GEN may own a newer address than the
                 # initial derivation. Validate it without ever replacing it.
                 require(valid_bluetooth_sidecar(actual), "profile_seed_conflict")
             else:
                 require(actual == data, "profile_seed_conflict")
-            mode = 0o600 if name == "bluetooth_address" else 0o644
+            mode = 0o600 if name in {"bluetooth_address", "hostname", "device_name"} else 0o644
             if not image.metadata_matches(path, 0, 0, mode, FILE_LABEL):
                 # Recover only the missing xattr caused by the old pre-init
                 # atomically replaced nonunique leaves. Every ID, JSON byte,
@@ -266,7 +290,7 @@ def seed_image(image, profile, *, policy):
     for name in [key for key in leaves if key != "effective.json"] + ["effective.json"]:
         path = "/local/tmp/xenoid-profile/" + name
         image.write_absent(path, leaves[name])
-        image.metadata(path, 0, 0, 0o600 if name == "bluetooth_address" else 0o644, FILE_LABEL)
+        image.metadata(path, 0, 0, 0o600 if name in {"bluetooth_address", "hostname", "device_name"} else 0o644, FILE_LABEL)
     return {"ok": True, "profileSeeded": True, "leafCount": len(leaves), "identityGenerated": False}
 
 

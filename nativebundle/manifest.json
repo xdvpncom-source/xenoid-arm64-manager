@@ -28,12 +28,13 @@
     {
       "before_sha256": [
         "2606c505fe265c7aba731e6ea7bd5c8e9678ca742d17de27315f471c993087f1",
-        "66a2980ce1143bbade7a952b1b4c6aefb571a05c8eb75412b8eec35a5edba046"
+        "66a2980ce1143bbade7a952b1b4c6aefb571a05c8eb75412b8eec35a5edba046",
+        "c84fdad5938098d2bbb93cf66f1da959e726ee09a01b5db74723da32b030268a"
       ],
-      "bytes": 49899,
+      "bytes": 50324,
       "mode": "0644",
       "path": "daemon/app/src/main/java/dev/xenoid/daemon/DeviceProfileManager.java",
-      "sha256": "c84fdad5938098d2bbb93cf66f1da959e726ee09a01b5db74723da32b030268a"
+      "sha256": "6a0a62a438df79b5f94fb182ebd1fd178a4b01ffdf28b90bbeb17e85805b59e8"
     },
     {
       "before_sha256": [
@@ -158,6 +159,15 @@
     },
     {
       "before_sha256": [
+        "44f224e19bc8a622858bce113cbfa3f8b45924d6449fce591210fdfa774db478"
+      ],
+      "bytes": 82761,
+      "mode": "0644",
+      "path": "native/xenoid-hide/xenoid_overlay.c",
+      "sha256": "36657a30fb6319a361310eee5fa293754bb5340f17b80aff8dcc7c42ce1ba890"
+    },
+    {
+      "before_sha256": [
         null
       ],
       "bytes": 854,
@@ -185,12 +195,13 @@
     },
     {
       "before_sha256": [
-        null
+        null,
+        "e456bfb60b0299108814207470791ac8a091c252981efc4b2f7a810b8dc11b89"
       ],
-      "bytes": 19378,
+      "bytes": 19653,
       "mode": "0644",
       "path": "native/xenoid-profile-runtime/cold_seed.c",
-      "sha256": "e456bfb60b0299108814207470791ac8a091c252981efc4b2f7a810b8dc11b89"
+      "sha256": "2585b3012950e0ae718a191b9a254953d00d0d98485a8becdb85a2c196f48d5c"
     },
     {
       "before_sha256": [
@@ -357,12 +368,13 @@
       "before_sha256": [
         null,
         "d6a2d3547574c436305fd17fcf1d9a076992aa872064cdb1465c96925c39b17b",
-        "234f0a9ba75e9076b1a26e08277ae670d967348a94cfa90bd76a76d42024da07"
+        "234f0a9ba75e9076b1a26e08277ae670d967348a94cfa90bd76a76d42024da07",
+        "6beb351b9516da11c51aa5f7f43f99d050f2f05f589f69b6d87fad19ec099afd"
       ],
-      "bytes": 19576,
+      "bytes": 21302,
       "mode": "0755",
       "path": "scripts/seed-cold-profile.py",
-      "sha256": "6beb351b9516da11c51aa5f7f43f99d050f2f05f589f69b6d87fad19ec099afd"
+      "sha256": "f601ae8a2f19dd46b5581f1e21d9c5b5a34738d882016fe54141cda5e03680b9"
     },
     {
       "before_sha256": [
@@ -448,12 +460,13 @@
     },
     {
       "before_sha256": [
-        null
+        null,
+        "599e40c4523e9ac06708255b065a39a4201fb33b8524717e00b8da0b9c2515f7"
       ],
-      "bytes": 11540,
+      "bytes": 11626,
       "mode": "0644",
       "path": "scripts/test-cold-seed-native.py",
-      "sha256": "599e40c4523e9ac06708255b065a39a4201fb33b8524717e00b8da0b9c2515f7"
+      "sha256": "706ffa43317052b51440311056b4ba142192226b8183bb1f1a17c717f94cebbc"
     },
     {
       "before_sha256": [
@@ -658,12 +671,13 @@
       "before_sha256": [
         "3a3918eccce48cfdbbb1b075d0759227bed7d56b0ce83b928d7272974a16976f",
         "f95001f6548551d9de8fe537b2349fc80c2d5e293262d380d03dbed4371bf5a7",
-        "2200f044b0ca27cf123ac024f3bbecddb794e42ee723ef868045be0c448604ef"
+        "2200f044b0ca27cf123ac024f3bbecddb794e42ee723ef868045be0c448604ef",
+        "9947933fa838454592e3621015ec3d22eed24a8aa7d2ee487888c4232bd245d5"
       ],
-      "bytes": 181858,
+      "bytes": 182531,
       "mode": "0644",
       "path": "src/xenoid/cli.py",
-      "sha256": "9947933fa838454592e3621015ec3d22eed24a8aa7d2ee487888c4232bd245d5"
+      "sha256": "bdd931a004a8a380285a2a35ca1f2e0a968732750286e86684cce593e905b21c"
     },
     {
       "before_sha256": [
@@ -687,12 +701,13 @@
     {
       "before_sha256": [
         "e5c0879ccfc96807fa95b54719d6c7e6255bbcfe6c3c88d6fa52016b8dfcf6ef",
-        "fe72ddb67164c4e96d39dde697436b10394570072cb8414915aa545715bda0f7"
+        "fe72ddb67164c4e96d39dde697436b10394570072cb8414915aa545715bda0f7",
+        "2f5a4cfb310e53fb709555dac701479aab828b3e5b9188cb0e7c7653dc8eb68a"
       ],
-      "bytes": 143674,
+      "bytes": 144184,
       "mode": "0644",
       "path": "src/xenoid/convergence.py",
-      "sha256": "2f5a4cfb310e53fb709555dac701479aab828b3e5b9188cb0e7c7653dc8eb68a"
+      "sha256": "1514703f7af813b8d4a31c1c9196efdb32c92bae4985051be21409bb7a5604a6"
     },
     {
       "before_sha256": [
@@ -703,6 +718,15 @@
       "mode": "0644",
       "path": "src/xenoid/daemon_client.py",
       "sha256": "234fc3412a1ffb145d18df3a35e4429c9bf9537126fbcc55e12e6fcc34a17c80"
+    },
+    {
+      "before_sha256": [
+        "f98138a1df5a637419538fb00bfd20bfa73a0d57b5975b0507499d6ff0762b33"
+      ],
+      "bytes": 51688,
+      "mode": "0644",
+      "path": "src/xenoid/device_identity.py",
+      "sha256": "4fa18d6cc3212e71bd2fcd3ffa42c355b965bfb8c2ae7dd5eab2ff76879591d0"
     },
     {
       "before_sha256": [

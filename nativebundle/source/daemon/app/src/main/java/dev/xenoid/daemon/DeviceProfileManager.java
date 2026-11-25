@@ -289,6 +289,12 @@ final class DeviceProfileManager {
     }
 
     private static Map<String,String> prepareHardwareProfile(JSONObject profile) throws Exception {
+        JSONObject build = profile.optJSONObject("build");
+        if (build == null) throw new IllegalArgumentException("build_profile_required");
+        String hardware = requiredString(build, "hardware");
+        if (!"bluejay".equals(hardware) && !"raven".equals(hardware)) {
+            throw new IllegalArgumentException("build_hardware_profile_unsupported");
+        }
         JSONObject cpu = profile.optJSONObject("cpu");
         if (cpu == null) throw new IllegalArgumentException("cpu_profile_required");
         String implementer = requiredString(cpu, "implementer");
@@ -301,6 +307,7 @@ final class DeviceProfileManager {
         }
 
         Map<String,String> fields = new LinkedHashMap<>();
+        fields.put("build_hardware", hardware);
         fields.put("cpu_count", String.valueOf(cores.length()));
         fields.put("cpu_implementer", implementer);
         long[] minimums = new long[8];

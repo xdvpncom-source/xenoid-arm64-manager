@@ -35,9 +35,10 @@ manifest_paths = [row[1].strip() for row in manifest_rows]
 assert len(manifest_paths) == len(set(manifest_paths)), "Duplicate QA manifest paths"
 required = {"script_host.py", "script_runtime.py", "shared_policy.py", "qa_lifecycle.py",
             "qa_vpn_probe.py", "qa_input_ready.py", "qa_ui_reader.py", "qa_google_reset.py", "qa_fresh6a.py",
-            "qa_control_routes.py", "qa_resource_runtime.py", "qa_host_memory.py"}
+            "qa_control_routes.py", "qa_resource_runtime.py", "qa_host_memory.py", "identity_reservations.py"}
 assert required <= set(installed), "Required QA host module is not installed"
 assert installed.index("qa_control_routes.py") < installed.index("qa_resource_runtime.py"), "Control-route dependency installs after resource runtime"
+assert installed.index("identity_reservations.py") < installed.index("script_host.py"), "Identity reservation dependency installs after worker"
 assert all(installed.index(name) < installed.index("script_host.py") for name in required - {"script_host.py"}), "Host dependency installs after entrypoint"
 for filename in installed:
     assert "qa/" + filename in manifest_paths, filename + " has no integrity pin"

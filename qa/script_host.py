@@ -243,7 +243,7 @@ def validate(config):
         if not isinstance(assigned["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", assigned["sha256"]):
             raise ValueError("Invalid assigned APK digest")
         checked["assigned_apk"] = assigned.copy()
-    for key in ("qa_canary", "window_actions", "read_only_window", "shared_app"):
+    for key in ("qa_canary", "window_actions", "read_only_window", "shared_app", "identity_reservations"):
         if key in config:
             if type(config[key]) is not bool:
                 raise ValueError(f"{key} must be a boolean")
@@ -364,6 +364,9 @@ def snapshot(folder, number, run=None, after=None, limit=32):
         config = json.loads(row["config"])
         result = {k: config[k] for k in ("script_id", "version", "run_id", "resource_tag", "instance_id")}
         result.update(state=row["state"], device_id=number, iteration=row["iteration"], updated=row["updated"])
+        if config.get("identity_reservations"):
+            from identity_reservations import poll as identity_poll
+            result.update(identity_poll(folder, row["id"]))
         try:
             from qa_profile_runtime import status_for_binding
             profile_status = status_for_binding(config.get("instance_id"), config.get("resource_tag"),
@@ -1543,6 +1546,21 @@ echo retired
         except Exception as error:
             raise RegenerationPending(getattr(error, "code", None)) from None
 
+    def managed_identity_gate(self, manager, store, key, receipt, deadline):
+        if not self.config.get("identity_reservations"):
+            return None
+        from identity_reservations import NativeGate, digest
+        context = {"scenario_sha256": hashlib.sha256(self.config["source"].encode()).hexdigest(),
+                   "profile_plan_sha256": digest(receipt["profile_plan"]) if receipt.get("profile_plan") else None}
+        prior = receipt.get("identity_reservation_context")
+        if prior is not None and prior != context:
+            raise RegenerationPending("identity_reservation_context_changed")
+        if prior is None:
+            receipt["identity_reservation_context"] = context
+            store.save(key, receipt)
+        return NativeGate(store.folder, self.config, manager, key, stopping=self.stopping,
+                          deadline=deadline, context=context)
+
     def _regenerate(self, timeout, operation_key, post_cache=None, post_google=None, *, _deadline=None):
         store = self.regeneration_receipts
         if store is None:
@@ -1570,6 +1588,9 @@ echo retired
             if receipt is not None and receipt.get("post_google") != post_google:
                 raise RegenerationPending("regeneration_post_google_plan_changed")
             if receipt is not None and receipt.get("status") == "committed":
+                gate = self.managed_identity_gate(manager, store, operation_key, receipt, deadline)
+                if gate is not None:
+                    gate.finalize(receipt["native_journal"])
                 self.regeneration_binding(manager)
                 self.invalidate_regeneration_caches()
                 with self.display_raw_docker(manager, deadline):
@@ -1586,6 +1607,9 @@ echo retired
                 self.invalidate_regeneration_caches()
                 with self.display_raw_docker(manager, deadline):
                     result = self.verify_regeneration_native_completion(manager, cli, receipt, deadline)
+                    gate = self.managed_identity_gate(manager, store, operation_key, receipt, deadline)
+                    if gate is not None:
+                        gate.finalize(receipt["native_journal"])
                     result["profile_apply"] = self.complete_regeneration_profile(manager, cli, receipt, store, operation_key, deadline)
                     progress = receipt.get("post_google_progress") or {}
                     if progress.get("registration_started") and post_cache is not None:
@@ -1678,6 +1702,9 @@ echo retired
             cli.print_json = lambda value: captured.append(value)
             args = argparse.Namespace(context=manager.context, config=manager.cfg, lease=manager.lease,
                                       dry_run=False, _operation_lock_held=True)
+            identity_gate = self.managed_identity_gate(manager, store, operation_key, receipt, deadline)
+            if identity_gate is not None:
+                args._identity_reservation_hook = identity_gate
             self.cleanup()
             self.invalidate_regeneration_caches()
             previous_operation_lock = getattr(manager, "operation_lock_held", False)
@@ -1691,6 +1718,8 @@ echo retired
                     if live_state is None and saved_state is None:
                         self.prepare_regeneration(cli, manager, args, binding, receipt, store, operation_key, check_budget, deadline=deadline)
                     if live_state is None and saved_state is not None:
+                        if identity_gate is not None:
+                            identity_gate.resume(saved_state)
                         verified = cli._verify_regeneration_target_state(manager, cli.DeviceIdentityStore(manager.context), saved_state)
                         google = cli._regeneration_google_runtime_postcondition(manager)
                         if google.get("ok") is not True:
@@ -1726,6 +1755,8 @@ echo retired
                               "runtime_epoch_changed": True, "operation_key": operation_key, "replayed": False}
                     if not result["identities_changed"] or not result["boot_id_changed"]:
                         raise RegenerationPending("native_regeneration_identity_unchanged")
+                    if identity_gate is not None:
+                        identity_gate.finalize(state)
                     if post_google is not None or receipt.get("profile_plan") is not None:
                         receipt["native_completion"] = self.regeneration_native_completion(refreshed, cli, state, result, deadline)
                         store.save(operation_key, receipt)
@@ -3467,6 +3498,13 @@ def run_iteration(folder, number, config, manager, iteration, app_cache=None):
 
     broker = Broker(manager, log, verify=lambda: trusted_device(number, config), config=config, app_cache=app_cache)
     broker.regeneration_receipts = RegenerationReceipts(folder, run, iteration)
+    if config.get("identity_reservations"):
+        from identity_reservations import publish_observation
+        with manager.instance_operation_lock(timeout_seconds=config.get("command_timeout") or None):
+            if any((manager.context.state_root / name).exists() for name in (
+                    "device-regenerate-v3.json", "device-regenerate-v2.json", "device-regenerate.json", "convergence-v1.json")):
+                raise RegenerationPending("identity_observation_native_pending")
+            publish_observation(folder, config, manager)
     with tempfile.TemporaryDirectory(prefix=f"xp-{number}-", dir="/run") as temp:
         root = Path(temp) / "root"
         root.mkdir()
@@ -3537,6 +3575,8 @@ def resume_regeneration_receipts(folder, number, config, iteration, app_cache):
             continue  # Never adopt a deleted/replaced immutable device.
         pinned = {"run_id": run, "instance_id": binding["instance_id"], "resource_tag": binding["resource_tag"],
                   "expected_container_id": binding["container_id"]}
+        if config.get("identity_reservations"):
+            pinned.update(identity_reservations=True, source=config["source"])
         def log(level, message):
             with db(folder) as conn:
                 record(conn, config["run_id"], iteration, level, message)
@@ -3658,7 +3698,7 @@ def supervisor(folder, number):
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("start", "stop", "status", "logs", "poll", "worker"))
+    parser.add_argument("action", choices=("start", "stop", "status", "logs", "poll", "worker", "identity-ack"))
     parser.add_argument("device", nargs="?")
     parser.add_argument("--run-id")
     parser.add_argument("--after", type=int, default=0)
@@ -3682,6 +3722,13 @@ def main():
         return {"items": results}
     number = device_number(args.device)
     folder = STATE / str(number)
+    if args.action == "identity-ack":
+        from identity_reservations import acknowledge
+        with db(folder) as connection:
+            row = connection.execute("SELECT id,config,state FROM runs WHERE current=1").fetchone()
+        if row is None or row["id"] != args.run_id or row["state"] in TERMINAL:
+            raise ValueError("identity_ack_current_run_changed")
+        return acknowledge(folder, args.run_id, json.loads(row["config"]), read_json(65536))
     if args.action in {"start", "worker"}:
         # The pinned native CLI derives canonical relative build inputs from its checkout cwd.
         os.chdir(UPSTREAM)
