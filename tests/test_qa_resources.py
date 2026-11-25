@@ -273,9 +273,7 @@ class ResourceBootIdentityTest(unittest.TestCase):
             self.addCleanup(context.stop)
 
     def write_marker(self, **changes):
-        key = {"container_id": self.owned["Id"], "started_at": "boot-1",
-               "config_sha256": hashlib.sha256(json.dumps(self.config, sort_keys=True).encode()).hexdigest(),
-               **self.identity, **changes}
+        key = {**GLOBALS["resource_key"](self.owned, self.config, self.identity), **changes}
         (self.root / "phone-1.json").write_text(json.dumps({"key": key, "identity": self.identity}))
 
     def test_same_boot_and_config_leave_later_script_settings_alone(self):

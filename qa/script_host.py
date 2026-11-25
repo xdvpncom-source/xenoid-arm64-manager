@@ -2812,8 +2812,16 @@ echo retired
             except DumpFailed:
                 reject("navigation_fresh_back_unavailable")
             except (UiReaderError, OSError, TimeoutError) as error:
-                # Preserve cleanup/transport failures, including their cause;
-                # the consumed offer can never be replayed by the caller.
+                # An unreadable epoch proves no runtime transition. Reject this
+                # consumed offer only after fenced cleanup is positively complete;
+                # the next ordinary observation must acquire a fresh reader/token.
+                if (isinstance(error, UiReaderError) and str(error) == "ui_reader_epoch_unreadable" and
+                        getattr(error, "cleanup_error", None) is None and reader.closed is True and
+                        reader.private_identity is None and reader.pipe.closed is True and
+                        reader.pipe.cleanup_pending is False and reader.pipe.process.poll() is not None):
+                    reject("navigation_reader_epoch_unreadable")
+                # Preserve real runtime changes, unknown cleanup and transport
+                # failures. Never reinterpret a lost input acknowledgement.
                 raise TransportUnavailable("Navigation reader verification failed: " + str(error)) from error
             finally:
                 offer["verification_stages"]["fresh_node_read_seconds"] = max(0.0, time.monotonic() - nav_started)

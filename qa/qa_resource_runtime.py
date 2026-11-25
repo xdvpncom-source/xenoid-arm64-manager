@@ -17,7 +17,8 @@ import tempfile
 
 
 DEFAULT_CONFIG = {"enabled": True, "fps": 20, "scale": "minimum",
-                  "min_side": 200, "dpi": 72, "timeout": 180, "render_fps": None, "memory_reserve_mib": 0}
+                  "min_side": 200, "dpi": 72, "timeout": 180, "render_fps": None, "memory_reserve_mib": 0,
+                  "proxy_maintenance_timeout": 180}
 CONFIG = Path("/etc/xenoid-fleet/qa-resources.json")
 STATE = Path("/var/lib/xenoid-fleet/qa-resources")
 UPSTREAM = Path("/opt/xenoid-fleet/upstream")
@@ -59,6 +60,8 @@ def validate_config(value):
             raise ValueError(key + " must be a positive integer")
     if type(config["timeout"]) is not int or config["timeout"] < 0:
         raise ValueError("timeout must be a nonnegative integer; zero is unlimited")
+    if type(config["proxy_maintenance_timeout"]) is not int or config["proxy_maintenance_timeout"] < 0:
+        raise ValueError("proxy_maintenance_timeout must be a nonnegative integer; zero is unlimited")
     return config
 
 
@@ -285,6 +288,9 @@ def apply_metrics(broker, config, backup_path, *, identity=None):
 
 
 def native_manager(name):
+    # Match the official CLI before native modules cache artifact tool inputs.
+    from script_host import adopt_native_environment
+    adopt_native_environment()
     sys.path.insert(0, str(UPSTREAM / "src"))
     os.chdir(UPSTREAM)
     from xenoid.config import resolve_instance
@@ -305,8 +311,11 @@ def read_marker(path):
 
 
 def resource_key(owned, config, identity):
+    # Network maintenance budgets must not invalidate an existing graphics
+    # marker or cause a legacy display to be reapplied.
+    display_config = {k: v for k, v in config.items() if k != "proxy_maintenance_timeout"}
     result = {"container_id": owned["Id"], "started_at": owned["State"].get("StartedAt"),
-              "config_sha256": hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest(),
+              "config_sha256": hashlib.sha256(json.dumps(display_config, sort_keys=True).encode()).hexdigest(),
               **identity}
     if "profile_sha256" in config:
         result["profile_sha256"] = config["profile_sha256"]
@@ -359,6 +368,78 @@ def reconcile(name, config, *, force=False):
         return reconcile_owned(name, config, manager, force=force)
 
 
+def native_proxy_maintenance(manager, owned, config, document, *, broker=None):
+    """Ordinary fresh-native timer only; network pending is not graphics failure.
+
+    The existing caller owns the native operation lock. The existing sixty
+    second timer is the retry schedule; no worker or extra timer is created.
+    """
+    import time
+    from script_host import Broker, RuntimeIdentityError
+    seconds = config.get("proxy_maintenance_timeout", 180)
+    deadline = time.monotonic() + seconds if seconds else None
+    result = dict(document)
+    summary = {"ready": False, "reconciled": False, "code": "proxy_maintenance_pending"}
+    if broker is None:
+        broker = Broker(manager, lambda *_args: None,
+                        config={"expected_container_id": owned["Id"], "command_timeout": seconds})
+    def remaining():
+        value = None if deadline is None else deadline - time.monotonic()
+        if value is not None and value <= 0:
+            raise TimeoutError("proxy_maintenance_timeout")
+        return value
+    def same_owner(active):
+        value = remaining()
+        current, _ = active._owned_container_record(timeout=5 if value is None else min(5, value))
+        if current is None or current.get("Id") != owned["Id"] or current.get("State", {}).get("Running") is not True:
+            raise RuntimeIdentityError("The owned runtime changed during proxy maintenance")
+    try:
+        with broker.owned_manager() as active:
+            same_owner(active)
+            value = remaining()
+            options = {} if value is None else {"timeout": value}
+            client = active.daemon_client(**options)
+            try:
+                status = client.proxy_status(**options)
+            except RuntimeIdentityError:
+                raise
+            except Exception:
+                status = {}
+            if isinstance(status, dict) and status.get("ok") is True and (
+                    status.get("enabled") is False or status.get("configured") is False):
+                summary = {"ready": None, "reconciled": False, "skipped": "disabled_or_unconfigured",
+                           "enabled": status.get("enabled"), "configured": status.get("configured")}
+            else:
+                if not isinstance(status, dict) or not status.get("runtimeEpoch"):
+                    # Official control bootstrap can establish the current
+                    # daemon epoch; never fabricate one from a saved marker.
+                    from xenoid.util import command_timeout
+                    value = remaining()
+                    budget = contextlib.nullcontext() if value is None else command_timeout(value)
+                    with budget:
+                        bootstrap = active.reconcile_bootstrap(**({} if value is None else {"timeout": remaining()}))
+                    if not isinstance(bootstrap, dict) or bootstrap.get("transportReady") is not True or bootstrap.get("controlReady") is not True:
+                        summary["code"] = "proxy_bootstrap_pending"
+                        same_owner(active)
+                        if result.get("code") == "proxy_recovery_pending":
+                            result.pop("code")
+                        result.update(ok=True, resource_ok=True, proxy_pending=True, proxy_watchdog=summary)
+                        return result
+                same_owner(active)
+                summary = broker.display_proxy_reconcile(active, deadline, stopping=False)
+            same_owner(active)
+    except RuntimeIdentityError:
+        raise
+    except Exception:
+        # Do not copy native exception text, source URLs or credentials.
+        summary = {"ready": False, "reconciled": False, "code": "proxy_maintenance_pending"}
+    pending = not summary.get("skipped") and summary.get("ready") is not True
+    if result.get("code") == "proxy_recovery_pending":
+        result.pop("code")
+    result.update(ok=True, resource_ok=True, proxy_pending=pending, proxy_watchdog=summary)
+    return result
+
+
 def reconcile_owned(name, config, manager, *, force=False, broker=None):
     # A lifecycle operation may have run while waiting for the native lock.
     # Refresh all binding/marker information before any resource mutation.
@@ -375,6 +456,17 @@ def reconcile_owned(name, config, manager, *, force=False, broker=None):
         raise ValueError("Fresh Pixel 6a requires its separate native render_fps=15 contract")
     if pending_profile(manager, owned):
         return {"instance": name, "ok": True, "skipped": "profile_pending", "deferred": True}
+    native = is_bluejay(cold) and config.get("render_fps") is not None
+    native_timer = not force and native
+    if native and any(os.path.lexists(manager.context.state_root / journal) for journal in (
+            "device-regenerate-v3.json", "convergence-v1.json", "device-regenerate-v2.json", "device-regenerate.json")):
+        return {"instance": name, "ok": True, "skipped": "native_transaction_pending", "deferred": True}
+    control_route = None
+    if native:
+        import time
+        from qa_control_routes import ensure_control_routes
+        control_route = ensure_control_routes(manager, owned["Id"],
+            deadline=time.monotonic() + config["timeout"] if config["timeout"] else None)
     config = effective_config(config, manager, owned)
     host_vm = ensure_host_vm_guard(manager, owned)
     headroom = (ensure_memory_headroom(manager, owned["Id"], reserve_mib=config["memory_reserve_mib"])
@@ -385,6 +477,11 @@ def reconcile_owned(name, config, manager, *, force=False, broker=None):
     backup = STATE / (name + "-original-display.json")
     previous = prepare_identity(marker, backup, read_marker(marker), identity)
     same_boot = previous.get("key") == key
+    if native_timer and same_boot:
+        document = native_proxy_maintenance(manager, owned, config,
+            {**previous, "instance": name, "host_vm": host_vm, "memory_headroom": headroom, "control_route": control_route}, broker=broker)
+        atomic_json(marker, document)
+        return {**document, "proxy_maintenance_only": True}
     if not force and same_boot and not previous.get("proxy_pending"):
         return {"instance": name, "skipped": "already_applied", "host_vm": host_vm, "memory_headroom": headroom}
     from script_host import Broker
@@ -425,6 +522,10 @@ def reconcile_owned(name, config, manager, *, force=False, broker=None):
         atomic_json(marker, document)
         return document
     document = {"instance": name, "ok": True, "key": key, "identity": identity, "display": result, "metrics": metrics, "memory_headroom": headroom}
+    if native:
+        document["control_route"] = control_route
+    if native_timer:
+        document = native_proxy_maintenance(manager, owned, config, document, broker=broker)
     atomic_json(marker, document)
     return document
 

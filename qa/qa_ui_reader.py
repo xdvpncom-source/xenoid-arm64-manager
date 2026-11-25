@@ -341,11 +341,14 @@ class PersistentUiReader:
         if not cleanup and self.stopping.is_set():
             raise UiReaderError('ui_reader_stopping')
         current = self._binding(include_epoch=not cleanup)
-        keys = ('pid','pid_start','image','instance','tag') if cleanup else tuple(self.binding)
+        keys = ('pid','pid_start','image','instance','tag')
         if any(current[key] != self.binding[key] for key in keys):
             raise UiReaderError('ui_reader_runtime_changed')
-        if not cleanup and not current['epoch']:
-            raise UiReaderError('ui_reader_epoch_unreadable')
+        if not cleanup:
+            if not current['epoch']:
+                raise UiReaderError('ui_reader_epoch_unreadable')
+            if current['epoch'] != self.binding['epoch']:
+                raise UiReaderError('ui_reader_runtime_changed')
 
     def _private_ok(self):
         if self.directory is None or self.private_identity is None:
