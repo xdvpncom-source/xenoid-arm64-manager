@@ -6,7 +6,7 @@ import re
 
 root = Path(__file__).resolve().parents[1]
 required_host_modules = {
-    "script_host.py", "script_runtime.py", "shared_policy.py",
+    "script_host.py", "script_runtime.py", "shared_policy.py", "qa_graphics.py",
     "qa_lifecycle.py", "qa_vpn_probe.py", "qa_input_ready.py", "qa_ui_reader.py", "qa_google_reset.py",
     "qa_device_profile.py", "qa_profile_runtime.py", "qa_resource_runtime.py", "qa_host_memory.py", "qa_control_routes.py", "qa_fresh6a.py", "identity_reservations.py",
 }

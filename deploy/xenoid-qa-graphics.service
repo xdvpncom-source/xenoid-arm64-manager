@@ -1,0 +1,10 @@
+[Unit]
+Description=Converge idle Xenoid QA reported renderer names
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/xenoid-fleet graphics reconcile all --pending-only
+TimeoutStartSec=0
+UMask=0077

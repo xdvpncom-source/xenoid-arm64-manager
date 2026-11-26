@@ -20,16 +20,18 @@ class HostHelperClosure(unittest.TestCase):
         self.assertIn('qa_host_memory.py', REQUIRED)
         self.assertIn('qa_control_routes.py', REQUIRED)
         self.assertIn('identity_reservations.py', REQUIRED)
-        self.assertEqual(len(REQUIRED | {'default-bluejay-policy.json'}), 16)
+        self.assertIn('qa_graphics.py', REQUIRED)
+        self.assertEqual(len(REQUIRED | {'default-bluejay-policy.json'}), 17)
         self.assertTrue(all((ROOT / 'qa' / name).is_file() for name in REQUIRED))
 
-    def probe(self, include_vm, include_control=True, include_identity=True):
+    def probe(self, include_vm, include_control=True, include_identity=True, include_graphics=True):
         with tempfile.TemporaryDirectory(prefix='xenoid-worker-startup-') as temporary:
             folder = Path(temporary)
             for name in REQUIRED:
                 if ((include_vm or name != 'qa_host_memory.py')
                         and (include_control or name != 'qa_control_routes.py')
-                        and (include_identity or name != 'identity_reservations.py')):
+                        and (include_identity or name != 'identity_reservations.py')
+                        and (include_graphics or name != 'qa_graphics.py')):
                     (folder / name).write_bytes((ROOT / 'qa' / name).read_bytes())
             (folder / 'default-bluejay-policy.json').write_bytes((ROOT / 'qa/default-bluejay-policy.json').read_bytes())
             (folder / 'disabled-fixture-config.json').write_text('{"enabled":false}\n')
@@ -62,6 +64,12 @@ exec(compile(ast.Module(body=[identity_import],type_ignores=[]),'<actual-identit
 import identity_reservations
 assert Path(identity_reservations.__file__).resolve().parent==root
 assert NativeGate is identity_reservations.NativeGate
+worker_main=next(n for n in worker.body if isinstance(n,ast.FunctionDef)and n.name=='main')
+graphics_import=next(n for n in ast.walk(worker_main)if isinstance(n,ast.ImportFrom)and n.module=='qa_graphics')
+exec(compile(ast.Module(body=[graphics_import],type_ignores=[]),'<actual-worker-graphics-import>','exec'))
+import qa_graphics
+assert Path(qa_graphics.__file__).resolve().parent==root
+assert lifecycle_gate is qa_graphics.lifecycle_gate
 if sys.argv[2]=='yes':
  import qa_host_memory
  assert Path(qa_host_memory.__file__).resolve().parent==root
@@ -91,7 +99,12 @@ print(json.dumps({'answer':answer,'module_sha256':hashlib.sha256((root/'qa_host_
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("No module named 'identity_reservations'", result.stderr)
 
-    def test_16_file_worker_loads_real_modules_and_runs_resource_vm_guard(self):
+    def test_worker_without_graphics_dependency_fails_actual_startup_import(self):
+        result = self.probe(True, include_graphics=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No module named 'qa_graphics'", result.stderr)
+
+    def test_complete_worker_tree_loads_real_modules_and_runs_resource_vm_guard(self):
         result = self.probe(True)
         self.assertEqual(result.returncode, 0, result.stderr)
         observed = json.loads(result.stdout)

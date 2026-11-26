@@ -47,6 +47,7 @@ _PHASES = (
     "live_resolved",
     "components_deployed",
     "control_ready",
+    "graphics_ready",
     "identity_converged",
     "location_converged",
     "keybox_converged",
@@ -162,6 +163,7 @@ _PHASE_DEADLINES_SECONDS = {
     "runtime_started": 300.0,
     "seed_runtime_started": 300.0,
     "control_ready": 240.0,
+    "graphics_ready": 240.0,
     "proxy_converged": 300.0,
 }
 
@@ -1552,7 +1554,8 @@ class ConvergenceExecutor:
             if project_root is not None:
                 from .artifacts import ArtifactBuilder
 
-                artifact_builder = ArtifactBuilder(Path(project_root))
+                from .graphics import renderer_environment
+                artifact_builder = ArtifactBuilder(Path(project_root), environment=renderer_environment(getattr(manager, "cfg", None)))
         self.live_acceptance = live_acceptance
         self.artifact_builder = artifact_builder
         self.planner = ConvergencePlanner(manager, artifact_builder=artifact_builder)
@@ -2211,6 +2214,21 @@ class ConvergenceExecutor:
             if journal_state is not None:
                 journal_state = self.journal.advance("control_ready")
                 completed.add("control_ready")
+                self._verify_after_phase(journal_state, skip_build=True)
+
+        # Old fixed-target regeneration plans intentionally lack these new
+        # components. Finish them unchanged; ordinary up then applies graphics.
+        graphics_required = "glesRenderer" in deploy_mapping
+        graphics_current = (initial_observation.get("components") or {}).get("graphics") or {}
+        if graphics_required and (journal_state is None or "graphics_ready" not in completed or graphics_current.get("ok") is not True):
+            self._phase_call(
+                "graphics_ready", "reconcile_graphics", reporter, deadline,
+                artifact_records=[_thaw(record) for record in plan.artifact_records],
+                expected_container_id=final_container_id,
+            )
+            if journal_state is not None and _PHASE_INDEX[journal_state["phase"]] < _PHASE_INDEX["graphics_ready"]:
+                journal_state = self.journal.advance("graphics_ready")
+                completed.add("graphics_ready")
                 self._verify_after_phase(journal_state, skip_build=True)
 
         journal_state = self._component_phase(

@@ -94,6 +94,7 @@ from .storage import (
     public_storage_state,
 )
 from .runtime_image import RuntimeImageBuilder
+from .graphics import RendererOverlay, renderer_environment, CONTROL as _RENDERER_CONTROL, LIBRARY_OUTPUT as _RENDERER_LIBRARY_OUTPUT, MANIFEST_OUTPUT as _RENDERER_MANIFEST_OUTPUT
 from .cold_profile import apply_boot_command, selected_base_profile, normalize_cold_profile, expected_properties, profile_digest
 from .protection import SharedProtectionManager
 from .process import run_bounded
@@ -138,6 +139,7 @@ _CONVERGENCE_REMOTE_ARTIFACTS = {
     "profile": ("native/xenoid-profile/xenoid-profile", "/data/local/tmp/xenoid-profile-helper", 0o755),
     "rootd": ("native/xenoid-rootd/xenoid-rootd-arm64", _ROOTD_REMOTE_PATH, 0o755),
     "netctl": ("native/xenoid-netctl/xenoid-netctl", "/data/local/tmp/xenoid-netctl", 0o755),
+    "rendererControl": ("native/xenoid-renderer/xenoid-renderer", _RENDERER_CONTROL, 0o755),
 }
 _CONVERGENCE_ACCEPTANCE_CHECKS = (
     "container",
@@ -147,6 +149,7 @@ _CONVERGENCE_ACCEPTANCE_CHECKS = (
     "boot",
     "daemon",
     "rootd",
+    "graphics",
     "location",
     "keybox",
     "camera",
@@ -420,7 +423,7 @@ class RuntimeManager:
         temporary = tempfile.TemporaryDirectory(prefix="xenoid-artifacts-")
         destination = Path(temporary.name)
         try:
-            builder = ArtifactBuilder(self.context.project_root)
+            builder = ArtifactBuilder(self.context.project_root, environment=renderer_environment(self.cfg))
             snapshot = builder.snapshot(consumer)
             builder.stage(snapshot, destination)
         except (KeyError, OSError, RuntimeError, ValueError) as exc:
@@ -570,7 +573,7 @@ class RuntimeManager:
             self.context.project_root,
             self.docker_base_cmd(),
             self.docker_env(),
-            artifact_builder=ArtifactBuilder(self.context.project_root),
+            artifact_builder=ArtifactBuilder(self.context.project_root, environment=renderer_environment(self.cfg)),
             runner=self._run_runtime_image_command,
             engine_lock=self._runtime_image_engine_lock,
             cold_profile=getattr(self.cfg, "cold_profile", None),
@@ -7366,6 +7369,13 @@ cat >/dev/null
             "nextActions": next_actions,
         }
 
+    def _graphics_deferred(self) -> bool:
+        """An existing GEN owns its fixed targets until its journal completes."""
+        try:
+            return RegenerationJournal(self.context).load() is not None
+        except IdentityError:
+            return True
+
     def _observe_artifact_records(
         self,
     ) -> tuple[list[str], list[dict[str, Any]], Optional[ArtifactSnapshot]]:
@@ -7373,6 +7383,7 @@ cat >/dev/null
         builder.project_root = self.context.project_root.resolve()
         builder.catalog = TARGETS
         builder._requested_environment = dict(os.environ)
+        builder._requested_environment.update(renderer_environment(self.cfg))
         builder._deadline = time.monotonic() + 60.0
         builder._cancelled = None
         builder._internal_cancel = threading.Event()
@@ -7392,6 +7403,8 @@ cat >/dev/null
             (*_CONVERGENCE_ARTIFACT_TARGETS, *PROFILE_RUNTIME_TARGETS)
             if getattr(self.cfg, "cold_profile", None) is not None else _CONVERGENCE_ARTIFACT_TARGETS
         ):
+            if name in {"glesRenderer", "rendererControl"} and self._graphics_deferred():
+                continue
             target = TARGETS[name]
             record_path = cache / "v1" / f"{name}.json"
             try:
@@ -7522,7 +7535,7 @@ cat >/dev/null
         builder._cold_profile = normalize_cold_profile(getattr(self.cfg, "cold_profile", None))
         builder.docker_argv = tuple(self.docker_base_cmd())
         builder.docker_env = self.docker_env()
-        builder.artifact_builder = ArtifactBuilder(self.context.project_root)
+        builder.artifact_builder = ArtifactBuilder(self.context.project_root, environment=renderer_environment(self.cfg))
         builder._runner = self._run_runtime_image_command
         builder._engine_lock = self._runtime_image_engine_lock
         builder._cache_root = (
@@ -7805,6 +7818,7 @@ cat >/dev/null
         deploy_components: dict[str, Any] = {
             name: {"state": "unknown"}
             for name in _CONVERGENCE_REMOTE_ARTIFACTS
+            if name != "rendererControl" or not self._graphics_deferred()
         }
         bootstrap: Optional[dict[str, Any]] = None
         proxy_engine: Optional[dict[str, Any]] = None
@@ -7855,6 +7869,8 @@ cat >/dev/null
             for name, (output_path, remote_path, mode) in (
                 _CONVERGENCE_REMOTE_ARTIFACTS.items()
             ):
+                if name == "rendererControl" and self._graphics_deferred():
+                    continue
                 desired_output = desired_by_target.get(name, {}).get(output_path)
                 observed = self._remote_file_identity(
                     remote_path,
@@ -8002,6 +8018,9 @@ cat >/dev/null
             else "pending" if isinstance(proxy_daemon, Mapping)
             else "unknown"
         )
+        graphics = self.renderer_status(artifact_records=artifact_records) if state == "running" else {"ok": False, "state": "unknown"}
+        if not self._graphics_deferred():
+            deploy_components["glesRenderer"] = {"state": "matching" if graphics.get("ok") is True else "drift", "status": graphics}
         pending = self._observe_pending_operations()
         control_plane_record = self._read_control_plane_record()
         android_tun = self._android_tun_state() if state == "running" else {"ready": False}
@@ -8068,6 +8087,7 @@ cat >/dev/null
                 "storageSentinel": sentinel,
             },
             "components": {
+                "graphics": graphics,
                 "daemon": daemon_component,
                 "deploy": deploy_components,
                 "identity": {
@@ -12448,6 +12468,9 @@ cat >/dev/null
                         else {"ok": False, "error": "daemon_install_failed"}
                     )
                 continue
+            if name == "glesRenderer":
+                results[name] = self._stage_renderer(artifact_records)
+                continue
             if name in {"rootd", "proxySandbox"}:
                 # These owners deploy their pinned bytes while reconciling the
                 # authenticated control plane/proxy host transaction.
@@ -12501,6 +12524,76 @@ cat >/dev/null
             "components": results,
             **({} if ok else {"error": "component_deploy_failed"}),
         }
+
+    def renderer_status(self, artifact_records: Any = None) -> dict[str, Any]:
+        """Observe the real source/target and zygote mappings, without repair."""
+        container, _ = self._owned_container_record()
+        if not container:
+            return {"ok": False, "error": "graphics_runtime_unavailable"}
+        state = container.get("State") or {}
+        if state.get("Running") is not True:
+            return {"ok": False, "error": "graphics_runtime_unavailable"}
+        if artifact_records is None:
+            _, artifact_records, _ = self._observe_artifact_records()
+        result = RendererOverlay(self).observe(artifact_records)
+        epoch = {"containerId": container.get("Id"), "initPid": state.get("Pid"), "startedAt": state.get("StartedAt")}
+        process = self.docker_exec(["cat", "/proc/1/stat"], timeout=10)
+        try:
+            fields = str(process.get("stdout") or "").rpartition(")")[2].split()
+            ticks = int(fields[19])
+            if process.get("ok") is True and ticks > 0:
+                epoch["initStartTicks"] = ticks
+        except (ValueError, IndexError):
+            pass
+        return {**result, "runtime": epoch}
+
+    def reconcile_graphics(self, artifact_records: Any, expected_container_id: Optional[str] = None) -> dict[str, Any]:
+        return RendererOverlay(self).converge(artifact_records, expected_container_id)
+
+    def _stage_renderer(self, artifact_records: Any) -> dict[str, Any]:
+        """Import immutable artifact bytes into a private root-owned directory."""
+        overlay = RendererOverlay(self)
+        try:
+            output, descriptor = overlay._artifacts(artifact_records)
+        except (OSError, ValueError, TypeError):
+            return {"ok": False, "error": "graphics_artifact_unavailable"}
+        directory = f"/data/local/tmp/xenoid-renderer/objects/{output['sha256']}"
+        directories = ("/data/local/tmp/xenoid-renderer", "/data/local/tmp/xenoid-renderer/objects", directory)
+        prepare = "set -eu; " + " ".join(
+            f"if test -e {shlex.quote(path)}; then test -d {shlex.quote(path)}; test ! -L {shlex.quote(path)}; "
+            f"test \"$(stat -c '%u:%g:%a' {shlex.quote(path)})\" = 0:0:700; "
+            f"else mkdir -m 700 {shlex.quote(path)}; chown 0:0 {shlex.quote(path)}; fi;"
+            for path in directories
+        )
+        if self.docker_exec(["sh", "-c", prepare], timeout=20).get("ok") is not True:
+            return {"ok": False, "error": "graphics_stage_ownership_invalid"}
+        library, _, error = self._pinned_artifact_object("glesRenderer", artifact_records, output_path=_RENDERER_LIBRARY_OUTPUT)
+        descriptor_path, _, descriptor_error = self._pinned_artifact_object("glesRenderer", artifact_records, output_path=_RENDERER_MANIFEST_OUTPUT)
+        if error or descriptor_error or library is None or descriptor_path is None:
+            return {"ok": False, "error": "graphics_artifact_unavailable"}
+        staged = self._deploy_verified_helper(str(library), f"{directory}/libGLESv2_angle.so", mode=0o644)
+        if staged.get("ok") is not True:
+            return {"ok": False, "error": "graphics_stage_failed"}
+        token = secrets.token_hex(16)
+        temporary = f"/data/local/tmp/.xenoid-renderer-manifest-{token}"
+        uploaded = self.adb(["push", str(descriptor_path), temporary], timeout=30)
+        if uploaded.get("ok") is not True:
+            return {"ok": False, "error": "graphics_manifest_upload_failed"}
+        target = f"{directory}/libGLESv2_angle.so"
+        command = (
+            "set -eu; "
+            f"test ! -L {shlex.quote(temporary)}; "
+            f"test \"$(sha256sum {shlex.quote(temporary)} | cut -d' ' -f1)\" = {descriptor['sha256']}; "
+            f"chown 0:0 {shlex.quote(temporary)}; chmod 600 {shlex.quote(temporary)}; "
+            f"mv -f {shlex.quote(temporary)} {shlex.quote(directory + '/renderer-label.json')}; "
+            "context=$(ls -Zd /vendor/lib64/egl/libGLESv2_angle.so | awk '{print $1}'); "
+            f"case \"$context\" in u:object_r:*) chcon \"$context\" {shlex.quote(target)};; esac"
+        )
+        installed = self.docker_exec(["sh", "-c", command], timeout=30)
+        if installed.get("ok") is not True:
+            self.adb(["shell", "rm", "-f", temporary], timeout=15)
+            return {"ok": False, "error": "graphics_manifest_stage_failed"}
+        return {"ok": True, "staged": True, "sha256": output["sha256"], "manifestSha256": descriptor["sha256"]}
 
     @staticmethod
     def _convergence_action_name(action: Any) -> str:

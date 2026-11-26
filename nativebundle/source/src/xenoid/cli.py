@@ -12,6 +12,7 @@ import secrets
 import stat
 import sys
 import time
+from dataclasses import replace
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Iterator, Mapping, Optional
@@ -738,6 +739,47 @@ def cmd_delete(args: argparse.Namespace) -> int:
         "record": record,
     })
     return 0
+
+
+def cmd_renderer_status(args: argparse.Namespace) -> int:
+    result = runtime(args).renderer_status()
+    print_json({"schema": "dev.xenoid.renderer/v1", **result})
+    return 0 if result.get("ok") else 1
+
+
+def cmd_renderer_configure(args: argparse.Namespace) -> int:
+    """Persist a runtime preference, then use the sole convergence owner."""
+    # Runtime preferences must not change an already pinned convergence plan.
+    # Finish that transaction through ordinary up, then retry configuration.
+    from .convergence import ConvergenceJournal, ConvergenceError
+    try:
+        retained = ConvergenceJournal.for_manager(runtime(args)).load()
+    except ConvergenceError as error:
+        print_json({"ok": False, "error": error.code})
+        return 1
+    if retained is not None:
+        print_json({"ok": False, "error": "graphics_convergence_pending", "deferred": True})
+        return 1
+    try:
+        payload = sys.stdin.buffer.read(4097)
+        if len(payload) > 4096:
+            raise ValueError
+        value = json.loads(payload)
+        if not isinstance(value, dict) or set(value) != {"renderer_label"}:
+            raise ValueError
+        label = value["renderer_label"]
+        if label == "native":
+            label = None
+        cfg = replace(args.config, graphics_renderer=label)
+        # save_config validates before replacing the old config atomically.
+        save_config(args.context, cfg)
+    except (ValueError, TypeError, UnicodeError):
+        print_json({"ok": False, "error": "graphics_renderer_invalid"})
+        return 1
+    args.config = cfg
+    args.dry_run = False
+    args.skip_build = bool(getattr(args, "skip_build", False))
+    return cmd_up(args)
 
 
 def cmd_config_show(args: argparse.Namespace) -> int:
@@ -4571,6 +4613,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     proxy_reconcile.set_defaults(func=cmd_proxy_reconcile)
 
+    s = sub.add_parser("renderer", help="manage the reported GLES renderer label (software backend is unchanged)")
+    renderer = s.add_subparsers(required=True)
+    rs = renderer.add_parser("status", help="observe owned binding and real zygote mappings")
+    rs.set_defaults(func=cmd_renderer_status)
+    rc = renderer.add_parser("configure", help="save a reported label and converge through up")
+    rc.add_argument("--json-stdin", action="store_true", required=True)
+    rc.add_argument("--skip-build", action="store_true")
+    rc.set_defaults(func=cmd_renderer_configure)
+
     s = sub.add_parser("camera", help="configure Android-owned camera media")
     camera = s.add_subparsers(required=True)
     camera_status = camera.add_parser("status", help="show camera source and activation status")
@@ -4834,6 +4885,7 @@ def build_parser() -> argparse.ArgumentParser:
 _READ_ONLY_INSTANCE_COMMANDS = frozenset({
     "cmd_doctor",
     "cmd_config_show",
+    "cmd_renderer_status",
     "cmd_google_services_status",
     "cmd_google_services_registry",
     "cmd_logs",

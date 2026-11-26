@@ -131,6 +131,7 @@ def main(version, digest, selector, profile=None):
                 # Finalize after native profile, proxy, microG and Chrome setup.
                 # The wrapper's per-device lock must be released before its QA hook.
                 fleet["qa_reconcile"]([device], force=True, required=True)
+                fleet["graphics_reconcile"]([device])
             except (OSError, fleet["FleetError"]) as error:
                 fleet["report_failure"](device, error)
                 failed = True

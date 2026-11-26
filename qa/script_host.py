@@ -4011,7 +4011,7 @@ def resume_regeneration_receipts(folder, number, config, iteration, app_cache):
     return recovered_current
 
 
-def supervisor(folder, number):
+def supervisor(folder, number, graphics_gate=None):
     def on_signal(_signo, _frame):
         raise Shutdown
     signal.signal(signal.SIGTERM, on_signal)
@@ -4042,6 +4042,16 @@ def supervisor(folder, number):
                 time.sleep(max(0, due - time.time()))
             resume_regeneration_receipts(folder, number, config, index, app_cache)
             manager = trusted_device(number, config)
+            if graphics_gate is not None:
+                from qa_graphics import worker_boundary
+                graphics = worker_boundary(number, config, manager, graphics_gate)
+                if graphics.get("ok") is not True or graphics.get("deferred"):
+                    reason = graphics.get("reason") or graphics.get("code") or "graphics_boundary_pending"
+                    if last_wait != reason:
+                        update(folder, run, "waiting", index, "Waiting for reported renderer: " + reason, "warning")
+                    last_wait = reason
+                    due = time.time() + 8
+                    continue
             try:
                 probe = Broker(manager, None, config=config, app_cache=app_cache)
                 boot = probe.adb(["shell", "getprop", "sys.boot_completed"], timeout=6)
@@ -4125,7 +4135,11 @@ def main():
         os.environ["XENOID_PROJECT"] = str(UPSTREAM)
         adopt_native_environment()
     if args.action == "worker":
-        supervisor(folder, number)
+        # Graphics reload must finish before a new QA worker can use the device.
+        # The worker retains the shared gate; scheduled reloads never stop it.
+        from qa_graphics import lifecycle_gate
+        with lifecycle_gate(number, worker=True) as graphics_gate:
+            supervisor(folder, number, graphics_gate=graphics_gate)
     elif args.action in {"start", "stop"}:
         STATE.mkdir(mode=0o700, exist_ok=True)
         return manage(args.action, folder, number, args.run_id)

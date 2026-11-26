@@ -150,6 +150,12 @@ class LiveAcceptance:
             )
             self._emit(progress, started, "running", "control-observed")
 
+            graphics = _mapping_at(snapshot, "components.graphics")
+            # Legacy fixed-target GEN plans have no graphics artifact yet.
+            actions = _mapping_at(resolved_expected, "componentActions.deploy")
+            if graphics and ("glesRenderer" in actions or mode.startswith("doctor")):
+                checks.add("graphics", graphics.get("ok") is True, "graphics_not_ready")
+
             self._proxy_checks(
                 manager,
                 snapshot,

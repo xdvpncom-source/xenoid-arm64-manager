@@ -113,6 +113,8 @@ class OutputSpec:
     elf_type: str | None = None
     elf_class: int | None = None
     interpreter: bool | None = None
+    # Pinned binary transforms must retain exact verified ELF bytes.
+    preserve_elf: bool = False
 
     def __post_init__(self) -> None:
         _validate_relative_name(self.path, "artifact_output_path_invalid")
@@ -120,6 +122,8 @@ class OutputSpec:
             raise ValueError("artifact_output_mode_invalid")
         if self.elf_class not in (None, 32, 64):
             raise ValueError("artifact_output_elf_class_invalid")
+        if not isinstance(self.preserve_elf, bool):
+            raise ValueError("artifact_output_preserve_elf_invalid")
         _normalize_elf_machine(self.elf_machine)
         _normalize_elf_type(self.elf_type)
 
@@ -282,8 +286,9 @@ def _out(
     elf_type: str | None = "DYN",
     *,
     interpreter: bool | None = None,
+    preserve_elf: bool = False,
 ) -> OutputSpec:
-    return OutputSpec(path, mode, machine, elf_type, 64 if machine else None, interpreter)
+    return OutputSpec(path, mode, machine, elf_type, 64 if machine else None, interpreter, preserve_elf)
 
 
 def _target(
@@ -595,6 +600,25 @@ _TARGET_LIST = (
         "native/xenoid-frame-pacer",
     ),
     _target(
+        "rendererControl",
+        ("scripts/build-native-renderer.sh", "arm64"),
+        (*_GENERIC_ANDROID, "scripts/build-native-renderer.sh",
+         "native/xenoid-renderer/xenoid_renderer.c"),
+        (_out("native/xenoid-renderer/xenoid-renderer", elf_type="EXEC", interpreter=False),),
+        "native/xenoid-renderer",
+    ),
+    _target(
+        "glesRenderer",
+        ("scripts/build-gles-renderer.sh",),
+        ("scripts/build-gles-renderer.sh", "scripts/renderer-platform-library.py",
+         "scripts/profile-gles-renderer.py"),
+        (_out("native/xenoid-renderer/libGLESv2_angle.so", mode=0o644, preserve_elf=True),
+         OutputSpec("native/xenoid-renderer/renderer-label.json", 0o644)),
+        "native/xenoid-renderer",
+        tools=(),
+        environment=(*_DOCKER_ENV, "XENOID_DOCKER_CONTEXT", "XENOID_GLES_RENDERER"),
+    ),
+    _target(
         "proxySandbox",
         ("scripts/build-proxy-sandbox.sh",),
         ("scripts/build-proxy-sandbox.sh", "native/xenoid-proxy-sandbox/xenoid_proxy_sandbox.c", "native/xenoid-proxy-sandbox/Makefile"),
@@ -629,7 +653,7 @@ CONSUMER_TARGETS: Mapping[str, tuple[str, ...]] = MappingProxyType(
             "ril",
             "radioConfig",
         ),
-        "liveDeploy": ("daemon", "rootd", "shimArm64", "proxySandbox"),
+        "liveDeploy": ("daemon", "rootd", "shimArm64", "proxySandbox", "rendererControl", "glesRenderer"),
         "release": ALL_TARGETS,
     }
 )
@@ -1192,6 +1216,9 @@ class ArtifactBuilder:
                     "elfType": _normalize_elf_type(output.elf_type),
                     "elfClass": output.elf_class,
                     "interpreter": output.interpreter,
+                    # Omit the default so pre-existing target identities and
+                    # image boot digests remain byte-for-byte unchanged.
+                    **({"preserveElf": True} if output.preserve_elf else {}),
                 }
                 for output in target.outputs
             ],
@@ -1643,7 +1670,8 @@ class ArtifactBuilder:
         try:
             for spec in sorted(target.outputs, key=lambda value: value.path):
                 path = self.project_root / spec.path
-                self._sanitize_public_output(path)
+                if not spec.preserve_elf:
+                    self._sanitize_public_output(path)
                 info = _secure_regular_stat(path, spec.mode, require_owner=True)
                 digest = _hash_file(path)
                 _validate_content(path, spec)

@@ -1,0 +1,10 @@
+[Unit]
+Description=Retry deferred QA renderer defaults at safe idle boundaries
+
+[Timer]
+OnBootSec=75s
+OnUnitInactiveSec=60s
+Unit=xenoid-qa-graphics.service
+
+[Install]
+WantedBy=timers.target

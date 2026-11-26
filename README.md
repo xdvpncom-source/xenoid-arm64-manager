@@ -1,6 +1,6 @@
 # Xenoid ARM64 Fleet
 
-The v0.1.53 release expands deterministic US SIM-number generation beyond the legacy 100-number pool while preserving saved profiles and regeneration targets. See the [release notes](docs/releases/v0.1.53.md). Official Xenoid native input and the existing Android preference controls remain in use.
+The v0.1.54 release adds an independent, panel-controlled reported OpenGL renderer name for QA. The default label is `Mali-G78`; the actual ANGLE/SwiftShader backend and its capabilities remain unchanged. Safe idle and worker-boundary convergence preserves existing identity profiles and regeneration targets. See the [release notes](docs/releases/v0.1.54.md). Official Xenoid native input remains in use.
 
 Install Xenoid on an ARM64 Ubuntu server and manage headless Android 13 instances through a local CLI. Each numeric ID maps to an upstream instance name. For example, `2` selects `phone-2`. Xenoid allocates the container, persistent volume, network, and loopback ADB port for each instance.
 
@@ -17,7 +17,7 @@ Long-running fleet qualification is recorded separately.
 Use an **ARM64 (aarch64) server running Ubuntu 24.04**, such as a Hetzner CAX server. The installer requires root access, outbound HTTPS, and free disk space for the build toolchain, container images, and Android data. Install and management commands use the same operator account and Xenoid registry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.53/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.54/install.sh | sudo -H bash -s -- --accept-android-licenses
 ```
 
 The `--accept-android-licenses` flag accepts the Android SDK licenses for the pinned build tools from Google. The installer prepares the host and creates fresh Pixel 6a devices up to the host’s reserved capacity. Allow tens of minutes for the first build on a small server. The CLI is installed as `/usr/local/bin/xenoid-fleet` and the managed checkout lives under `/opt/xenoid-fleet/upstream`. Rerunning the installer reuses the toolchain, creates missing IDs and converges existing matching Pixel 6a instances. An incompatible existing profile is rejected; deletion is a separate explicit operation.
@@ -35,7 +35,7 @@ sudo -H xenoid-fleet run 1 -- adb shell getprop sys.boot_completed
 Use `--install-only` to prepare the host before creating the first device or upgrade an existing installation without issuing a device start. Upgrades also refresh enabled proxies on already-running devices when their native control/process revision has not been verified.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.53/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.54/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
 ```
 
 ## Devices

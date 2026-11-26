@@ -21,6 +21,7 @@ REQUEST_SCHEMA = "dev.xenoid.native-identity-request/v1"
 OBSERVATION_SCHEMA = "dev.xenoid.native-identity-observation/v1"
 RECOVERY_SCHEMA = "dev.xenoid.native-identity-recovery/v1"
 TERMINAL_HANDOFF_SCHEMA = "dev.xenoid.native-identity-terminal-handoff/v1"
+PRE_REQUEST_HANDOFF_SCHEMA = "dev.xenoid.native-identity-pre-request-handoff/v1"
 SCRIPT_HOST = Path(__file__).with_name("script_host.py")
 NATIVE_STATE_HOME = Path.home() / ".xenoid"
 CGROUP_ROOT = Path("/sys/fs/cgroup")
@@ -366,6 +367,11 @@ def _recovery_context(folder, current_run, remaining=None):
             return None
         active, request = active_request(root, old_run)
         operation = receipt_row["operation_key"]
+        if request.get("operation_key") != operation:
+            with _terminal_native_lock(binding, None):
+                _pre_request_receipt(connection, root, binding, old_run, receipt_row, receipt,
+                                     original_config, active, request)
+            return None
         require(isinstance(operation, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", operation),
                 "identity_recovery_operation_invalid")
         request_path = root / active["path"]
@@ -530,7 +536,7 @@ def _terminal_native_lock(binding, request):
             candidate = state / name
             if os.path.lexists(candidate):
                 value = read(candidate)
-                require(name == "device-regenerate-v3.json"
+                require(request is not None and name == "device-regenerate-v3.json"
                         and value.get("instanceId") == binding["instance_id"]
                         and value.get("transactionId") == request["native_transaction"]
                         and value.get("before") == request["native_before"]
@@ -549,6 +555,137 @@ def _terminal_native_lock(binding, request):
     finally:
         os.close(fd)
 
+
+
+def _pre_request_receipt(connection, root, binding, original_run, saved, receipt, config, active, request):
+    """Attest the one interval after owner creation and before first request.
+
+    The global active pointer still names the preceding committed operation.
+    This function observes both operations; it never advances either of them.
+    """
+    operation = saved["operation_key"]
+    require(saved["run_id"] == original_run and type(saved["iteration"]) is int
+            and isinstance(operation, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", operation)
+            and operation != request.get("operation_key"), "identity_pre_request_owner_changed")
+    pending_path = directory(root / hashlib.sha256(operation.encode()).hexdigest())
+    require({path.name for path in pending_path.iterdir()} == {"owner.json"},
+            "identity_pre_request_already_started")
+    owner_path = pending_path / "owner.json"
+    owner = read(owner_path)
+    require(set(owner) == {"binding", "run_id", "operation_key", "native_transaction", "context"}
+            and owner.get("binding") == binding and owner.get("run_id") == original_run
+            and owner.get("operation_key") == operation
+            and isinstance(owner.get("native_transaction"), str)
+            and re.fullmatch(r"[0-9a-f]{32}", owner["native_transaction"])
+            and owner["native_transaction"] != request.get("native_transaction"),
+            "identity_pre_request_owner_changed")
+    short_binding = {key: binding[key] for key in ("instance_id", "resource_tag", "container_id")}
+    context = owner["context"]
+    require(isinstance(context, dict) and receipt.get("status") == "pending"
+            and receipt.get("binding") == short_binding
+            and not any(receipt.get(key) is not None for key in
+                        ("native_journal", "native_completion", "result", "completed_at", "preparation"))
+            and receipt.get("identity_reservation_context") == context
+            and context.get("scenario_sha256") == hashlib.sha256(config["source"].encode()).hexdigest()
+            and context.get("profile_plan_sha256") == (digest(receipt["profile_plan"]) if receipt.get("profile_plan") else None),
+            "identity_pre_request_receipt_changed")
+    stale_path = root / active["path"]
+    stale_owner_path = stale_path.parent / "owner.json"
+    stale_owner = read(stale_owner_path)
+    require(request.get("schema") == REQUEST_SCHEMA and request.get("phase") == "finalize"
+            and request.get("run_id") == original_run and request.get("binding") == binding
+            and all(stale_owner.get(key) == request.get(key) for key in
+                    ("binding", "run_id", "operation_key", "native_transaction", "context"))
+            and stale_path.parent.name == hashlib.sha256(request["operation_key"].encode()).hexdigest()
+            and request.get("target_sha256") == digest(request.get("target")),
+            "identity_pre_request_previous_uncommitted")
+    journal = request.get("native_state")
+    require(isinstance(journal, dict) and journal.get("schema") == "dev.xenoid.device-regenerate/v3"
+            and journal.get("phase") == "committed" and journal.get("instanceId") == binding["instance_id"]
+            and journal.get("transactionId") == request.get("native_transaction")
+            and journal.get("before") == request.get("native_before")
+            and journal.get("target") == request.get("target")
+            and request.get("values") == values_from_target(request["target"], request["location_sidecar"]),
+            "identity_pre_request_previous_uncommitted")
+    location_sidecar(request.get("location_sidecar"), request.get("target"))
+    rows = connection.execute("SELECT run_id,iteration,operation_key,document FROM regeneration_receipts WHERE run_id=? AND operation_key=?",
+                              (original_run, request["operation_key"])).fetchall()
+    require(len(rows) == 1, "identity_pre_request_previous_uncommitted")
+    prior_row = dict(rows[0])
+    prior = json.loads(prior_row["document"])
+    stable = request["target"].get("stableDigest")
+    require(type(prior_row["iteration"]) is int and 0 <= prior_row["iteration"] < saved["iteration"]
+            and prior.get("status") == "committed" and prior.get("binding") == short_binding
+            and prior.get("native_journal") == journal
+            and prior.get("identity_reservation_context") == request.get("context")
+            and isinstance(stable, str) and re.fullmatch(r"[0-9a-f]{64}", stable)
+            and receipt.get("before_digest") == stable
+            and (prior.get("native_completion") or {}).get("stable_digest") == stable
+            and (prior.get("result") or {}).get("ok") is True
+            and (prior.get("result") or {}).get("stable_digest_after") == stable,
+            "identity_pre_request_previous_uncommitted")
+    final_ack_path = stale_path.with_suffix(".ack.json")
+    final_ack = _recovery_ack(final_ack_path, request)
+    require(final_ack is not None and final_ack["decision"] == "finalized",
+            "identity_pre_request_previous_uncommitted")
+    reserve_path = stale_path.with_name("attempt-%d.reserve.json" % request["attempt"])
+    reserve = verified(read(reserve_path), "request_sha256")
+    require(reserve.get("schema") == REQUEST_SCHEMA and reserve.get("phase") == "reserve"
+            and type(reserve.get("attempt")) is int and reserve.get("attempt") == request["attempt"]
+            and reserve.get("target_sha256") == request["target_sha256"]
+            and reserve.get("target_sha256") == digest(reserve.get("target"))
+            and reserve.get("values") is None and reserve.get("native_state") is None
+            and all(reserve.get(key) == request.get(key) for key in
+                    ("binding", "run_id", "operation_key", "native_transaction", "context", "target", "native_before", "before_values", "location_sidecar")),
+            "identity_pre_request_previous_uncommitted")
+    reserve_ack_path = reserve_path.with_suffix(".ack.json")
+    reserve_ack = _recovery_ack(reserve_ack_path, reserve)
+    require(reserve_ack is not None and reserve_ack["decision"] == "reserved",
+            "identity_pre_request_previous_uncommitted")
+    prepared_path = stale_path.parent / "prepared.json"
+    require(read(prepared_path) == {"native_transaction": request["native_transaction"],
+            "target_sha256": request["target_sha256"], "attempt": request["attempt"]},
+            "identity_pre_request_previous_uncommitted")
+    paths = (root / "active.json", owner_path, stale_path, stale_owner_path,
+             final_ack_path, reserve_path, reserve_ack_path, prepared_path)
+    metadata = []
+    for path in paths:
+        info = path.lstat()
+        metadata.append((str(path.relative_to(root)), info.st_dev, info.st_ino, info.st_size,
+                         info.st_mtime_ns, info.st_ctime_ns))
+    return {"owner_sha256": digest(owner), "context_sha256": digest(context),
+            "before_digest": stable, "native_transaction": owner["native_transaction"],
+            "active_operation_key": request["operation_key"], "active_iteration": prior_row["iteration"],
+            "active_receipt_sha256": digest(prior), "metadata": metadata}
+
+
+def _pre_request_terminal_handoff(connection, folder, database_identity, row, saved, receipt,
+                                  config, binding, root, active, request, remaining):
+    require(saved["run_id"] == row["id"] and saved["iteration"] == row["iteration"],
+            "identity_pre_request_owner_changed")
+    before = _pre_request_receipt(connection, root, binding, row["id"], saved, receipt, config, active, request)
+    connection.execute("COMMIT")
+    # No native target exists yet; every kind of native pending journal blocks.
+    with _terminal_native_lock(binding, None):
+        worker = _terminal_worker(folder, remaining)
+        connection.execute("BEGIN")
+        latest = connection.execute("SELECT id,config,state,iteration,current FROM runs WHERE current=1").fetchall()
+        again = connection.execute("SELECT run_id,iteration,operation_key,document FROM regeneration_receipts WHERE run_id=? AND iteration=? AND operation_key=?",
+                                   (saved["run_id"], saved["iteration"], saved["operation_key"])).fetchone()
+        require(len(latest) == 1 and dict(latest[0]) == row and again is not None and dict(again) == saved,
+                "identity_pre_request_state_changed")
+        after = _pre_request_receipt(connection, root, binding, row["id"], saved, receipt, config, active, request)
+        connection.execute("COMMIT")
+        require(before == after and active_request(root, row["id"]) == (active, request)
+                and _terminal_worker(folder, remaining) == worker
+                and _recovery_database(folder)[1] == database_identity,
+                "identity_pre_request_state_changed")
+        return signed({"schema": PRE_REQUEST_HANDOFF_SCHEMA, "original_run": row["id"],
+            "original_iteration": row["iteration"], "original_state": row["state"],
+            "original_config_sha256": digest(config), "operation_key": saved["operation_key"],
+            "receipt_sha256": digest(receipt), "request_sha256": request["request_sha256"],
+            "binding": binding, "worker": worker, "native_journal_sha256": None,
+            "pre_request": {key: value for key, value in before.items() if key != "metadata"}}, "proof_sha256")
 
 def terminal_handoff(folder, original_run, remaining=None):
     """Attest preserved terminal work; this never reserves, finalizes or ACKs.
@@ -598,6 +735,9 @@ def terminal_handoff(folder, original_run, remaining=None):
         require(len(candidates) == 1, "identity_recovery_ambiguous")
         saved, receipt = candidates[0]
         operation = saved["operation_key"]
+        if request.get("operation_key") != operation:
+            return _pre_request_terminal_handoff(connection, folder, identity, row, saved, receipt,
+                                                  config, binding, root, active, request, remaining)
         request_path = root / active["path"]
         owner = read(directory(request_path.parent) / "owner.json")
         require(saved["run_id"] == original_run and saved["iteration"] == row["iteration"]

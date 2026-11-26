@@ -282,6 +282,24 @@
     },
     {
       "before_sha256": [
+        null
+      ],
+      "bytes": 3789,
+      "mode": "0644",
+      "path": "native/xenoid-renderer/README.md",
+      "sha256": "51e2655df830c6647370b288b44a53c323f9e71dea51ecdcf762303370c60242"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 10311,
+      "mode": "0644",
+      "path": "native/xenoid-renderer/xenoid_renderer.c",
+      "sha256": "8ac3f204037c1d3abc6460b28dc8316e25b8adfb48387db0c4544fa3e25448fd"
+    },
+    {
+      "before_sha256": [
         "8fd896bc7834963dfbcc284a2b5cae1fa2f495002f0460d05e064a47994a59ea"
       ],
       "bytes": 38135,
@@ -359,6 +377,15 @@
     },
     {
       "before_sha256": [
+        null
+      ],
+      "bytes": 494,
+      "mode": "0755",
+      "path": "scripts/build-gles-renderer.sh",
+      "sha256": "e5290fa46970b0aee409f9ca0738819392359686f189d9c63313c0efdfaf7fe0"
+    },
+    {
+      "before_sha256": [
         "0fc5ae8f0700b0f1185d7708fc86eac900bd947abdb433626506585c296a8efd",
         "1c2d04373b676de7df2df80a49455b88eb328db989ba19bf5bbd6cd4b5c01b40"
       ],
@@ -366,6 +393,15 @@
       "mode": "0755",
       "path": "scripts/build-keymint.sh",
       "sha256": "1c2d04373b676de7df2df80a49455b88eb328db989ba19bf5bbd6cd4b5c01b40"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 272,
+      "mode": "0755",
+      "path": "scripts/build-native-renderer.sh",
+      "sha256": "e755d964d2fe93befe927db12ce8afd4ba07488a9d7942c2ceb99dc1986d6fd2"
     },
     {
       "before_sha256": [
@@ -402,6 +438,24 @@
       "mode": "0644",
       "path": "scripts/ensure-android-tun.py",
       "sha256": "e2839ad8c785a4b83d5f3216f99475e897046afd74d2838b58cb8ac4492a62da"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 10097,
+      "mode": "0755",
+      "path": "scripts/profile-gles-renderer.py",
+      "sha256": "48c41ac7fbca6fb98c79e9f1f2ce09ac9e4a89071b6aa95314fb27af1c3e1934"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 3929,
+      "mode": "0755",
+      "path": "scripts/renderer-platform-library.py",
+      "sha256": "93d7763db640fae2cdcfa562b8ee401bb3f823b3a0c4c53eac0a47d87b8971ca"
     },
     {
       "before_sha256": [
@@ -517,6 +571,15 @@
       "mode": "0755",
       "path": "scripts/test-convergence.py",
       "sha256": "eab8a07bfd59403a32d1c967b06823f69d71d7daace6fe6bb0f71cfa7594837b"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 10491,
+      "mode": "0755",
+      "path": "scripts/test-gles-renderer.py",
+      "sha256": "cf4c112ec7593efbaf3fe2756233d5c391df4b602d5daff76ec0e63e9b757833"
     },
     {
       "before_sha256": [
@@ -675,12 +738,13 @@
     },
     {
       "before_sha256": [
-        "917435af5976f243a4a33b3bff81a7ce55049be20b75fe1cb88259c336ae917e"
+        "917435af5976f243a4a33b3bff81a7ce55049be20b75fe1cb88259c336ae917e",
+        "dfea030abad4106df627a78fe2fdf454e1d9324479dd61afbfcb94e9fdd00053"
       ],
-      "bytes": 96165,
+      "bytes": 97611,
       "mode": "0644",
       "path": "src/xenoid/artifacts.py",
-      "sha256": "dfea030abad4106df627a78fe2fdf454e1d9324479dd61afbfcb94e9fdd00053"
+      "sha256": "aad2e70de322304ccbaab32253863f840c32cf8fcc9618f1a80d3a9f3642cb50"
     },
     {
       "before_sha256": [
@@ -703,12 +767,13 @@
         "e0c5492c7dffcf297a903519f5608ff65ec338f16436e35fc8ae6e4acb0a69ef",
         "1ffa4aa43d176d145a301158d1d574190cc65747def1e4cdae25ff942db40861",
         "da2b99eb5cd84c6b73a990f7c2dba18c2264c6f3c68c56acfcf03dafda1f9874",
-        "eeb92f84ab3487319e8de9dd8148f7fe489df4edfa644a442249e3b8c144626f"
+        "eeb92f84ab3487319e8de9dd8148f7fe489df4edfa644a442249e3b8c144626f",
+        "7f8f707d7b51c6a4d97cfd93f1fae06869210856e7f81c525da48e14e287db50"
       ],
-      "bytes": 628367,
+      "bytes": 634397,
       "mode": "0644",
       "path": "src/xenoid/backend.py",
-      "sha256": "7f8f707d7b51c6a4d97cfd93f1fae06869210856e7f81c525da48e14e287db50"
+      "sha256": "78613aab9f84f63ef95082581031ebba28cca56d8ae5baf0c4c7dacd2abff120"
     },
     {
       "before_sha256": [
@@ -727,12 +792,13 @@
         "2200f044b0ca27cf123ac024f3bbecddb794e42ee723ef868045be0c448604ef",
         "9947933fa838454592e3621015ec3d22eed24a8aa7d2ee487888c4232bd245d5",
         "bdd931a004a8a380285a2a35ca1f2e0a968732750286e86684cce593e905b21c",
-        "8c3332bb5eb23ce15352c43223fb1405479d1076ba1d0ee6b228dd0c546841e8"
+        "8c3332bb5eb23ce15352c43223fb1405479d1076ba1d0ee6b228dd0c546841e8",
+        "9c43830a21d77f376da12c5ae81dfd0dda80b1917a52d1f422b63acdbb458778"
       ],
-      "bytes": 184761,
+      "bytes": 187096,
       "mode": "0644",
       "path": "src/xenoid/cli.py",
-      "sha256": "9c43830a21d77f376da12c5ae81dfd0dda80b1917a52d1f422b63acdbb458778"
+      "sha256": "28cf8e0d1fff7e25578da06188e95a29920700c2655292801b65434b6c766efb"
     },
     {
       "before_sha256": [
@@ -747,23 +813,25 @@
     {
       "before_sha256": [
         "15b908abb0d53d71fc5228c701404722471a4afe91eabc946eeee017a17aa681",
-        "77d9fe801943151c2bb467de5301bba12a82e05dcf93df661a129f6cc134f1e6"
+        "77d9fe801943151c2bb467de5301bba12a82e05dcf93df661a129f6cc134f1e6",
+        "c7699b255bf9134a91dc9676549f6f64403b0f517de9b098d931a0f8c5ae6c42"
       ],
-      "bytes": 52775,
+      "bytes": 53455,
       "mode": "0644",
       "path": "src/xenoid/config.py",
-      "sha256": "c7699b255bf9134a91dc9676549f6f64403b0f517de9b098d931a0f8c5ae6c42"
+      "sha256": "875f68f7bc8a5f1a6b0c41c85dd88d2f9a12fe59aa32fd538f18a7303bd19137"
     },
     {
       "before_sha256": [
         "e5c0879ccfc96807fa95b54719d6c7e6255bbcfe6c3c88d6fa52016b8dfcf6ef",
         "fe72ddb67164c4e96d39dde697436b10394570072cb8414915aa545715bda0f7",
-        "2f5a4cfb310e53fb709555dac701479aab828b3e5b9188cb0e7c7653dc8eb68a"
+        "2f5a4cfb310e53fb709555dac701479aab828b3e5b9188cb0e7c7653dc8eb68a",
+        "1514703f7af813b8d4a31c1c9196efdb32c92bae4985051be21409bb7a5604a6"
       ],
-      "bytes": 144184,
+      "bytes": 145380,
       "mode": "0644",
       "path": "src/xenoid/convergence.py",
-      "sha256": "1514703f7af813b8d4a31c1c9196efdb32c92bae4985051be21409bb7a5604a6"
+      "sha256": "4eca8629ef48ca14ac7a299e4a377af9ad8fbd419429da6abbae49e2ad1ca24a"
     },
     {
       "before_sha256": [
@@ -797,16 +865,26 @@
     },
     {
       "before_sha256": [
+        null
+      ],
+      "bytes": 17267,
+      "mode": "0644",
+      "path": "src/xenoid/graphics.py",
+      "sha256": "44123120ed53914a7c10c2c8093cbbc5b82be972409b941e786cd7386009a23a"
+    },
+    {
+      "before_sha256": [
         "12e5f659f17118ca7f9a4bb704c6d56aa69756bdd516706ca2c845a39a91b05b",
         "3f359f93657f28f5b892005ecf69571c5522429b2399d768b35c0f403479546f",
         "b8e409b67b2605c89dd451da233e9d1252fbb05df3ae0608c8b0cb153e91d868",
         "d6e7d26129b2fda1bb15c9253415fb6af031e245a8944d04b0a406b797b158a2",
-        "d368756124ff01c16ade3ebd03b8c089319fb9383f2c86accf6720bf986354aa"
+        "d368756124ff01c16ade3ebd03b8c089319fb9383f2c86accf6720bf986354aa",
+        "80a49a2ab2d8db0df2494174ba54798258ce6118f3d00d8c2dfdc4c4fe781c8d"
       ],
-      "bytes": 48804,
+      "bytes": 49203,
       "mode": "0644",
       "path": "src/xenoid/live_observe.py",
-      "sha256": "80a49a2ab2d8db0df2494174ba54798258ce6118f3d00d8c2dfdc4c4fe781c8d"
+      "sha256": "ea927f4f8d47eed30a3dc0198feebd9a18d4c752118122c646c19195f57f4e69"
     },
     {
       "before_sha256": [
@@ -884,6 +962,15 @@
       "mode": "0644",
       "path": "src/xenoid/runtime_image.py",
       "sha256": "047874ffafdeca20e93f651b2082d00395d7cab87d517cdba10e75064a01b020"
+    },
+    {
+      "before_sha256": [
+        null
+      ],
+      "bytes": 15113,
+      "mode": "0644",
+      "path": "tests/test_renderer_integration.py",
+      "sha256": "670b91a0d8e1aec5ed52c874c8542401000fd23bc208dfc48317053651a13394"
     }
   ],
   "google_release": "microg-0.3.15.250932-phonesky-30.4.17-gsfproxy-0.1.0-bluejay",

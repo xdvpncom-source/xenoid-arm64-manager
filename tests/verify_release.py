@@ -33,7 +33,7 @@ installed = re.search(r"^for qa_file in (.+); do$", installer, re.M)[1].split()
 manifest_rows = [line.split(maxsplit=1) for line in (root / "qa/manifest.sha256").read_text().splitlines()]
 manifest_paths = [row[1].strip() for row in manifest_rows]
 assert len(manifest_paths) == len(set(manifest_paths)), "Duplicate QA manifest paths"
-required = {"script_host.py", "script_runtime.py", "shared_policy.py", "qa_lifecycle.py",
+required = {"script_host.py", "script_runtime.py", "shared_policy.py", "qa_lifecycle.py", "qa_graphics.py",
             "qa_vpn_probe.py", "qa_input_ready.py", "qa_ui_reader.py", "qa_google_reset.py", "qa_ui_preferences.py", "qa_fresh6a.py",
             "qa_control_routes.py", "qa_resource_runtime.py", "qa_host_memory.py", "identity_reservations.py"}
 assert required <= set(installed), "Required QA host module is not installed"

@@ -341,6 +341,8 @@ class XenoidConfig:
     android_adb_port: int = DEFAULT_ANDROID_ADB_PORT
     extra_docker_args: list[str] = field(default_factory=list)
     cold_profile: Optional[dict[str, Any]] = None
+    # Runtime-only reported GL renderer label; never part of boot/profile identity.
+    graphics_renderer: Optional[str] = "Mali-G78"
     runtime_image_tag: str = DEFAULT_RUNTIME_TAG
     auto_build_runtime_image: bool = True
     docker_context: str = ""
@@ -356,6 +358,8 @@ def config_dict(cfg: XenoidConfig) -> dict[str, Any]:
     value = asdict(cfg)
     if value.get("cold_profile") is None:
         value.pop("cold_profile", None)
+    if value.get("graphics_renderer") == "Mali-G78":
+        value.pop("graphics_renderer", None)
     return value
 
 
@@ -368,7 +372,8 @@ def new_instance_config(
         "instance_name": validate_instance_name(instance_name),
         "instance_id": _validated_uuid(instance_id),
     }
-    values.update({key: value for key, value in (overrides or {}).items() if value is not None})
+    values.update({key: value for key, value in (overrides or {}).items()
+                   if value is not None or key == "graphics_renderer"})
     cfg = XenoidConfig(**values)
     _validate_config(cfg)
     return cfg
@@ -386,6 +391,13 @@ def _validate_config(cfg: XenoidConfig) -> None:
         normalize_cold_profile(getattr(cfg, "cold_profile", None))
     except (ValueError, TypeError, KeyError) as error:
         raise InstanceError("cold_profile_invalid", str(error)) from error
+    renderer = cfg.graphics_renderer
+    if renderer is not None and (
+        not isinstance(renderer, str) or not renderer or len(renderer) > 96
+        or renderer != renderer.strip() or renderer == "native"
+        or any(ord(character) < 32 or ord(character) > 126 for character in renderer)
+    ):
+        raise InstanceError("graphics_renderer_invalid", "invalid reported GL renderer label")
     validate_image_reference(cfg.image)
     validate_image_reference(
         cfg.runtime_image_tag,

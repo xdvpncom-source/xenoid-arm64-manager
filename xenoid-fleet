@@ -22,7 +22,7 @@ from typing import Iterator
 
 
 NAME_PREFIX = "phone-"
-VERSION = "v0.1.53"
+VERSION = "v0.1.54"
 FRESH_CONFIG = Path("defaults/bluejay-linux-arm.json")
 BLUEJAY_GOOGLE_RELEASE = "microg-0.3.15.250932-phonesky-30.4.17-gsfproxy-0.1.0-bluejay"
 DEVICE_ID = re.compile(r"[1-9][0-9]{0,25}")
@@ -543,7 +543,7 @@ class Upstream:
         self.environment.pop("XENOID_INSTANCE", None)
 
     def call(self, arguments: list[str], *, device_id: str | None = None,
-             capture: bool = False, interactive: bool = False) -> subprocess.CompletedProcess:
+             capture: bool = False, interactive: bool = False, input_text: str | None = None) -> subprocess.CompletedProcess:
         argv = list(self.prefix)
         if device_id is not None:
             argv.extend(("--instance", NAME_PREFIX + device_id))
@@ -555,8 +555,9 @@ class Upstream:
                 # A fresh Buildx client ID isolates canonical build contexts from stale source snapshots.
                 config = resources.enter_context(tempfile.TemporaryDirectory(prefix="xenoid-fleet-buildx-"))
                 environment = dict(environment, BUILDX_CONFIG=config)
+            io = {"input": input_text} if input_text is not None else {"stdin": None if interactive else subprocess.DEVNULL}
             return subprocess.run(argv, env=environment, text=True, capture_output=capture,
-                                  stdin=None if interactive else subprocess.DEVNULL, check=False)
+                                  check=False, **io)
 
     def document(self, arguments: list[str], device_id: str | None = None) -> tuple[dict, int]:
         result = self.call(arguments, device_id=device_id, capture=True)
@@ -701,7 +702,22 @@ def create_device(upstream: Upstream, device_id: str, args: argparse.Namespace,
         if runtime is not None:
             base_id = runtime.base_image_id("default", build=True)
             command.extend(("--image", runtime.image))
-        upstream.require(device_id, command)
+        helper = INSTALL_ROOT / "panel-scripts" / "qa_graphics.py"
+        if helper.is_file():
+            graphics = runpy.run_path(str(helper))["load_settings"]()
+        else:
+            graphics = {"renderer_label": "Mali-G78"}
+        if graphics["renderer_label"] == "Mali-G78":
+            upstream.require(device_id, command)
+        else:
+            initial = json.loads((INSTALL_ROOT / FRESH_CONFIG).read_text())
+            initial["graphics_renderer"] = graphics["renderer_label"]
+            with tempfile.TemporaryDirectory(prefix="xenoid-fleet-graphics-") as staging:
+                configured = Path(staging) / "config.json"
+                with open(configured, "x", opener=private_open) as stream:
+                    json.dump(initial, stream, allow_nan=False)
+                command[2] = str(configured)
+                upstream.require(device_id, command)
     else:
         settings = instance_settings(upstream, device_id)
         configured = settings.get("cold_profile")
@@ -736,6 +752,23 @@ def create_device(upstream: Upstream, device_id: str, args: argparse.Namespace,
         baseline.converge(upstream, device_id, base_id)
     if reconcile:
         qa_reconcile([device_id], force=True)
+        graphics_reconcile([device_id])
+
+
+def graphics_reconcile(ids: list[str], *, report: bool = False) -> int:
+    helper = INSTALL_ROOT / "panel-scripts" / "qa_graphics.py"
+    if not helper.is_file():
+        if (INSTALL_ROOT / ".qa-addon-installed").exists():
+            raise FleetError("QA graphics addon is missing; rerun the Fleet installer")
+        return 0
+    arguments = [sys.executable, str(helper), "reconcile"]
+    for device_id in ids:
+        arguments.extend(("--device", NAME_PREFIX + device_id))
+    result = subprocess.run(arguments, stdin=subprocess.DEVNULL,
+                            stdout=None if report else sys.stderr, check=False)
+    if result.returncode:
+        raise FleetError("Reported renderer convergence needs attention; see xenoid-qa-graphics.service")
+    return 0
 
 
 def qa_reconcile(ids: list[str], *, force: bool = False, required: bool = False, report: bool = False) -> int:
@@ -815,6 +848,7 @@ def run_devices(upstream: Upstream, ids: list[str], command: list[str]) -> int:
                 if (code == 0 and command and command[0] in {"up", "start", "recreate"}
                         and "--no-wait" not in command and "--dry-run" not in command):
                     qa_reconcile([device_id], force=True)
+                    graphics_reconcile([device_id])
         except (OSError, FleetError) as error:
             report_failure(device_id, error)
             code = 1
@@ -836,6 +870,22 @@ def execute(args: argparse.Namespace, command: list[str]) -> int:
             print(f"Host reserve: {report['reserve']['cpu_count']} CPU, {report['reserve']['memory_bytes']} bytes RAM")
             print(f"Swap capacity sufficient: {str(report['swap_capacity_ok']).lower()}")
         return 0
+    if args.action == "graphics":
+        helper = INSTALL_ROOT / "panel-scripts" / "qa_graphics.py"
+        if not helper.is_file():
+            raise FleetError("QA graphics addon is not installed")
+        arguments = [sys.executable, str(helper), args.graphics_action]
+        if args.graphics_action == "configure":
+            arguments.append("--json-stdin")
+        elif args.graphics_action in {"reconcile", "status"}:
+            if args.ids == "all":
+                arguments.append("--all")
+            else:
+                for device_id in device_ids(args.ids):
+                    arguments.extend(("--device", NAME_PREFIX + device_id))
+            if getattr(args, "pending_only", False):
+                arguments.append("--pending-only")
+        return subprocess.run(arguments, check=False).returncode
     if args.action == "proxy-routing" and args.routing_action in ("configure", "show"):
         helper = INSTALL_ROOT / "panel-scripts" / "qa_proxy_routing.py"
         if not helper.is_file():
@@ -903,6 +953,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="xenoid-fleet", description=__doc__)
     parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     commands = parser.add_subparsers(dest="action", required=True)
+    graphics = commands.add_parser("graphics", help="manage the independent QA reported renderer name")
+    graphics_commands = graphics.add_subparsers(dest="graphics_action", required=True)
+    graphics_configure = graphics_commands.add_parser("configure", help="store the host default without restarting workers")
+    graphics_configure.add_argument("--json-stdin", action="store_true", required=True)
+    graphics_commands.add_parser("show", help="show the current default")
+    for action in ("reconcile", "status"):
+        item = graphics_commands.add_parser(action, help="verify selected devices; reconcile applies only when idle")
+        item.add_argument("ids", help="numeric ID, comma-separated IDs, or all")
+        item.add_argument("--pending-only", action="store_true")
     listing = commands.add_parser("list", help="list registered numeric devices and their status")
     listing.add_argument("--json", action="store_true")
     capacity = commands.add_parser("capacity", help="read host capacity for fresh 1-CPU/2-GiB devices")
