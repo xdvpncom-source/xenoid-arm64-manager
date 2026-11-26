@@ -346,7 +346,7 @@ def update(folder, run, state, iteration, message, level="info", resume_at=0):
         record(conn, run, iteration, level, message)
 
 
-def snapshot(folder, number, run=None, after=None, limit=32):
+def snapshot(folder, number, run=None, after=None, limit=32, *, include_identity=True):
     missing = dict(state="missing", run_id=run, device_id=number, events=[], cursor=after or 0, has_more=False)
     if not (folder / "runs.db").exists():
         return missing
@@ -364,7 +364,7 @@ def snapshot(folder, number, run=None, after=None, limit=32):
         config = json.loads(row["config"])
         result = {k: config[k] for k in ("script_id", "version", "run_id", "resource_tag", "instance_id")}
         result.update(state=row["state"], device_id=number, iteration=row["iteration"], updated=row["updated"])
-        if config.get("identity_reservations"):
+        if include_identity and config.get("identity_reservations"):
             from identity_reservations import poll as identity_poll
             result.update(identity_poll(folder, row["id"]))
         try:
@@ -706,7 +706,9 @@ def manage(action, folder, number, run):
             if retired:
                 return snapshot(folder, number, run)
             install_unit()
-            current = snapshot(folder, number)
+            # Admission needs the old run's state, not its optional identity
+            # transport proof, which can legitimately wait on native EX.
+            current = snapshot(folder, number, include_identity=False)
             with db(folder) as conn:
                 old = conn.execute("SELECT config,current,state FROM runs WHERE id=?", (run,)).fetchone()
             if old is not None:
