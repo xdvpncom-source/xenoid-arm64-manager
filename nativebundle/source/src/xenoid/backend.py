@@ -8493,6 +8493,39 @@ cat >/dev/null
         return False, 0
 
 
+    def _cold_bluetooth_baseline_matches(self, address: str) -> bool:
+        """Prove an existing cold-seeded address without initializing Android.
+
+        A fresh SettingsProvider can expose the seeded address before its
+        optional validity cache is populated. Only the exact native sidecar
+        and both published controller properties can establish that baseline.
+        """
+        if (
+            getattr(self.cfg, "cold_profile", None) is None
+            or re.fullmatch(r"[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}", address) is None
+            or address.upper() in {"00:00:00:00:00:00", "02:00:00:00:00:00", "FF:FF:FF:FF:FF:FF"}
+        ):
+            return False
+        expected = shlex.quote(address.upper())
+        command = (
+            "set -eu; d=/data/local/tmp/xenoid-profile; p=$d/bluetooth_address; "
+            "test -d \"$d\" && test ! -L \"$d\"; "
+            "case \"$(stat -c '%u:%g:%a' \"$d\")\" in 0:0:700|0:0:755) ;; *) exit 1;; esac; "
+            "test -f \"$p\" && test ! -L \"$p\"; "
+            "test \"$(stat -c '%u:%g:%a:%h' \"$p\")\" = 0:0:600:1; "
+            "test \"$(stat -c '%s' \"$p\")\" = 18; "
+            "test \"$(cat \"$p\")\" = " + expected + "; "
+            "test \"$(getprop persist.vendor.bt.rootcanal_mac_address)\" = " + expected + "; "
+            "test \"$(getprop vendor.bt.rootcanal_mac_address)\" = " + expected + "; "
+            "test \"$(getprop vendor.bt.xenoid_address_ready)\" = 1; "
+            "printf '%s\\n' cold_bluetooth_baseline_verified"
+        )
+        result = self.docker_exec(["sh", "-c", command], timeout=10)
+        return (
+            result.get("ok") is True
+            and str(result.get("stdout", "")).strip() == "cold_bluetooth_baseline_verified"
+        )
+
     def regeneration_snapshot(self) -> dict[str, Any]:
         """Capture the immutable before-state for one runtime regeneration."""
         self.ensure_instance_lease()
@@ -8612,8 +8645,12 @@ cat >/dev/null
             fsid = "0" * 16
         bluetooth = shell_read("settings get secure bluetooth_address")
         bluetooth_valid = shell_read("settings get secure bluetooth_addr_valid")
+        cold_baseline = (
+            bluetooth_valid in {"", "null"}
+            and self._cold_bluetooth_baseline_matches(bluetooth)
+        )
         if (
-            bluetooth_valid != "1"
+            (bluetooth_valid != "1" and not cold_baseline)
             or re.fullmatch(r"[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}", bluetooth) is None
         ):
             bluetooth = "02:00:00:00:00:00"

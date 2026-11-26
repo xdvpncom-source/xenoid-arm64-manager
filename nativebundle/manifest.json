@@ -670,12 +670,13 @@
         "3eeff84bec5b61dd25294196006f8e58c53b3765001330638b7af279428bde7e",
         "aa0e87b3f0eb0a53f7fd97bc429ba585084ba3bffab53a8847afbd215927bc3a",
         "7e52bcec8b943a7a307d56336f2bb7a9c481f025a35baf8e916b0621e6eaa8cc",
-        "e0c5492c7dffcf297a903519f5608ff65ec338f16436e35fc8ae6e4acb0a69ef"
+        "e0c5492c7dffcf297a903519f5608ff65ec338f16436e35fc8ae6e4acb0a69ef",
+        "1ffa4aa43d176d145a301158d1d574190cc65747def1e4cdae25ff942db40861"
       ],
-      "bytes": 625197,
+      "bytes": 627124,
       "mode": "0644",
       "path": "src/xenoid/backend.py",
-      "sha256": "1ffa4aa43d176d145a301158d1d574190cc65747def1e4cdae25ff942db40861"
+      "sha256": "da2b99eb5cd84c6b73a990f7c2dba18c2264c6f3c68c56acfcf03dafda1f9874"
     },
     {
       "before_sha256": [
