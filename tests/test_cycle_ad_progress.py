@@ -26,6 +26,37 @@ class Tests(unittest.TestCase):
     def service(self,window):
         self.device.window=window;return self.cycle.service_missing_ad_close(self.cycle.observe())
 
+    def test_observation_delay_uses_longer_ad_state_poll_without_device_io(self):
+        self.assertEqual(self.cycle.ad_observation_delay(None), m.POLL_SECONDS)
+        self.assertEqual(self.cycle.ad_observation_delay(copy.deepcopy(MAIN)), m.POLL_SECONDS)
+        value = self.ad(node('Advertisement'))
+        self.assertEqual(self.cycle.ad_observation_delay(value), m.AD_STATE_POLL_SECONDS)
+        self.assertFalse(self.device.taps)
+
+    def test_countdown_delay_uses_smallest_remaining_seconds_with_bounds(self):
+        for remaining, expected in ((1, 2), (5, 5), (14, 14), (30, 15)):
+            with self.subTest(remaining=remaining):
+                self.assertEqual(self.cycle.ad_observation_delay(self.ad(node(str(remaining)))), expected)
+        self.assertEqual(self.cycle.ad_observation_delay(self.ad(node('12'), node('3'))), 3)
+        self.assertEqual(self.cycle.ad_observation_delay(self.ad(node('Skip in 30'))), 15)
+        self.assertFalse(self.device.taps)
+
+    def test_unknown_or_percentage_progress_does_not_guess_seconds_remaining(self):
+        for label in ('', '42%'):
+            with self.subTest(label=label):
+                self.assertEqual(self.cycle.ad_observation_delay(
+                    self.ad(node(label, cls='android.widget.ProgressBar'))), m.AD_STATE_POLL_SECONDS)
+
+    def test_recent_input_keeps_short_followup_even_with_a_long_countdown(self):
+        self.clock.now = 100
+        self.cycle.last_action = self.clock.now
+        self.assertEqual(self.cycle.ad_observation_delay(self.ad(node('30'))), m.POLL_SECONDS)
+
+    def test_ad_observation_delay_honors_editable_poll_budgets(self):
+        with patch.object(m, 'AD_STATE_POLL_SECONDS', 9), patch.object(m, 'AD_COUNTDOWN_RECHECK_SECONDS', 7):
+            self.assertEqual(self.cycle.ad_observation_delay(self.ad(node('Advertisement'))), 9)
+            self.assertEqual(self.cycle.ad_observation_delay(self.ad(node('30'))), 7)
+
     def test_enabled_looking_skip_in5_is_not_close_until_zero(self):
         for label in ('Skip in 5','Close in 3','Skip after 8 seconds'):
             with self.subTest(label=label):

@@ -39,8 +39,11 @@ CRASH_FALLBACK_SECONDS = 30
 IDLE_FOCUS_POLL_SECONDS = 5
 IDLE_UI_MIN_SECONDS = 2
 IDLE_UI_MAX_SECONDS = 10
+PASSIVE_WAIT_PERIODIC_UI = False       # During the 90–120s dwell, read UI only on entry, input or focus change.
 ACTION_COOLDOWN_SECONDS = 2
 AD_READY_SECONDS = 180
+AD_STATE_POLL_SECONDS = 5              # Active ad stage only; avoid repeatedly dumping an unchanged ad.
+AD_COUNTDOWN_RECHECK_SECONDS = 15      # Known timers may sleep longer, capped for new Close controls.
 AD_FINAL_READY_VERIFY_SECONDS = 30    # One read-only confirmation if the app becomes clear at the deadline.
 AD_PROGRESS_WAIT_SECONDS = 60          # Unknown progress budget; 0 disables this cutoff.
 AD_PROGRESS_STALL_SECONDS = 30         # Unchanged countdown/progress; 0 disables this cutoff.
@@ -1208,7 +1211,8 @@ class Cycle:
         return self.tap_observed_navigation(window, "close Android notification shade via observed Back")
 
 
-    def wait(self, seconds, *, dialogs=False, vpn=False, ads=False, fail_on_target_crash=True):
+    def wait(self, seconds, *, dialogs=False, vpn=False, ads=False, fail_on_target_crash=True,
+             periodic_ui=True):
         if dialogs:
             values = (IDLE_FOCUS_POLL_SECONDS, IDLE_UI_MIN_SECONDS, IDLE_UI_MAX_SECONDS)
             if (any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0
@@ -1219,7 +1223,7 @@ class Cycle:
         while time.monotonic() < deadline:
             handled = False
             if dialogs:
-                window = self.observe_idle()
+                window = self.observe_idle() if periodic_ui else self.observe_idle(periodic_ui=False)
                 if window:
                     if not ads:
                         self.observe_post_connect_ad(window)
@@ -1238,9 +1242,12 @@ class Cycle:
             remaining = deadline - time.monotonic()
             if remaining > 0:
                 if dialogs:
-                    until_ui = self._idle_ui_due - time.monotonic()
-                    cadence = min(IDLE_FOCUS_POLL_SECONDS,
-                                  until_ui if until_ui > 0 else IDLE_UI_MIN_SECONDS)
+                    if not periodic_ui and not self._idle_ui_failed:
+                        cadence = IDLE_FOCUS_POLL_SECONDS
+                    else:
+                        until_ui = self._idle_ui_due - time.monotonic()
+                        cadence = min(IDLE_FOCUS_POLL_SECONDS,
+                                      until_ui if until_ui > 0 else IDLE_UI_MIN_SECONDS)
                 else:
                     cadence = CRASH_POLL_SECONDS
                 time.sleep(min(cadence, remaining))
@@ -1250,12 +1257,14 @@ class Cycle:
         self._idle_ui_due = float("-inf")
         self._idle_ui_interval = None
         self._idle_action_seen = self.last_action
+        self._idle_ui_failed = False
 
-    def observe_idle(self):
+    def observe_idle(self, *, periodic_ui=True):
         """Return only a fresh full snapshot, or None when no read is due.
 
         No hierarchy or coordinates are cached. Focus changes and crash hints
-        bypass the backoff; periodic full reads cover same-window UI changes.
+        bypass the backoff. Passive dwell can disable periodic full reads;
+        its next workflow stage always obtains a new hierarchy.
         """
         now = time.monotonic()
         try:
@@ -1270,11 +1279,13 @@ class Cycle:
         ordinary = bool(re.search(r"mCurrentFocus=Window\{[^}]*\bu\d+\s+[^ /]+/[^}]+\}", str(focus)))
         hinted = any(marker in signature for marker in CRASH_FOCUS_HINTS)
         changed = signature != self._idle_focus or self.last_action != self._idle_action_seen
-        if not (changed or hinted or not ordinary or now >= self._idle_ui_due):
+        if not (changed or hinted or not ordinary
+                or (periodic_ui or self._idle_ui_failed) and now >= self._idle_ui_due):
             return None
         self._idle_focus = signature
         self._idle_action_seen = self.last_action
         window = self.observe()
+        self._idle_ui_failed = window is None
         finished = time.monotonic()
         if window is None or changed or hinted or not ordinary:
             interval = IDLE_UI_MIN_SECONDS
@@ -1284,6 +1295,19 @@ class Cycle:
         self._idle_ui_interval = interval
         self._idle_ui_due = finished + interval
         return window
+
+    def ad_observation_delay(self, window):
+        """Sleep between active-stage reads; re-read promptly after an input."""
+        if (not window or not is_ad(window)
+                or time.monotonic() - self.last_action < POLL_SECONDS):
+            return POLL_SECONDS
+        if self.ad_close_control(window, emit_log=False) is not None:
+            return POLL_SECONDS
+        signals = self.ad_progress(window) or ()
+        countdowns = [signal[2] for signal in signals if signal[0] == "countdown"]
+        if countdowns:
+            return min(AD_COUNTDOWN_RECHECK_SECONDS, max(POLL_SECONDS, min(countdowns)))
+        return AD_STATE_POLL_SECONDS
 
     def ad_screen_clear(self, window):
         return (not self.ad_skip_pending and window and window.get("stable") is True
@@ -1357,7 +1381,8 @@ class Cycle:
                     return
             else:
                 quiet_since = None
-            time.sleep(POLL_SECONDS)
+            delay = self.ad_observation_delay(window)
+            time.sleep(min(delay, max(0, deadline - time.monotonic())) if deadline is not None else delay)
         if quiet_since is not None and self.confirm_ad_clearance(quiet_since):
             return
         raise self.ad_failure("The advertisement did not expose a usable close control")
@@ -1433,7 +1458,8 @@ class Cycle:
                     return window
             else:
                 quiet_since = None
-            time.sleep(POLL_SECONDS)
+            delay = self.ad_observation_delay(window)
+            time.sleep(min(delay, max(0, deadline - time.monotonic())) if deadline is not None else delay)
         if quiet_since is not None:
             confirmed = self.confirm_ad_clearance(quiet_since)
             if confirmed:
@@ -1564,7 +1590,8 @@ class Cycle:
             self.log(f"Keeping app open for {dwell}s after VPN permission; ad dismissal follows")
             self.post_connect_dwell_active = True
             try:
-                self.wait(dwell, dialogs=True, vpn=True, ads=False)
+                self.wait(dwell, dialogs=True, vpn=True, ads=False,
+                          periodic_ui=PASSIVE_WAIT_PERIODIC_UI)
             finally:
                 self.post_connect_dwell_active = False
             self.post_connect_dwell_complete = True
@@ -1838,7 +1865,10 @@ def main():
                                      AD_PROGRESS_WAIT_SECONDS, AD_PROGRESS_STALL_SECONDS, AD_FINAL_READY_VERIFY_SECONDS,
                                      AD_CONTROL_LOG_INTERVAL_SECONDS))
                 or type(AD_LANDING_REQUIRE_OBSERVED_AD) is not bool
+                or type(PASSIVE_WAIT_PERIODIC_UI) is not bool
                 or type(AD_SKIP_SAME_STATE_ATTEMPT_LIMIT) is not int or AD_SKIP_SAME_STATE_ATTEMPT_LIMIT < 0
+                or any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0
+                       for value in (AD_STATE_POLL_SECONDS, AD_COUNTDOWN_RECHECK_SECONDS))
                 or type(AD_COUNTDOWN_TOP_FRACTION) not in (int, float)
                 or not 0 < AD_COUNTDOWN_TOP_FRACTION <= 1):
             raise ValueError("Invalid script timing settings")

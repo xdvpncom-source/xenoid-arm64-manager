@@ -79,6 +79,45 @@ class IdlePollingTests(unittest.TestCase):
         self.assertTrue(all(priority == 0 for _, priority in self.device.ui_reads))
         self.assertFalse(self.device.taps)
 
+    def test_passive_100s_reads_stable_ui_once_but_keeps_cheap_focus_checks(self):
+        self.cycle.wait(100, dialogs=True, vpn=True, ads=False, periodic_ui=False)
+        self.assertEqual(self.clock.now, 100)
+        self.assertEqual(self.device.ui_reads, [(0, 0)])
+        self.assertEqual(self.device.focus_reads, list(range(0, 100, 5)))
+        self.assertFalse(self.device.taps)
+
+    def test_passive_focus_change_still_forces_a_fresh_permission_snapshot(self):
+        self.assertIsNotNone(self.cycle.observe_idle(periodic_ui=False))
+        self.clock.now = 12
+        self.assertIsNone(self.cycle.observe_idle(periodic_ui=False))
+        self.device.focus = lambda: 'mCurrentFocus=Window{2 u0 com.android.vpndialogs/.ConfirmDialog}'
+        self.device.render = lambda: window([control('OK', 'android:id/button1')],
+                                            package=m.VPN_PACKAGE, component=m.VPN_PACKAGE+'/.ConfirmDialog')
+        snapshot = self.cycle.observe_idle(periodic_ui=False)
+        self.assertIsNotNone(snapshot)
+        self.assertTrue(self.cycle.service_dialog(snapshot, vpn=True))
+        self.assertEqual(self.device.ui_reads, [(0, 0), (12, 0)])
+        self.assertEqual(len(self.device.taps), 1)
+
+    def test_passive_input_still_requires_a_fresh_ui_read(self):
+        self.assertIsNotNone(self.cycle.observe_idle(periodic_ui=False))
+        self.clock.now = 1
+        self.assertIsNone(self.cycle.observe_idle(periodic_ui=False))
+        self.cycle.tap_point(50, 50, 'test native action')
+        self.assertIsNotNone(self.cycle.observe_idle(periodic_ui=False))
+        self.assertEqual(self.device.ui_reads, [(0, 0), (1, 0)])
+        self.assertEqual(len(self.device.taps), 1)
+
+    def test_passive_unstable_read_is_retried_without_enabling_periodic_dumps(self):
+        self.device.render = lambda: dict(window(), stable=False)
+        self.assertIsNone(self.cycle.observe_idle(periodic_ui=False))
+        self.clock.now = m.IDLE_UI_MIN_SECONDS
+        self.device.render = lambda: window()
+        self.assertIsNotNone(self.cycle.observe_idle(periodic_ui=False))
+        self.clock.now = 50
+        self.assertIsNone(self.cycle.observe_idle(periodic_ui=False))
+        self.assertEqual(self.device.ui_reads, [(0, 0), (m.IDLE_UI_MIN_SECONDS, 0)])
+
     def test_same_focus_same_component_ad_is_seen_by_periodic_full_read(self):
         shown_at = 17
         closed = [False]

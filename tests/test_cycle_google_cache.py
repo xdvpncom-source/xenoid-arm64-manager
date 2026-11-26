@@ -201,7 +201,7 @@ class GoogleCacheWorkflowTests(unittest.TestCase):
 
     def test_bundled_candidate_source_matches_pinned_unseeded_workflow(self):
         # Static source integrity only; this pin does not qualify a live release.
-        self.assertEqual(hashlib.sha256(SOURCE.read_bytes()).hexdigest(),'3464f3efe7871e4cfa1e2d6031082b3ac74a1329b7da273362e32c492ce09fae')
+        self.assertEqual(hashlib.sha256(SOURCE.read_bytes()).hexdigest(),'bc63c7bd653c513f2889c2c7ff454f8f5a0be565bd05467d88620aec82ff50c4')
         self.assertNotIn('random.seed(',SOURCE.read_text())
 
 
