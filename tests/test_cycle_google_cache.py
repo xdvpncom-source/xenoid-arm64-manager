@@ -24,7 +24,7 @@ class CacheDevice(FakeDevice):
     def __init__(self,clock):
         super().__init__(clock);self.regenerate_results=[];self.cache_results={};self.native_rotation_keys=set()
         self.receipts={};self.cleanup_overrides=[];self._inside_regenerate=False
-    def regenerate(self,*,timeout,operation_key,post_cache=None):
+    def regenerate(self,*,timeout,operation_key,post_cache=None,post_preferences=None):
         import copy
         self.trace.append(('regenerate',self.clock.now,timeout,operation_key,copy.deepcopy(post_cache)))
         receipt=self.receipts.setdefault(operation_key,{'post_cache':copy.deepcopy(post_cache),'completed':set()})
@@ -51,6 +51,8 @@ class CacheDevice(FakeDevice):
             cleanup={'ok':True,'cache_only':True,'data_cleared':False,'packages':list(post_cache['packages']),'user':post_cache['user']}
             if self.cleanup_overrides:cleanup=self.cleanup_overrides.pop(0)
             answer={**answer,'cache_cleanup':cleanup}
+        if post_preferences is not None:
+            answer={**answer,'ui_preferences':{'ok':True,'verified':True}}
         return answer
     def clear_cache(self,package,*,user='current',timeout=None):
         if not self._inside_regenerate:raise AssertionError('Workflow must pass a durable plan, not clear cache externally')
@@ -201,7 +203,7 @@ class GoogleCacheWorkflowTests(unittest.TestCase):
 
     def test_bundled_candidate_source_matches_pinned_unseeded_workflow(self):
         # Static source integrity only; this pin does not qualify a live release.
-        self.assertEqual(hashlib.sha256(SOURCE.read_bytes()).hexdigest(),'bc63c7bd653c513f2889c2c7ff454f8f5a0be565bd05467d88620aec82ff50c4')
+        self.assertEqual(hashlib.sha256(SOURCE.read_bytes()).hexdigest(),'2d834abb85b93e7919b8876849f3f704816705b5d04d5ecd47b5794726983602')
         self.assertNotIn('random.seed(',SOURCE.read_text())
 
 

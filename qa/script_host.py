@@ -455,18 +455,34 @@ def _native_reserve_read_guard(target, manager, lock_info, remaining):
         require(len(rows) == 1)
         row = dict(rows[0])
         config = json.loads(row["config"])
-        require(row["state"] in {"running", "waiting"} and config.get("run_id") == row["id"]
+        require(row["state"] in {"queued", "running", "waiting"} and config.get("run_id") == row["id"]
                 and config.get("identity_reservations") is True
                 and config.get("instance_id") == target["instance_id"]
                 and config.get("resource_tag") == target["resource_tag"]
                 and config.get("expected_container_id") == target["container_id"])
         root = run_folder(folder, row["id"])
-        require(root is not None)
-        active, request = active_request(root, row["id"])
+        recovery = None
+        request_run, request_iteration, request_config = row["id"], row["iteration"], config
+        if root is None or not os.path.lexists(root / "active.json"):
+            from identity_reservations import recovery_envelope, validate_recovery_envelope
+            recovery = recovery_envelope(folder, row["id"], remaining=remaining)
+            require(recovery is not None)
+            recovered = validate_recovery_envelope(folder, row["id"], recovery, remaining=remaining)
+            require(recovered["binding"] == target and recovered["current_config"] == config)
+            request_run = recovery["original_run"]
+            request_iteration = recovery["original_iteration"]
+            request_config = recovered["original_config"]
+            root = run_folder(folder, request_run)
+            require(root is not None)
+        else:
+            require(row["state"] in {"running", "waiting"})
+        active, request = active_request(root, request_run)
+        if recovery is not None:
+            require(request == recovered["request"] and request["request_sha256"] == recovery["request_sha256"])
+        phase = request.get("phase")
         require(request.get("schema") == "dev.xenoid.native-identity-request/v1"
-                and request.get("binding") == target and request.get("phase") == "reserve"
-                and "values" in request and request["values"] is None
-                and "native_state" in request and request["native_state"] is None
+                and request.get("binding") == target
+                and (phase == "reserve" or recovery is not None and phase == "finalize")
                 and isinstance(request.get("before_values"), dict) and len(request["before_values"]) == 13)
         request_path = root / active["path"]
         operation = directory(request_path.parent)
@@ -475,16 +491,33 @@ def _native_reserve_read_guard(target, manager, lock_info, remaining):
         require(all(owner.get(key) == request.get(key) for key in
                     ("binding", "run_id", "operation_key", "native_transaction", "context")))
         receipt_row = conn.execute("SELECT document FROM regeneration_receipts WHERE run_id=? AND iteration=? AND operation_key=?",
-                                   (row["id"], row["iteration"], request["operation_key"])).fetchone()
+                                   (request_run, request_iteration, request["operation_key"])).fetchone()
         require(receipt_row is not None)
         receipt = json.loads(receipt_row[0])
         receipt_binding = {key: target[key] for key in ("instance_id", "resource_tag", "container_id")}
         require(receipt.get("binding") == receipt_binding and receipt.get("status") == "pending"
                 and receipt.get("identity_reservation_context") == request.get("context")
-                and request.get("context", {}).get("scenario_sha256") == hashlib.sha256(config["source"].encode()).hexdigest()
-                and receipt.get("before_digest") == request.get("native_before", {}).get("stableDigest")
-                and not any(receipt.get(key) is not None for key in
-                            ("native_journal", "native_completion", "result", "completed_at", "profile_apply")))
+                and request.get("context", {}).get("scenario_sha256") == hashlib.sha256(request_config["source"].encode()).hexdigest()
+                and receipt.get("before_digest") == request.get("native_before", {}).get("stableDigest"))
+        if recovery is not None:
+            require(receipt == recovered["receipt"])
+        if phase == "reserve":
+            require(request.get("values") is None and request.get("native_state") is None
+                    and "values" in request and "native_state" in request
+                    and not any(receipt.get(key) is not None for key in
+                                ("native_journal", "native_completion", "result", "completed_at", "profile_apply")))
+            expected_values = request["before_values"]
+        else:
+            from identity_reservations import values_from_target
+            native = request.get("native_state")
+            require(isinstance(native, dict) and native.get("phase") == "committed"
+                    and native == receipt.get("native_journal")
+                    and native.get("transactionId") == request["native_transaction"]
+                    and native.get("before") == request["native_before"] and native.get("target") == request["target"]
+                    and not any(receipt.get(key) is not None for key in
+                                ("native_completion", "result", "completed_at", "profile_apply")))
+            expected_values = values_from_target(request["target"], request["location_sidecar"])
+            require(request.get("values") == expected_values and len(expected_values) == 13)
     after_db = private_file(database)
     require((db_info.st_dev, db_info.st_ino) == (after_db.st_dev, after_db.st_ino))
 
@@ -507,6 +540,9 @@ def _native_reserve_read_guard(target, manager, lock_info, remaining):
                      b"worker", str(target["device_id"]).encode(), b""])
     fields = (process / "stat").read_text().rpartition(")")[2].split()
     require(len(fields) > 19 and fields[19].isdecimal())
+    if recovery is not None:
+        require(recovery["worker"] == {"pid": pid, "start_ticks": int(fields[19]),
+                                       "unit": unit(target["device_id"])})
     groups = (process / "cgroup").read_text()
     cgroups = [line.split(":", 2)[2] for line in groups.splitlines() if line.count(":") >= 2]
     group = props.get("ControlGroup", "")
@@ -532,14 +568,18 @@ def _native_reserve_read_guard(target, manager, lock_info, remaining):
 
     waiting_lock()
     require(not os.path.lexists(request_path.with_suffix(".ack.json"))
-            and not os.path.lexists(operation / "prepared.json")
             and not any(os.path.lexists(manager.context.state_root / name) for name in (
                 "device-regenerate-v3.json", "device-regenerate-v2.json", "device-regenerate.json", "convergence-v1.json")))
+    if phase == "reserve":
+        require(not os.path.lexists(operation / "prepared.json"))
+    else:
+        require(read(operation / "prepared.json") == {"native_transaction": request["native_transaction"],
+                "target_sha256": request["target_sha256"], "attempt": request["attempt"]})
     remaining(1)
     return {"proof": digest({"row": row, "owner": owner, "active": active, "request": request,
                               "receipt": receipt, "worker": [pid, fields[19], groups, argv[1].decode()],
-                              "database": [db_info.st_dev, db_info.st_ino]}),
-            "before_values": request["before_values"]}
+                              "database": [db_info.st_dev, db_info.st_ino], "recovery": recovery}),
+            "expected_values": expected_values}
 
 
 def native_identity_observation(target, *, request_id, manager=None):
@@ -610,7 +650,7 @@ def native_identity_observation(target, *, request_id, manager=None):
             raise ValueError("identity_observation_runtime_changed")
         if reserve_guard is not None:
             if (_native_reserve_read_guard(target, manager, before, remaining) != reserve_guard
-                    or values != reserve_guard["before_values"]):
+                    or values != reserve_guard["expected_values"]):
                 raise ValueError("identity_observation_reserve_changed")
         remaining(1)
         observation = signed({"schema": "dev.xenoid.native-identity-inventory-observation/v1",
@@ -1750,6 +1790,16 @@ echo retired
         from qa_profile_runtime import capture_plan
         return capture_plan(self, manager, binding, deadline)
 
+    def native_location_baseline(self, manager):
+        """Remember the active native country before the first requested move."""
+        from xenoid.location import LocationStateStore
+        state = LocationStateStore(manager.context.state_root, manager.cfg.network_dns_servers).load()
+        active = state.get("active") if isinstance(state, dict) else None
+        if (not isinstance(active, dict) or state.get("pending") is not None
+                or active.get("country") != state.get("desiredCountry")):
+            raise RegenerationPending("native_location_baseline_not_active")
+        return active["country"]
+
     def complete_regeneration_profile(self, manager, cli, receipt, store, key, deadline):
         from qa_profile_runtime import complete
         try:
@@ -1765,7 +1815,21 @@ echo retired
             store.save(key, receipt)
             raise RegenerationPending(code) from None
 
-    def regenerate(self, timeout=0, operation_key=None, post_cache=None, post_google=None, *, _deadline=None):
+    def complete_regeneration_preferences(self, manager, receipt, store, key, deadline):
+        from qa_ui_preferences import PreferencesPending, complete
+        try:
+            result = complete(self, manager, receipt, store, key, deadline)
+        except PreferencesPending as error:
+            receipt["last_preferences_error"] = error.code
+            store.save(key, receipt)
+            raise RegenerationPending(error.code) from None
+        if result and self.log:
+            self.log("action", "Android user preferences verified: " + json.dumps(
+                result["target"], ensure_ascii=False, sort_keys=True))
+        return result
+
+    def regenerate(self, timeout=0, operation_key=None, post_cache=None, post_google=None,
+                   post_preferences=None, *, _deadline=None):
         if type(timeout) is not int or timeout < 0:
             raise ValueError("Regeneration timeout must be a nonnegative integer; zero is unlimited")
         if not isinstance(operation_key, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", operation_key):
@@ -1773,8 +1837,11 @@ echo retired
         post_cache = self.regeneration_post_cache(post_cache)
         from qa_google_reset import normalize_plan
         post_google = normalize_plan(post_google)
+        from qa_ui_preferences import normalize_plan as normalize_preferences
+        post_preferences = normalize_preferences(post_preferences)
         try:
-            return self._regenerate(timeout, operation_key, post_cache, post_google, _deadline=_deadline)
+            return self._regenerate(timeout, operation_key, post_cache, post_google,
+                                    post_preferences, _deadline=_deadline)
         except (RuntimeIdentityError, RegenerationPending):
             raise
         except Exception as error:
@@ -1795,7 +1862,8 @@ echo retired
         return NativeGate(store.folder, self.config, manager, key, stopping=self.stopping,
                           deadline=deadline, context=context)
 
-    def _regenerate(self, timeout, operation_key, post_cache=None, post_google=None, *, _deadline=None):
+    def _regenerate(self, timeout, operation_key, post_cache=None, post_google=None,
+                    post_preferences=None, *, _deadline=None):
         store = self.regeneration_receipts
         if store is None:
             raise RuntimeError("Regeneration receipts are unavailable outside a managed script iteration")
@@ -1821,6 +1889,13 @@ echo retired
                 raise RegenerationPending("regeneration_post_cache_plan_changed")
             if receipt is not None and receipt.get("post_google") != post_google:
                 raise RegenerationPending("regeneration_post_google_plan_changed")
+            if receipt is not None and receipt.get("post_preferences") != post_preferences:
+                raise RegenerationPending("regeneration_post_preferences_plan_changed")
+            if (receipt is not None and post_preferences is not None
+                    and receipt.get("post_preferences_plan") is None
+                    and (receipt.get("native_journal") is not None
+                         or receipt.get("native_completion") is not None)):
+                raise RegenerationPending("finish_existing_regeneration_before_preferences")
             if receipt is not None and receipt.get("status") == "committed":
                 gate = self.managed_identity_gate(manager, store, operation_key, receipt, deadline)
                 if gate is not None:
@@ -1833,7 +1908,7 @@ echo retired
                     self.ensure_native_interaction(manager, deadline, repair=True, foreground=True)
                 return {**receipt["result"], "input_ready": True, "foreground_ready": True,
                         "touch_backend": "xenoid_native", "replayed": True}
-            if receipt is not None and receipt.get("native_completion") is not None and (post_google is not None or receipt.get("profile_plan") is not None):
+            if receipt is not None and receipt.get("native_completion") is not None and (post_google is not None or receipt.get("profile_plan") is not None or receipt.get("post_preferences_plan") is not None):
                 # Google data now belongs to the explicit post stage. Its retry
                 # must not demand the pre-clear offline Google target or re-GEN.
                 cli = self.regeneration_cli()
@@ -1845,6 +1920,7 @@ echo retired
                     if gate is not None:
                         gate.finalize(receipt["native_journal"])
                     result["profile_apply"] = self.complete_regeneration_profile(manager, cli, receipt, store, operation_key, deadline)
+                    result["ui_preferences"] = self.complete_regeneration_preferences(manager, receipt, store, operation_key, deadline)
                     progress = receipt.get("post_google_progress") or {}
                     if progress.get("registration_started") and post_cache is not None:
                         if set(receipt.get("post_cache_completed", {})) != set(post_cache["packages"]):
@@ -1875,6 +1951,7 @@ echo retired
                 self.regeneration_binding(manager)
                 receipt = {"status": "pending", "binding": binding, "timeout": timeout,
                            "before_digest": digest, "created_at": now(), "post_cache": post_cache, "post_google": post_google,
+                           "post_preferences": post_preferences,
                            "post_cache_command_timeout": self.config.get("command_timeout", 0)}
                 # Existing native transactions retain their original contract;
                 # only a new GEN pins the current administrator profile policy.
@@ -1883,6 +1960,8 @@ echo retired
                         profile_plan = self.capture_regeneration_profile(manager, binding, deadline)
                     if profile_plan is not None:
                         receipt["profile_plan"] = profile_plan
+                elif post_preferences is not None:
+                    raise RegenerationPending("finish_existing_regeneration_before_preferences")
                 if google_prepared:
                     receipt["google_reset_preparation"] = {"completed": True, "before_native_journal": True}
                 store.save(operation_key, receipt)
@@ -1951,6 +2030,19 @@ echo retired
                     check_budget()
                     if live_state is None and saved_state is None:
                         self.prepare_regeneration(cli, manager, args, binding, receipt, store, operation_key, check_budget, deadline=deadline)
+                        if post_preferences is not None and receipt.get("post_preferences_plan") is None:
+                            # Preparation may officially upgrade an older daemon
+                            # that does not yet contain the preferences helper.
+                            # Pin the original preferences after that upgrade,
+                            # before the first native identity mutation.
+                            from qa_ui_preferences import capture
+                            receipt["post_preferences_plan"] = capture(
+                                self, manager, binding, post_preferences, deadline, operation_key)
+                            store.save(operation_key, receipt)
+                    if post_preferences is not None and "native_location" in post_preferences:
+                        from qa_ui_preferences import native_location_args
+                        for name, value in native_location_args(receipt.get("post_preferences_plan")).items():
+                            setattr(args, name, value)
                     if live_state is None and saved_state is not None:
                         if identity_gate is not None:
                             identity_gate.resume(saved_state)
@@ -1991,10 +2083,11 @@ echo retired
                         raise RegenerationPending("native_regeneration_identity_unchanged")
                     if identity_gate is not None:
                         identity_gate.finalize(state)
-                    if post_google is not None or receipt.get("profile_plan") is not None:
+                    if post_google is not None or receipt.get("profile_plan") is not None or receipt.get("post_preferences_plan") is not None:
                         receipt["native_completion"] = self.regeneration_native_completion(refreshed, cli, state, result, deadline)
                         store.save(operation_key, receipt)
                     result["profile_apply"] = self.complete_regeneration_profile(refreshed, cli, receipt, store, operation_key, deadline)
+                    result["ui_preferences"] = self.complete_regeneration_preferences(refreshed, receipt, store, operation_key, deadline)
                     result["cache_cleanup"] = self.complete_regeneration_post_cache(
                         refreshed, receipt, store, operation_key, deadline)
                     if post_google is not None:
@@ -3498,8 +3591,19 @@ done
     def dispatch(self, action, args):
         if not isinstance(args, list):
             raise ValueError("Expected an argument list")
-        if action == "regenerate" and 2 <= len(args) <= 4:
+        if action == "regenerate" and 2 <= len(args) <= 5:
             return self.regenerate(*args)
+        if action in {"ui-preferences-read", "ui-preferences-restore", "ui-preferences-baseline"} and not args:
+            from qa_ui_preferences import _helper, read_baseline, restore
+            seconds = self.config.get("command_timeout", 0)
+            deadline = time.monotonic() + seconds if seconds else None
+            with self.owned_manager(deadline=deadline) as manager:
+                with self.display_raw_docker(manager, deadline):
+                    if action == "ui-preferences-read":
+                        return {"ok": True, "snapshot": _helper(self, manager, "read", None, deadline)}
+                    if action == "ui-preferences-baseline":
+                        return {"ok": True, **read_baseline(self, manager, deadline=deadline)}
+                    return restore(self, manager, deadline=deadline)
         if action == "input-status" and len(args) <= 1:
             return self.input_status(*args)
         if action == "clear-cache" and 1 <= len(args) <= 3:
@@ -3886,6 +3990,8 @@ def resume_regeneration_receipts(folder, number, config, iteration, app_cache):
                 options = {} if deadline is None else {"_deadline": deadline}
                 if receipt.get("post_google") is not None:
                     options["post_google"] = receipt["post_google"]
+                if receipt.get("post_preferences") is not None:
+                    options["post_preferences"] = receipt["post_preferences"]
                 broker.regenerate(timeout, key, receipt.get("post_cache"), **options)
                 break
             except RegenerationPending as error:

@@ -3391,9 +3391,21 @@ def _execute_device_regeneration(args: argparse.Namespace) -> dict[str, Any]:
             drm_id = secrets.token_hex(16)
             while drm_id == before["drmDeviceUniqueId"]:
                 drm_id = secrets.token_hex(16)
+            location_options = {}
+            for option, attribute in (("country", "location_country"),
+                                      ("timezone", "location_timezone"),
+                                      ("locales", "location_locales")):
+                value = getattr(args, attribute, None)
+                if value is not None:
+                    location_options[option] = value
+            randomize_carrier = getattr(args, "randomize_carrier", False)
+            if type(randomize_carrier) is not bool:
+                raise LocationError("device_regeneration_state_invalid")
+            if randomize_carrier:
+                location_options["randomize_carrier"] = True
             location_target = LocationStateStore(
                 context.state_root, manager.cfg.network_dns_servers
-            ).regeneration_target(sim_epoch)
+            ).regeneration_target(sim_epoch, **location_options)
             stable_target = generate_stable_target(identity["stable"])
             target = {
                 "stableDigest": stable_identity_digest(stable_target),
@@ -3411,6 +3423,10 @@ def _execute_device_regeneration(args: argparse.Namespace) -> dict[str, Any]:
                 "googleBindingDigest": before["googleBindingDigest"],
                 "drmDeviceUniqueId": drm_id,
             }
+            if location_options:
+                # The native journal, not later CLI options or mutable country
+                # defaults, owns the complete target throughout crash recovery.
+                target["locationTarget"] = location_target
             if identity_hook is not None:
                 identity_hook.location_target(location_target)
             return target
@@ -3672,6 +3688,8 @@ def _execute_device_regeneration(args: argparse.Namespace) -> dict[str, Any]:
             expected_profile_digest=str(
                 state["target"]["locationProfileDigest"]
             ),
+            **({"target": state["target"]["locationTarget"]}
+               if "locationTarget" in state["target"] else {}),
         )
         epoch = manager._daemon_runtime_epoch()
         if epoch is None:
@@ -4670,6 +4688,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     rg.add_argument("--dry-run", action="store_true", help="show the rotation plan without changing anything")
+    rg.add_argument("--location-country", help="country fixed into this new regeneration's radio profile")
+    rg.add_argument("--location-timezone", help="catalog timezone fixed into the new radio profile")
+    rg.add_argument("--location-locale", dest="location_locales", action="append",
+                    help="catalog locale in ordered preference list; repeat for multiple locales")
+    rg.add_argument("--randomize-carrier", action="store_true",
+                    help="select a catalog carrier from the new SIM epoch, avoiding the current carrier when possible")
     rg.set_defaults(func=cmd_device_regenerate)
 
     s = sub.add_parser("automation", help="automation tasks")

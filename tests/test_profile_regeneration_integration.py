@@ -1,4 +1,5 @@
 """The profile phase must not rerun native GEN on a partial completion."""
+from __future__ import annotations
 import copy
 import ast
 from collections.abc import Mapping

@@ -1,4 +1,5 @@
 """Run the actual native history method against soft-reboot clock histories."""
+from __future__ import annotations
 import ast
 from datetime import datetime, timezone
 from pathlib import Path

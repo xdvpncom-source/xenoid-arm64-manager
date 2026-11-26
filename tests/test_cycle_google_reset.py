@@ -5,9 +5,9 @@ from test_cycle_google_cache import CacheDevice,m
 from test_vpn_cycle import Clock
 class GoogleDevice(CacheDevice):
  def __init__(self,clock):super().__init__(clock);self.google_plans=[];self.unverified_once=False
- def regenerate(self,*,timeout,operation_key,post_cache=None,post_google=None):
+ def regenerate(self,*,timeout,operation_key,post_cache=None,post_google=None,post_preferences=None):
   self.google_plans.append((operation_key,copy.deepcopy(post_google)))
-  answer=super().regenerate(timeout=timeout,operation_key=operation_key,post_cache=post_cache)
+  answer=super().regenerate(timeout=timeout,operation_key=operation_key,post_cache=post_cache,post_preferences=post_preferences)
   if post_google:
    proof={'ok':True,'data_cleared':True,'packages':post_google['clear_packages'],'registration_enabled':True,'checkin_requested':True,'network_registered':None,'identity_mode':'provider-managed','offline_marker_retired':True}
    if self.unverified_once:self.unverified_once=False;proof['registration_enabled']=False

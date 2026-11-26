@@ -75,6 +75,12 @@ GOOGLE_DATA_RESET_ENABLED = True
 GOOGLE_DATA_PACKAGES = ("com.google.android.gms", "com.google.android.gsf")
 GOOGLE_RESET_DELAY_SECONDS = 2         # Cache -> data clear -> microG registration; also between package clears.
 GOOGLE_RESET_TIMEOUT = 0               # 0 permits retries without an operation deadline.
+# Real Android user settings, selected once per committed GEN. Set None to stop
+# rotating them, then run restore-device-region.py to restore each baseline.
+# Optional "regions" overrides the four US regional presets. The same pinned
+# choice goes through official GEN to align the SIM/carrier with US settings.
+UI_PREFERENCES = {"enabled": True, "font_scales": [0.85, 1.0, 1.15], "night_modes": [1, 2],
+                  "native_location": {"country": "US", "randomize_carrier": True}}
 
 # Explicit resource IDs or labels can be added here for a particular APK.
 # Example: ({"resource_id": "com.example.vpn:id/ad_close"},)
@@ -1639,6 +1645,8 @@ class Cycle:
                 options = {"post_cache": post_cache}
                 if post_google is not None:
                     options["post_google"] = post_google
+                if UI_PREFERENCES and UI_PREFERENCES.get("enabled", True):
+                    options["post_preferences"] = UI_PREFERENCES
                 result = self.device.regenerate(timeout=REGENERATE_TIMEOUT, operation_key=operation_key, **options)
                 required = ("ok", "native_ready", "profile_ready", "container_id_preserved",
                             "instance_id_preserved", "resource_tag_preserved", "identities_changed",
@@ -1669,6 +1677,12 @@ class Cycle:
                                      or reset.get("offline_marker_retired") is not True))):
                         raise RuntimeError("regeneration_post_google_pending: data reset and microG registration were not confirmed")
                     self.log("Google app data cleared after cache; microG device registration enabled and check-in requested")
+                if UI_PREFERENCES and UI_PREFERENCES.get("enabled", True):
+                    preferences = result.get("ui_preferences")
+                    if (not isinstance(preferences, dict) or preferences.get("ok") is not True
+                            or preferences.get("verified") is not True):
+                        raise RuntimeError("regeneration_user_preferences_pending: effective settings were not verified")
+                    self.log("New Android regional, font and theme preferences verified after GEN")
                 break
             except (RuntimeError, OSError) as error:
                 self.log("Regeneration waiting: " + str(error))
@@ -1698,6 +1712,10 @@ def validate_regeneration_settings():
         raise ValueError("REGENERATE_ENABLED must be Boolean")
     if not REGENERATE_ENABLED:
         return
+    if UI_PREFERENCES is not None and (
+            not isinstance(UI_PREFERENCES, dict)
+            or type(UI_PREFERENCES.get("enabled", True)) is not bool):
+        raise ValueError("UI_PREFERENCES must be None or an object with a Boolean enabled setting")
     if type(GOOGLE_DATA_RESET_ENABLED) is not bool:
         raise ValueError("GOOGLE_DATA_RESET_ENABLED must be Boolean")
     if GOOGLE_DATA_RESET_ENABLED:

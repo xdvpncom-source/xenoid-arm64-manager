@@ -4846,6 +4846,7 @@ cat >/dev/null
     _EXIT_REASONS_IGNORE = {
         "EXIT_SELF",
         "LOW_MEMORY",
+        "PERMISSION_CHANGE",
         "USER_REQUESTED",
         "USER_STOPPED",
         "OTHER",
@@ -4862,6 +4863,7 @@ cat >/dev/null
         "DEPENDENCY_DIED",
     }
     _EXIT_REASON_BY_CODE = {
+        0: "UNKNOWN",
         1: "EXIT_SELF",
         2: "SIGNALED",
         3: "LOW_MEMORY",
@@ -4869,6 +4871,7 @@ cat >/dev/null
         5: "CRASH_NATIVE",
         6: "ANR",
         7: "INITIALIZATION_FAILURE",
+        8: "PERMISSION_CHANGE",
         9: "EXCESSIVE_RESOURCE_USAGE",
         10: "USER_REQUESTED",
         11: "USER_STOPPED",
@@ -5139,6 +5142,12 @@ cat >/dev/null
 
     @staticmethod
     def _parse_exit_timestamp(value: str, tz_offset: str) -> Optional[float]:
+        # Android formats exit-info dates with the device locale's decimal
+        # digits. strptime does not consistently accept those digits, although
+        # the exit-info shape parser does. Normalize only Nd timestamp digits;
+        # keep separators, timezone handling and all history filters unchanged.
+        import unicodedata
+        value = "".join(str(unicodedata.decimal(char)) if char.isdecimal() else char for char in value)
         match = re.fullmatch(r"([+-])(\d{2})(\d{2})", tz_offset or "")
         offset = 0
         if match:
@@ -5196,6 +5205,7 @@ cat >/dev/null
         except (ValueError, IndexError, TypeError, OverflowError, ZeroDivisionError):
             return unavailable
         relevant: dict[str, list[dict[str, Any]]] = {package: [] for package in packages}
+        unknown_exit_count = 0
         for record in records:
             package = record["package"]
             if package not in relevant:
@@ -5210,23 +5220,31 @@ cat >/dev/null
             # records rather than classifying a fresh ANR as an old one.
             if timestamp > now_seconds + 1:
                 return unavailable
+            if reason == "UNKNOWN":
+                unknown_exit_count += 1
             if timestamp < boot_epoch - 1:
                 continue
             relevant[package].append({"reason": reason, "timestamp": timestamp})
+        history_details = {"unknownExitCount": unknown_exit_count} if unknown_exit_count else {}
         now = now_seconds
         for package, entries in relevant.items():
             crash_recent = 0
             for entry in entries:
                 reason = entry["reason"]
+                if reason == "UNKNOWN":
+                    # Android recorded a valid exit without a known cause.
+                    # Preserve that observation; it proves neither a crash nor
+                    # malformed exit-info data.
+                    continue
                 if reason in self._EXIT_REASONS_IGNORE:
                     continue
                 if reason in self._EXIT_REASONS_FAIL_ONCE:
-                    return {"ok": False, "code": "google_services_process_unstable", "detail": f"{package}:{reason}"}
+                    return {"ok": False, "code": "google_services_process_unstable", "detail": f"{package}:{reason}", **history_details}
                 if reason in self._EXIT_REASONS_CRASH_CLASS and now - entry["timestamp"] <= 600:
                     crash_recent += 1
             if crash_recent >= 2:
-                return {"ok": False, "code": "google_services_process_unstable", "detail": f"{package}:crashLoop"}
-        return {"ok": True, "code": None, "detail": None}
+                return {"ok": False, "code": "google_services_process_unstable", "detail": f"{package}:crashLoop", **history_details}
+        return {"ok": True, "code": None, "detail": None, **history_details}
 
     def _microg_process_identity(self, process: str) -> Optional[tuple[int, int]]:
         pid_output = self._adb_shell_text(["pidof", process], timeout=10)
@@ -5263,6 +5281,8 @@ cat >/dev/null
         )
         if history.get("ok") is not True:
             return history
+        history_details = ({"unknownExitCount": history["unknownExitCount"]}
+                           if "unknownExitCount" in history else {})
         store_state = "dormant"
         store_identity = self._microg_process_identity("com.android.vending")
         if store_identity is not None:
@@ -5282,8 +5302,8 @@ cat >/dev/null
             enabled = components.get("playStoreSeed", {}).get("enabled") is True
             if receivers is None or "com.android.vending" not in receivers or not enabled:
                 store_state = "failed"
-                return {**unstable, "detail": "playStoreDormantInvalid"}
-        return {"ok": True, "code": None, "detail": None, "playStoreState": store_state}
+                return {**unstable, "detail": "playStoreDormantInvalid", **history_details}
+        return {"ok": True, "code": None, "detail": None, "playStoreState": store_state, **history_details}
 
     def _google_live_runtime_image(
         self, spec: Optional[ReleaseSpec]

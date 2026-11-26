@@ -59,7 +59,8 @@ class Device:
         """
         return request("clear-cache", [package, user, timeout])
 
-    def regenerate(self, timeout=0, operation_key=None, *, post_cache=None, post_google=None):
+    def regenerate(self, timeout=0, operation_key=None, *, post_cache=None, post_google=None,
+                   post_preferences=None):
         """Regenerate/reload through official Xenoid, preserving the container.
 
         Zero waits without a deadline. Retain an explicit operation_key when
@@ -69,11 +70,27 @@ class Device:
         before native work and completed durably before this operation returns.
         Optional post_google is a separate, explicit data-reset/registration plan;
         it never changes clear_cache into a full-data operation.
+        Optional post_preferences selects and verifies real Android regional,
+        font and theme settings once per GEN, with a saved rollback baseline.
         """
         key = uuid.uuid4().hex if operation_key is None else operation_key
+        if post_preferences is not None:
+            return request("regenerate", [timeout, key, post_cache, post_google, post_preferences])
         if post_google is not None:
             return request("regenerate", [timeout, key, post_cache, post_google])
         return request("regenerate", [timeout, key] if post_cache is None else [timeout, key, post_cache])
+
+    def preferences_snapshot(self):
+        """Read the actual Android user preferences without changing them."""
+        return request("ui-preferences-read", [])
+
+    def restore_preferences(self):
+        """Restore this device's first captured preference baseline; no GEN."""
+        return request("ui-preferences-restore", [])
+
+    def preferences_baseline(self):
+        """Read the original UI settings and native country saved for rollback."""
+        return request("ui-preferences-baseline", [])
 
     def set_frame_rate(self, fps, timeout=None):
         """Set integral display FPS; None preserves it, 0 restores native modes.

@@ -849,11 +849,11 @@ def _write_instance_transaction(
 
             DeviceIdentityStore(context).initialize()
             location_store = LocationStateStore(context.state_root, cfg.network_dns_servers)
-            location_state, _ = location_store.ensure(
+            location_state, location_created = location_store.ensure(
                 context.instance_id,
                 DEFAULT_COUNTRY,
             )
-            if location_state.get("pending") is None:
+            if location_created and location_state.get("pending") is None:
                 location_store.set_desired(DEFAULT_COUNTRY)
         registry["leases"][context.instance_id] = asdict(committed)
         registry["pending"].pop(lease.transaction_id, None)

@@ -356,7 +356,9 @@ def _validate_regeneration_target(
     raw: Any,
     before: Mapping[str, Any],
 ) -> dict[str, Any]:
-    if not isinstance(raw, Mapping) or set(raw) != _REGENERATION_TARGET_KEYS:
+    if (not isinstance(raw, Mapping)
+            or set(raw) not in (_REGENERATION_TARGET_KEYS,
+                               _REGENERATION_TARGET_KEYS | {"locationTarget"})):
         raise IdentityError(
             "device_regeneration_state_invalid",
             "invalid device regeneration target-state",
@@ -375,6 +377,16 @@ def _validate_regeneration_target(
         "hostname": _regeneration_text(raw["hostname"], _HOSTNAME),
         "googleBindingDigest": _regeneration_digest(raw["googleBindingDigest"]),
     }
+    if "locationTarget" in raw:
+        from .location import LocationError, validate_regeneration_location_target
+        try:
+            target["locationTarget"] = validate_regeneration_location_target(
+                raw["locationTarget"], sim_epoch=target["simEpoch"],
+                profile_digest=target["locationProfileDigest"],
+            )
+        except (LocationError, KeyError, TypeError, ValueError) as error:
+            raise IdentityError("device_regeneration_state_invalid",
+                                "invalid journaled location target") from error
     if stable_identity_digest(stable) != target["stableDigest"]:
         raise IdentityError(
             "device_regeneration_state_invalid",

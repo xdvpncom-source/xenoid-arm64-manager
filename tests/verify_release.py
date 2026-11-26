@@ -34,7 +34,7 @@ manifest_rows = [line.split(maxsplit=1) for line in (root / "qa/manifest.sha256"
 manifest_paths = [row[1].strip() for row in manifest_rows]
 assert len(manifest_paths) == len(set(manifest_paths)), "Duplicate QA manifest paths"
 required = {"script_host.py", "script_runtime.py", "shared_policy.py", "qa_lifecycle.py",
-            "qa_vpn_probe.py", "qa_input_ready.py", "qa_ui_reader.py", "qa_google_reset.py", "qa_fresh6a.py",
+            "qa_vpn_probe.py", "qa_input_ready.py", "qa_ui_reader.py", "qa_google_reset.py", "qa_ui_preferences.py", "qa_fresh6a.py",
             "qa_control_routes.py", "qa_resource_runtime.py", "qa_host_memory.py", "identity_reservations.py"}
 assert required <= set(installed), "Required QA host module is not installed"
 assert installed.index("qa_control_routes.py") < installed.index("qa_resource_runtime.py"), "Control-route dependency installs after resource runtime"
@@ -43,5 +43,13 @@ assert all(installed.index(name) < installed.index("script_host.py") for name in
 for filename in installed:
     assert "qa/" + filename in manifest_paths, filename + " has no integrity pin"
     assert (root / "qa" / filename).is_file(), filename + " is missing from release"
+for digest, filename in manifest_rows:
+    assert hashlib.sha256((root / filename).read_bytes()).hexdigest() == digest, filename + " QA contents do not match its pin"
 assert "qa/default-bluejay-policy.json" in manifest_paths, "Fresh profile policy has no integrity pin"
+assert "qa/restore-device-region.py" in manifest_paths, "Native region rollback has no integrity pin"
+import importlib.util
+spec = importlib.util.spec_from_file_location("release_native_bundle", root / "nativebundle/apply.py")
+native = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(native)
+native.load_bundle(root / "nativebundle", hashlib.sha256((root / "nativebundle/manifest.json").read_bytes()).hexdigest())
 print("Release integrity pins match " + version)

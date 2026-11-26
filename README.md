@@ -1,6 +1,6 @@
 # Xenoid ARM64 Fleet
 
-The v0.1.51 release reduces repeated UI collection during passive waits: a stable foreground uses cheap focus checks, while full screen reads follow workflow transitions, input or focus changes. Active ad checks follow the remaining countdown and re-read after Skip to find Close. See the [release notes](docs/releases/v0.1.51.md). Official Xenoid native input remains the input path.
+The v0.1.52 release adds configurable Android locale, time-zone, date/clock format, font size and theme selection after official regeneration, with per-device baseline restoration. The native helper applies actual Android settings, and the shared script controls the choices. See the [release notes](docs/releases/v0.1.52.md). Official Xenoid native input remains the input path.
 
 Install Xenoid on an ARM64 Ubuntu server and manage headless Android 13 instances through a local CLI. Each numeric ID maps to an upstream instance name. For example, `2` selects `phone-2`. Xenoid allocates the container, persistent volume, network, and loopback ADB port for each instance.
 
@@ -17,7 +17,7 @@ Long-running fleet qualification is recorded separately.
 Use an **ARM64 (aarch64) server running Ubuntu 24.04**, such as a Hetzner CAX server. The installer requires root access, outbound HTTPS, and free disk space for the build toolchain, container images, and Android data. Install and management commands use the same operator account and Xenoid registry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.51/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.52/install.sh | sudo -H bash -s -- --accept-android-licenses
 ```
 
 The `--accept-android-licenses` flag accepts the Android SDK licenses for the pinned build tools from Google. The installer prepares the host and creates fresh Pixel 6a devices up to the host’s reserved capacity. Allow tens of minutes for the first build on a small server. The CLI is installed as `/usr/local/bin/xenoid-fleet` and the managed checkout lives under `/opt/xenoid-fleet/upstream`. Rerunning the installer reuses the toolchain, creates missing IDs and converges existing matching Pixel 6a instances. An incompatible existing profile is rejected; deletion is a separate explicit operation.
@@ -35,7 +35,7 @@ sudo -H xenoid-fleet run 1 -- adb shell getprop sys.boot_completed
 Use `--install-only` to prepare the host before creating the first device or upgrade an existing installation without issuing a device start. Upgrades also refresh enabled proxies on already-running devices when their native control/process revision has not been verified.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.51/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.52/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
 ```
 
 ## Devices
@@ -626,6 +626,42 @@ Reported CPU/RAM values do not alter the host's physical resources; the existing
 display/FPS and host memory optimizations remain in place.
 A changed JSON value does not assert OEM signing, physical hardware changes, or
 hardware-backed DRM certification.
+
+### Android regional, font and theme preferences
+
+`qa/vpn-cycle.py` exposes `UI_PREFERENCES` in the shared script editor. Its
+default selects `en-US`, one of four US time zones, font scales `0.85`, `1.0`,
+`1.15`, and light/dark mode. New native devices initialize in the US. The
+default `native_location` request moves existing devices to the US during
+their next selected official GEN and rotates among T-Mobile (`310260`),
+AT&T Mobility (`310410`) and Verizon Wireless (`311480`). The journal owns
+the complete SIM, carrier/APN and regional target before any identity write.
+The same Android container, installed APK and resource limits are retained.
+
+Supply a `regions` array to limit the choices; entries use `locales`,
+`timezone`, `time_12_24` and `date_format`. Omit `native_location` to change
+only user preferences. Neither mode changes Build fields, display dimensions,
+DPI or frame pacing. Mobile-network metadata does not change proxy egress IP.
+
+The worker captures the original settings and chooses the target before GEN.
+It applies the chosen user preferences after native/profile verification and
+before the existing Google cleanup/registration phases. A durable operation
+receipt fixes the selection across retries. Native Location replay respects
+the explicit user locale/time-zone marker while retaining its other identity
+checks. A failed preference apply restores the captured settings before retry.
+
+To undo this feature, set `UI_PREFERENCES = None` in the shared scenario and run
+`qa/restore-device-region.py` once on the desired devices through the panel.
+It uses a new official GEN to restore the original native country with fresh
+identifiers, then restores the original UI settings, including absent keys.
+`qa/restore-ui-preferences.py` remains available for UI-only rollback.
+Original state is kept privately under
+`/var/lib/xenoid-fleet/ui-preferences/` with the instance binding. Do not delete
+that directory while rollback is needed.
+
+Apps can choose their own language, theme or text sizing. Android preference
+readback proves the system setting; a browser or app must be checked separately
+to establish which preferences it honors.
 
 ### Random display dimensions and atomic presets (v0.1.28)
 

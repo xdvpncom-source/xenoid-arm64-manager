@@ -34,6 +34,9 @@ class Device(RuntimeDevice):
     sleep(seconds). Legacy V2 helpers remain available.
     Official identity reload: regenerate(timeout=0, operation_key=key). Keep the
     same key for retries; reapply your display settings after it completes.
+    User preferences: regenerate(post_preferences={"enabled": True}) selects
+    a regional/font/theme profile. preferences_snapshot() reads it;
+    restore_preferences() restores the original per-device baseline without GEN.
     """
 
 

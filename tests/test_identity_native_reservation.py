@@ -155,7 +155,7 @@ class NativeReservationBoundary(unittest.TestCase):
             def __init__(self, *args):
                 pass
 
-            def regeneration_target(self, epoch):
+            def regeneration_target(self, epoch, **options):
                 outer.location_count += 1
                 profile = copy.deepcopy(outer.cellular['profiles'][1 + (outer.location_count - 1) % 2]['profile'])
                 return {"simEpoch": epoch, "country": "SG", "profile": profile,
@@ -276,6 +276,48 @@ class NativeReservationBoundary(unittest.TestCase):
         self.assertEqual(first["native_transaction"], accepted["native_transaction"])
         self.assertEqual(self.state["target"], accepted["target"])
         self.assertLess(self.events.index("ack.reserved"), self.events.index("journal.prepare"))
+
+    def explicit_location_args(self, gate):
+        return argparse.Namespace(context=self.context, location_country="SG", location_timezone="Asia/Singapore",
+                                  location_locales=["en-SG"], randomize_carrier=False,
+                                  _identity_reservation_hook=gate)
+
+    def test_explicit_location_target_is_exactly_the_reserved_sidecar(self):
+        gate = self.gate()
+        self.wait_with_ack(gate, ["reserved", "reserved"])
+        with self.assertRaises(BoundaryReached):
+            self.execute(self.explicit_location_args(gate))
+        request = self.helper.read(gate.path / "attempt-0.reserve.json")
+        self.assertEqual(request["target"]["locationTarget"], request["location_sidecar"])
+        self.assertEqual(self.state["target"]["locationTarget"], request["location_sidecar"])
+        self.assertEqual(len(self.prepared), 1)
+
+    def test_sidecar_country_cannot_differ_from_embedded_target_before_reservation(self):
+        gate = self.gate()
+        original = gate.location_target
+        def changed_country(value):
+            # Same epoch and profile digest: only the new whole-document check
+            # detects that the separately supplied country was changed.
+            original({**value, "country": "US"})
+        gate.location_target = changed_country
+        with self.assertRaisesRegex(self.helper.ReservationPending, "identity_location_target_changed"):
+            self.execute(self.explicit_location_args(gate))
+        self.assertIsNone(self.state)
+        self.assertEqual(self.prepared, [])
+        self.assertNotIn("daemon_client", self.events)
+        self.assertEqual(list(gate.path.glob("attempt-*.reserve.json")), [])
+
+    def test_optional_location_target_preserves_legacy_sidecar_validation(self):
+        profile = copy.deepcopy(self.cellular["profiles"][1]["profile"])
+        sidecar = {"simEpoch": "a" * 32, "country": "SG", "profile": profile,
+                   "profileDigest": profile["identityDigest"]}
+        old_target = {"simEpoch": sidecar["simEpoch"], "locationProfileDigest": sidecar["profileDigest"]}
+        self.assertEqual(self.helper.location_sidecar(sidecar, old_target), sidecar)
+        target = {**old_target, "locationTarget": copy.deepcopy(sidecar)}
+        self.assertEqual(self.helper.location_sidecar(copy.deepcopy(sidecar), target), sidecar)
+        target["locationTarget"]["country"] = "US"
+        with self.assertRaisesRegex(self.helper.ReservationPending, "identity_location_target_changed"):
+            self.helper.location_sidecar(sidecar, target)
 
     def test_sim_only_collision_rederives_sidecar_before_prepare(self):
         gate = self.gate()

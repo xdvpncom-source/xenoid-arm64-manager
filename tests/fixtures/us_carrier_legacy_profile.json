@@ -1,0 +1,73 @@
+{
+  "callingCode": "+1",
+  "carrier": {
+    "apn": "fast.t-mobile.com",
+    "bands": [
+      2,
+      4,
+      5,
+      12,
+      66,
+      71
+    ],
+    "mcc": "310",
+    "mnc": "260",
+    "name": "T-Mobile"
+  },
+  "cell": {
+    "band": 2,
+    "bandwidthKhz": 10000,
+    "cqi": 7,
+    "earfcn": 662,
+    "eci": 132476295,
+    "pci": 215,
+    "rsrp": -92,
+    "rsrq": -8,
+    "rssnr": 71,
+    "tac": 13775,
+    "technology": "LTE",
+    "timingAdvance": 33
+  },
+  "dataCall": {
+    "addresses": [],
+    "dnses": [],
+    "gateways": [],
+    "iface": "rmnet_data0",
+    "mtu": 1500,
+    "protocol": "IPV4V6",
+    "state": "CONNECTED"
+  },
+  "identityDigest": "2188b523739b603d639aa317e5d59747bc11245715d89eddd604ef195d6d7c4d",
+  "locale": [
+    "en-US",
+    "es-US"
+  ],
+  "locationKey": "US/America/New_York",
+  "operator": {
+    "alphaLong": "T-Mobile",
+    "alphaShort": "T-Mobile",
+    "isoCountry": "us",
+    "isoNetwork": "us",
+    "numeric": "310260",
+    "roaming": false
+  },
+  "schema": "dev.xenoid.cellular-profile/v2",
+  "sim": {
+    "ad": "",
+    "gid1": "",
+    "iccid": "89310260106745762754",
+    "imsi": "310260108157114",
+    "mncLength": 3,
+    "msisdn": "+12015550127",
+    "spn": "T-Mobile"
+  },
+  "slot": {
+    "embedded": false,
+    "logicalSlotIndex": 0,
+    "portId": 0,
+    "present": true,
+    "ready": true,
+    "slotId": 0
+  },
+  "timezone": "America/New_York"
+}
