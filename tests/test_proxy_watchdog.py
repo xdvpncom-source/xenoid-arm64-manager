@@ -65,6 +65,7 @@ class Watchdog(unittest.TestCase):
                        'key':q.resource_key(self.manager.owned,self.config,self.identity),
                        'display':{'verified_sentinel':True},'metrics':{'unchanged_sentinel':True}}
         fresh=types.ModuleType('qa_fresh6a');fresh.is_bluejay=lambda _:True;fresh.ensure_runtime=Mock(return_value={'ok':True,'changed':False})
+        fresh.verify_runtime=Mock(return_value={'ok':True,'changed':False})
         self.fresh=fresh
         route=types.ModuleType('qa_control_routes');route.ensure_control_routes=Mock(return_value={'ok':True,'changed':False,'ipv6_changed':False});self.route=route
         util=types.ModuleType('xenoid.util');util.command_timeout=lambda seconds:contextlib.nullcontext()
@@ -124,6 +125,12 @@ class Watchdog(unittest.TestCase):
         self.assertEqual(self.manager.events,[])
     def test_SDK_force_true_preserves_existing_readback_without_network_healing(self):
         value=self.timer(force=True);self.assertTrue(value['ok']);self.fresh.ensure_runtime.assert_called_once();self.assertEqual(self.manager.events,[])
+        self.fresh.verify_runtime.assert_not_called()
+    def test_rolling_update_with_cached_previous_fresh_module_keeps_verifying(self):
+        del self.fresh.ensure_runtime
+        value=self.timer(force=True)
+        self.assertTrue(value['ok']);self.fresh.verify_runtime.assert_called_once()
+        self.assertEqual(self.manager.events,[])
     def test_changed_owned_CID_is_not_masked_as_network_pending(self):
         self.manager.owned={**self.manager.owned,'Id':'c'*64}
         with self.assertRaises(host.RuntimeIdentityError):q.native_proxy_maintenance(self.manager,{'Id':CID},self.config,self.previous,broker=self.broker)

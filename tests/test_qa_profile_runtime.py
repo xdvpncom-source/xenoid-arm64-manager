@@ -11,7 +11,7 @@ import tempfile
 import threading
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "qa"))
 import qa_device_profile as engine
@@ -219,6 +219,29 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(first["profile_sha256"], second["profile_sha256"])
         self.assertEqual(first["effective_changes_verified"], second["effective_changes_verified"])
         self.assertEqual(self.cli.apply_calls, 1); self.assertEqual(self.manager.actual_reloads, 1)
+
+    def test_profile_completion_with_cached_old_or_current_fresh_module(self):
+        # Exercise the actual completion path using its already applied target.
+        # Only the fresh-contract preflight is irrelevant to this dispatch test.
+        self.complete()
+        self.receipt['profile_plan']['resource_config']['render_fps'] = 15
+        for current in (False, True):
+            with self.subTest(current=current):
+                fresh = types.ModuleType('qa_fresh6a')
+                fresh.verify_runtime = Mock(return_value={'ok': True})
+                if current:
+                    fresh.ensure_runtime = Mock(return_value={'ok': True})
+                with patch.dict(sys.modules, {'qa_fresh6a': fresh}), \
+                     patch.object(runtime, '_fresh_contract', return_value=None):
+                    result = self.complete()
+                self.assertTrue(result['official_apply'])
+                if current:
+                    fresh.ensure_runtime.assert_called_once()
+                    fresh.verify_runtime.assert_not_called()
+                else:
+                    fresh.verify_runtime.assert_called_once()
+        self.assertEqual(self.cli.apply_calls, 1)
+        self.assertEqual(self.manager.actual_reloads, 1)
 
     def select_only(self, choices):
         policy = self.receipt["profile_plan"]["policy"]

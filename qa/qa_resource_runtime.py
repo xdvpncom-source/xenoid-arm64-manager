@@ -587,7 +587,11 @@ def reconcile_owned(name, config, manager, *, force=False, broker=None):
         # Native image/boot owns the 15 FPS render cap independently of the
         # advertised 60 Hz mode. Never invoke the legacy HWC replacement here.
         import time
-        from qa_fresh6a import ensure_runtime
+        import qa_fresh6a
+        # A long-lived supervisor can retain the previous module during a
+        # rolling source update. Preserve its read-only contract until that
+        # worker restarts, instead of failing an import halfway through a run.
+        ensure_runtime = getattr(qa_fresh6a, "ensure_runtime", qa_fresh6a.verify_runtime)
         deadline = time.monotonic() + config["timeout"] if config["timeout"] else None
         # A timer-created Broker binds its immutable CID lazily. Enter the
         # official owner context before comparing IDs or reading Android.
