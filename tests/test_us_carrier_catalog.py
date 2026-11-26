@@ -53,6 +53,8 @@ class UsCarrierCatalogTests(unittest.TestCase):
         self.assertEqual(catalog["snapshotVersion"], "2026-08-08")
         legacy = copy.deepcopy(catalog)
         legacy["countries"]["US"]["carriers"] = legacy["countries"]["US"]["carriers"][:1]
+        self.assertEqual(legacy["countries"]["US"]["msisdn"].pop("generationV2"),
+                         {"kind": "us-nanp-national-pattern", "template": "+1##########"})
         encoded = json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
         self.assertEqual(hashlib.sha256(encoded).hexdigest(), OLD_DATASET_CANONICAL_SHA256)
 

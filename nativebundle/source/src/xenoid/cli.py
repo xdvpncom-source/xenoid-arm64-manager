@@ -3403,9 +3403,18 @@ def _execute_device_regeneration(args: argparse.Namespace) -> dict[str, Any]:
                 raise LocationError("device_regeneration_state_invalid")
             if randomize_carrier:
                 location_options["randomize_carrier"] = True
-            location_target = LocationStateStore(
+            location_store = LocationStateStore(
                 context.state_root, manager.cfg.network_dns_servers
-            ).regeneration_target(sim_epoch, **location_options)
+            )
+            # Only a new candidate selects the expanded US pool. Existing
+            # journals retain their exact locationTarget; unpinned legacy
+            # replays keep regeneration_target's version-one derivation.
+            selected_country = location_options.get("country")
+            if selected_country is None:
+                selected_country = location_store.load()["desiredCountry"]
+            if normalize_country(selected_country) == "US":
+                location_options["msisdn_generation_version"] = 2
+            location_target = location_store.regeneration_target(sim_epoch, **location_options)
             stable_target = generate_stable_target(identity["stable"])
             target = {
                 "stableDigest": stable_identity_digest(stable_target),

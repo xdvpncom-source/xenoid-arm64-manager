@@ -25,7 +25,7 @@ _PROFILE_KEYS = {
     "locale", "timezone", "callingCode", "locationKey", "identityDigest",
 }
 _DATASET_PATH = Path(__file__).resolve().parents[2] / "data" / "cellular" / "carriers.json"
-_DATASET_SHA256 = "5fc88430266ae0d386fef9ab531307c47f0ae97f7afabffe8f2fe6e4e4aa013d"
+_DATASET_SHA256 = "150a5ac6d2c987f60fb0a203e0dd3e632986ae0d9e8db7d5d303a2e0ef0ec4d6"
 _CALLING_CODE = re.compile(r"^\+[1-9][0-9]{0,3}$", re.ASCII)
 # Official Pixel 6 Pro G8V0U LTE hardware matrix. The current RIL is LTE-only,
 # so NR and mmWave bands are deliberately not represented as active capability.
@@ -173,16 +173,24 @@ def _validate_msisdn(value: str, dataset: Mapping[str, Any]) -> None:
     lengths = spec.get("nationalLengths")
     pattern = spec.get("nationalPattern")
     template = spec.get("template")
+    templates = [template]
+    generation_v2 = spec.get("generationV2")
+    if generation_v2 is not None:
+        if (not isinstance(generation_v2, Mapping)
+                or set(generation_v2) != {"kind", "template"}
+                or generation_v2.get("kind") != "us-nanp-national-pattern"
+                or generation_v2.get("template") != "+1##########"
+                or calling != "+1"):
+            raise CellularError("cellular_dataset_invalid")
+        templates.append(generation_v2["template"])
     if (
         not isinstance(lengths, list)
         or len(national) not in lengths
         or not isinstance(pattern, str)
         or re.fullmatch(pattern, national) is None
-        or not isinstance(template, str)
-        or len(template) != len(value)
-        or any(
-            want != got for want, got in zip(template, value) if want != "#"
-        )
+        or not any(isinstance(item, str) and len(item) == len(value)
+                   and all(want == "#" or want == got for want, got in zip(item, value))
+                   for item in templates)
     ):
         raise CellularError("cellular_msisdn_invalid")
 
@@ -290,10 +298,38 @@ def _validate_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
     return dict(profile)
 
 
-def _generate_msisdn(seed: bytes, dataset: Mapping[str, Any]) -> str:
+def _generate_msisdn(
+    seed: bytes, dataset: Mapping[str, Any], *, generation_version: int = 1,
+) -> str:
     spec = dataset.get("msisdn")
     if not isinstance(spec, Mapping):
         raise CellularError("cellular_dataset_invalid")
+    if type(generation_version) is not int or generation_version not in (1, 2):
+        raise CellularError("cellular_msisdn_generation_invalid")
+    if generation_version == 2:
+        versioned = spec.get("generationV2")
+        if (not isinstance(versioned, Mapping)
+                or set(versioned) != {"kind", "template"}
+                or versioned.get("kind") != "us-nanp-national-pattern"
+                or versioned.get("template") != "+1##########"
+                or dataset.get("callingCode") != "+1"):
+            raise CellularError("cellular_msisdn_generation_unsupported")
+        # Retain the legacy generator and its seed labels for exact recovery.
+        # V2 samples the full pinned US national pattern, rather than the
+        # legacy 100-number demonstration block. These are synthetic SIM
+        # identifiers; neither allocation nor ownership of a number is claimed.
+        for attempt in range(256):
+            national = _bounded_number(seed, "msisdn-v2:%d" % attempt,
+                                       2000000000, 9999999999)
+            candidate = "+1" + str(national)
+            try:
+                _validate_msisdn(candidate, dataset)
+            except CellularError as error:
+                if error.code != "cellular_msisdn_invalid":
+                    raise
+            else:
+                return candidate
+        raise CellularError("cellular_msisdn_generation_exhausted")
     template = spec.get("template")
     if (
         not isinstance(template, str)
@@ -360,6 +396,7 @@ def generate_cellular_profile(
     dns_servers: Optional[Sequence[str]] = None,
     timezone: Optional[str] = None, locales: Optional[Sequence[str]] = None,
     exclude_carrier: Optional[Mapping[str, Any]] = None,
+    msisdn_generation_version: int = 1,
 ) -> dict[str, Any]:
     """Generate the deterministic profile for one supported country code.
 
@@ -413,7 +450,7 @@ def generate_cellular_profile(
     imsi = mcc + mnc + subscriber
     iccid_body = "89" + mcc + mnc + _digits(seed, "iccid", 20 - 2 - len(mcc) - len(mnc) - 1)
     iccid = iccid_body + _luhn_digit(iccid_body)
-    msisdn = _generate_msisdn(seed, dataset)
+    msisdn = _generate_msisdn(seed, dataset, generation_version=msisdn_generation_version)
     bands = selected.get("bands")
     if (
         not isinstance(bands, list)

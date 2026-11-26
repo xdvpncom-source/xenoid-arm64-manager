@@ -155,6 +155,9 @@ class NativeReservationBoundary(unittest.TestCase):
             def __init__(self, *args):
                 pass
 
+            def load(self):
+                return {"desiredCountry": "SG"}
+
             def regeneration_target(self, epoch, **options):
                 outer.location_count += 1
                 profile = copy.deepcopy(outer.cellular['profiles'][1 + (outer.location_count - 1) % 2]['profile'])
@@ -186,6 +189,7 @@ class NativeReservationBoundary(unittest.TestCase):
             "_regeneration_google_preflight": google,
             "_regeneration_runtime_preflight": runtime_pre,
             "IdentityError": IdentityError, "LocationStateStore": Location,
+            "normalize_country": lambda value: value.upper(),
             "generate_stable_target": stable, "stable_identity_digest": digest,
             "generate_boot_id": lambda: str(self.generation_count + 3) * 32,
             "_generate_bluetooth_address": lambda old: f"02:AA:BB:CC:DD:{self.generation_count:02X}",

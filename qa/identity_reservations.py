@@ -24,6 +24,7 @@ TERMINAL_HANDOFF_SCHEMA = "dev.xenoid.native-identity-terminal-handoff/v1"
 SCRIPT_HOST = Path(__file__).with_name("script_host.py")
 NATIVE_STATE_HOME = Path.home() / ".xenoid"
 CGROUP_ROOT = Path("/sys/fs/cgroup")
+RESERVATION_BATCH_SIZE = 8
 
 
 class ReservationPending(RuntimeError):
@@ -223,9 +224,13 @@ def publish_observation(folder, config, manager):
 
 def active_request(root, run_id):
     active = read(root / "active.json")
-    require(re.fullmatch(r"[0-9a-f]{64}/attempt-[0-7]\.(reserve|finalize)\.json", active.get("path", "")), "identity_request_path_invalid")
+    matched = re.fullmatch(r"[0-9a-f]{64}/attempt-(0|[1-9][0-9]*)\.(reserve|finalize)\.json", active.get("path", ""))
+    require(matched is not None, "identity_request_path_invalid")
     request = verified(read(root / active["path"]), "request_sha256")
-    require(request["request_sha256"] == active["sha256"] and request["run_id"] == run_id, "identity_active_request_changed")
+    require(type(request.get("attempt")) is int and request["attempt"] >= 0
+            and str(request["attempt"]) == matched[1] and request.get("phase") == matched[2]
+            and request["request_sha256"] == active["sha256"] and request["run_id"] == run_id,
+            "identity_active_request_changed")
     return active, request
 
 
@@ -368,7 +373,7 @@ def _recovery_context(folder, current_run, remaining=None):
         require(request_path.parent.name == hashlib.sha256(operation.encode()).hexdigest()
                 and request.get("schema") == REQUEST_SCHEMA and request.get("binding") == binding
                 and request.get("operation_key") == operation and request.get("phase") in {"reserve", "finalize"}
-                and type(request.get("attempt")) is int and 0 <= request["attempt"] < 8
+                and type(request.get("attempt")) is int and request["attempt"] >= 0
                 and request_path.name == "attempt-%d.%s.json" % (request["attempt"], request["phase"])
                 and request.get("target_sha256") == digest(request.get("target")), "identity_recovery_request_changed")
         require(all(owner.get(key) == request.get(key) for key in
@@ -600,7 +605,7 @@ def terminal_handoff(folder, original_run, remaining=None):
                 and request_path.parent.name == hashlib.sha256(operation.encode()).hexdigest()
                 and request.get("schema") == REQUEST_SCHEMA and request.get("binding") == binding
                 and request.get("operation_key") == operation and request.get("phase") in {"reserve", "finalize"}
-                and type(request.get("attempt")) is int and 0 <= request["attempt"] < 8
+                and type(request.get("attempt")) is int and request["attempt"] >= 0
                 and request_path.name == "attempt-%d.%s.json" % (request["attempt"], request["phase"])
                 and request.get("target_sha256") == digest(request.get("target")),
                 "identity_terminal_request_changed")
@@ -713,6 +718,7 @@ class NativeGate:
         return value["native_transaction"]
 
     def _request(self, attempt, phase, before, before_values, target, location, *, values=None, state=None):
+        require(type(attempt) is int and attempt >= 0 and phase in {"reserve", "finalize"}, "identity_attempt_invalid")
         path = self.path / ("attempt-%d.%s.json" % (attempt, phase))
         value = signed({"schema": REQUEST_SCHEMA, "binding": self.binding, "run_id": self.run,
             "operation_key": self.operation, "attempt": attempt, "native_transaction": self.transaction_id(),
@@ -741,6 +747,49 @@ class NativeGate:
                 raise ReservationPending("identity_reservation_pending")
             time.sleep(.1)
 
+    def _existing_reserve(self, attempt):
+        require(type(attempt) is int and attempt >= 0, "identity_attempt_invalid")
+        path = self.path / ("attempt-%d.reserve.json" % attempt)
+        value = verified(read(path), "request_sha256")
+        require(value.get("attempt") == attempt and type(value.get("attempt")) is int
+                and value.get("phase") == "reserve" and value.get("run_id") == self.run
+                and value.get("operation_key") == self.operation and value.get("binding") == self.binding
+                and value.get("native_transaction") == self.transaction_id(create=False)
+                and value.get("context") == self.context and value.get("values") is None
+                and value.get("native_state") is None and value.get("target_sha256") == digest(value.get("target")),
+                "identity_request_changed")
+        location_sidecar(value.get("location_sidecar"), value.get("target"))
+        return value, path
+
+    def _pinned_attempt(self, before=None, current=None):
+        """O(1) access to a prepared target or the latest durable request."""
+        prepared = self.path / "prepared.json"
+        if prepared.exists():
+            marker = read(prepared)
+            attempt = marker.get("attempt")
+            require(type(attempt) is int and attempt >= 0
+                    and marker.get("native_transaction") == self.transaction_id(create=False), "prepared_identity_changed")
+            value, _ = self._existing_reserve(attempt)
+            if before is not None:
+                require(value["native_before"] == before and value["before_values"] == current, "identity_before_changed")
+            require(marker == {"native_transaction": value["native_transaction"],
+                               "target_sha256": value["target_sha256"], "attempt": attempt}, "prepared_identity_changed")
+            return attempt, True
+        if (self.root / "active.json").exists():
+            active, value = active_request(self.root, self.run)
+            if value.get("operation_key") == self.operation:
+                require((self.root / active["path"]).parent == self.path
+                        and value.get("phase") == "reserve", "identity_active_operation_changed")
+                old, path = self._existing_reserve(value["attempt"])
+                if before is not None:
+                    require(old["native_before"] == before and old["before_values"] == current, "identity_before_changed")
+                ack = _recovery_ack(path.with_suffix(".ack.json"), old)
+                if ack is not None and ack["decision"] == "collision":
+                    return value["attempt"] + 1, False
+                return value["attempt"], False
+        # Also recovers a first request written just before active.json publish.
+        return 0, False
+
     def reserve(self, before, factory):
         current, _ = observe(self.manager)
         require(digest({"androidId": current["android_id"], "serial": current["serial"], "imei": current["imei"], "imeisv": current["imeisv"]}) == before["stableDigest"], "identity_before_changed")
@@ -750,15 +799,16 @@ class NativeGate:
             if native in before:
                 expected = before[native].upper() if external == "bluetooth_address" else before[native]
                 require(current[external] == expected, "identity_before_changed")
-        for attempt in range(8):
+        start, pinned = self._pinned_attempt(before, current)
+        for attempt in range(start, start + RESERVATION_BATCH_SIZE):
             path = self.path / ("attempt-%d.reserve.json" % attempt)
             if path.exists():
-                old = verified(read(path), "request_sha256")
+                old, _ = self._existing_reserve(attempt)
                 require(old["native_before"] == before and old["before_values"] == current, "identity_before_changed")
                 target = old["target"]
                 location = old["location_sidecar"]
             else:
-                require(not (self.path / "prepared.json").exists(), "prepared_identity_cannot_reroll")
+                require(not pinned and not (self.path / "prepared.json").exists(), "prepared_identity_cannot_reroll")
                 self._candidate_location = None
                 target = factory()
                 location = self._candidate_location
@@ -766,7 +816,7 @@ class NativeGate:
             if self._wait(request, path) == "reserved":
                 return target
             require(not (self.path / "prepared.json").exists(), "prepared_identity_cannot_reroll")
-        raise ReservationPending("identity_collision_attempt_limit")
+        raise ReservationPending("identity_collision_batch_pending")
 
     def location_target(self, value):
         self._candidate_location = json.loads(canonical(location_sidecar(value)))
@@ -774,15 +824,13 @@ class NativeGate:
     def _matching(self, state):
         require(state.get("schema") == "dev.xenoid.device-regenerate/v3" and state.get("before", {}).get("containerId") == self.binding["container_id"], "identity_native_scope_changed")
         require(state["transactionId"] == self.transaction_id(create=False) and state["instanceId"] == self.binding["instance_id"], "identity_native_transaction_changed")
-        for attempt in range(8):
-            path = self.path / ("attempt-%d.reserve.json" % attempt)
-            if path.exists():
-                value = verified(read(path), "request_sha256")
-                if value["target_sha256"] == digest(state["target"]) and value["native_before"] == state["before"]:
-                    location_sidecar(value["location_sidecar"], state["target"])
-                    require(self._wait(value, path) == "reserved", "prepared_identity_not_reserved")
-                    return attempt, value
-        raise ReservationPending("prepared_identity_not_reserved")
+        attempt, _ = self._pinned_attempt()
+        value, path = self._existing_reserve(attempt)
+        require(value["target_sha256"] == digest(state["target"]) and value["native_before"] == state["before"],
+                "prepared_identity_not_reserved")
+        location_sidecar(value["location_sidecar"], state["target"])
+        require(self._wait(value, path) == "reserved", "prepared_identity_not_reserved")
+        return attempt, value
 
     def prepared(self, state):
         attempt, value = self._matching(state)

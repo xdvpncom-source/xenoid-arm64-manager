@@ -278,6 +278,7 @@ class NativeLocationRegenerationTests(unittest.TestCase):
         context = SimpleNamespace(state_root=self.root)
         scope = {"RegenerationJournal": Journal, "DeviceIdentityStore": lambda c: SimpleNamespace(load=lambda: {"stable": stable}),
             "runtime": lambda a: manager, "LocationStateStore": location.LocationStateStore,
+            "normalize_country": location.normalize_country,
             "_regeneration_google_preflight": lambda *a: {"ok": True},
             "_regeneration_runtime_preflight": lambda *a: {"ok": True}, "secrets": secrets,
             "generate_stable_target": identity.generate_stable_target,
@@ -289,10 +290,22 @@ class NativeLocationRegenerationTests(unittest.TestCase):
         exec(compile(ast.fix_missing_locations(module), "actual-native-cli", "exec"), scope)
         args = SimpleNamespace(context=context, _identity_reservation_hook=Gate(), location_country="US",
                 location_timezone="America/Los_Angeles", location_locales=["en-US"], randomize_carrier=True)
-        with self.assertRaises(Prepared): scope["_execute_device_regeneration"](args)
+        with patch.object(location, "generate_cellular_profile", wraps=cellular.generate_cellular_profile) as generation:
+            with self.assertRaises(Prepared): scope["_execute_device_regeneration"](args)
+        self.assertEqual(generation.call_args.kwargs["msisdn_generation_version"], 2)
         self.assertEqual(events, ["reserve", "journal"])
         self.assertEqual(saved["locationTarget"]["profile"]["timezone"], "America/Los_Angeles")
         self.assertEqual(self.store.path.read_bytes(), self.before)
+
+    def test_legacy_us_target_derivation_stays_v1_while_explicit_v2_is_pinned(self):
+        legacy = self.target()
+        self.assertTrue(legacy["profile"]["sim"]["msisdn"].startswith("+120155501"))
+        current = self.target(msisdn_generation_version=2)
+        self.assertNotEqual(current["profile"]["sim"]["msisdn"], legacy["profile"]["sim"]["msisdn"])
+        with patch.object(self.store, "regeneration_target", side_effect=AssertionError("must use saved v2 target")):
+            changed = self.store.rotate_sim_identity(sim_epoch=current["simEpoch"], target=current,
+                                                    expected_profile_digest=current["profileDigest"])
+        self.assertEqual(changed["profiles"]["US"]["profile"], current["profile"])
 
     def test_actual_radio_phase_retries_exact_target_after_failed_stage_without_recreate(self):
         before, target, _ = self.journal_parts()

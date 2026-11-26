@@ -410,6 +410,7 @@ class LocationStateStore:
             initial_options = {
                 "timezone": timezones[int.from_bytes(zone_seed, "big") % len(timezones)],
                 "locales": ["en-US"],
+                "msisdn_generation_version": 2,
             }
         profile = generate_cellular_profile(
             target, profile_seed, dns_servers=list(self._dns_servers), **initial_options
@@ -468,6 +469,7 @@ class LocationStateStore:
             profile = generate_cellular_profile(
                 target, _derive_seed(master_seed, target, state["simEpoch"]),
                 dns_servers=list(self._dns_servers),
+                msisdn_generation_version=2 if target == "US" else 1,
             )
             entry = {
                 "country": target,
@@ -565,6 +567,7 @@ class LocationStateStore:
         self, sim_epoch: str, *, country: Optional[str] = None,
         timezone: Optional[str] = None, locales: Optional[Sequence[str]] = None,
         randomize_carrier: bool = False,
+        msisdn_generation_version: int = 1,
     ) -> dict[str, Any]:
         """Derive, without mutation, the profile pinned by a regeneration.
 
@@ -605,6 +608,7 @@ class LocationStateStore:
             _derive_seed(master_seed, target, sim_epoch),
             pin=pin,
             dns_servers=list(self._dns_servers),
+            msisdn_generation_version=msisdn_generation_version,
             **options,
         )
         return {
