@@ -348,6 +348,11 @@ def is_notification(window):
             and text_contains(window, {"notification", "notifications", "اعلان", "نوتیفیکیشن"}))
 
 
+def is_notification_shade(window):
+    return (window.get("package") == "com.android.systemui"
+            and window.get("component") in {"NotificationShade", "com.android.systemui/NotificationShade"})
+
+
 def is_ad_activity(window):
     component = str(window.get("component", ""))
     activity = component.partition("/")[2] or component
@@ -1121,6 +1126,8 @@ class Cycle:
         return choose_unique(candidates)
 
     def service_dialog(self, window, *, vpn=False, ads=False):
+        if is_notification_shade(window):
+            return self.close_notification_shade(window)
         # Crash overlays take priority in every phase, including waits and cleanup.
         if is_crash_dialog(window):
             return self.close_crash_dialog(window)
@@ -1163,6 +1170,13 @@ class Cycle:
                 return self.close_ad_control(window, selected)
             return self.service_missing_ad_close(window)
         return False
+
+
+    def close_notification_shade(self, window):
+        if (not is_notification_shade(window)
+                or time.monotonic() - self.last_action < ACTION_COOLDOWN_SECONDS):
+            return False
+        return self.tap_observed_navigation(window, "close Android notification shade via observed Back")
 
 
     def wait(self, seconds, *, dialogs=False, vpn=False, ads=False, fail_on_target_crash=True):
@@ -1280,6 +1294,11 @@ class Cycle:
             window = self.observe()
             if window:
                 self.last_ad_window = window
+                if is_notification_shade(window):
+                    self.close_notification_shade(window)
+                    quiet_since = None
+                    time.sleep(POLL_SECONDS)
+                    continue
                 if self.return_from_ad_landing(window):
                     quiet_since = None
                     time.sleep(POLL_SECONDS)
@@ -1355,7 +1374,7 @@ class Cycle:
             # Recover only that resolved HOME activity, never an arbitrary app.
             foreign = window and window.get("package") != self.package
             known_overlay = window and (is_crash_dialog(window) or is_terms(window)
-                                         or is_notification(window) or is_ad_activity(window)
+                                         or is_notification(window) or is_notification_shade(window) or is_ad_activity(window)
                                          or window.get("package") == VPN_PACKAGE)
             if foreign and not known_overlay and self.is_home_window(window):
                 quiet_since = None
@@ -1373,6 +1392,7 @@ class Cycle:
                        or (not loading and self.service_dialog(window, ads=ad_actions))))
             self.check_target_crash()
             blocked = (not window or loading or is_crash_dialog(window) or is_terms(window) or is_notification(window)
+                       or is_notification_shade(window)
                        or application_hierarchy_missing(window)
                        or window.get("package") == VPN_PACKAGE or (ads and is_blocking_ad(window, self.package)))
             if handled or blocked:
@@ -1458,7 +1478,9 @@ class Cycle:
                            or (not last_loading and self.service_dialog(window, vpn=True, ads=ads)))
                 self.check_target_crash()
                 # After any click, obtain a fresh hierarchy before declaring authorization.
-                expected_window = (window.get("package") == self.package or not ads and is_ad(window))
+                expected_window = (window.get("package") == self.package
+                                   or not ads and (is_ad(window)
+                                                   or window.get("package") in AD_LANDING_PACKAGES))
                 unobstructed = (not last_loading and expected_window and not is_crash_dialog(window)
                                 and not application_hierarchy_missing(window)
                                 and not is_terms(window) and not is_notification(window)

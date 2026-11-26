@@ -3086,7 +3086,9 @@ echo retired
             "node_age_basis": "within_stock_collection_interval",
         }
         back = native_navigation_back(snapshot)
-        if (back is not None and focus is not None and focus[2] and snapshot["stable"] and
+        # System windows can have a raw title without a package in WM focus.
+        # Preserve that tuple; input separately verifies the real SystemUI Back.
+        if (back is not None and focus is not None and snapshot["stable"] and
                 geometry_before is not None and geometry_before == geometry_after):
             token = NATIVE_NAV_PREFIX + secrets.token_urlsafe(24)
             offer = {"token": token, "generation": generation, "focus": focus, "display_id": display_id,

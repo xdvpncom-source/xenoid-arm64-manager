@@ -1,0 +1,8 @@
+{
+  "source": "Privacy-preserving package/component/stability projection of the device 5/1 focused shade canary, 2026-11-26T14:01:42.263+00:00. Navigation controls are supplied separately by the replay fixture.",
+  "window": {
+    "component": "NotificationShade",
+    "package": "com.android.systemui",
+    "stable": true
+  }
+}

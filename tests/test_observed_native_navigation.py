@@ -214,6 +214,78 @@ class NativeNavigation(unittest.TestCase):
         self.assertEqual(sum(c.missing_ad_close_backs.values()), 1)
         self.assertTrue(any(row[0] == 'action' and 'Xenoid native tap' in row[1] for row in self.logs))
 
+    def generic_shade(self):
+        self.current_focus = FOCUS.replace('v2.vpn.fast/com.google.android.gms.ads.AdActivity', 'NotificationShade')
+        self.hierarchy = xml('<window id="9" layer="11" type="TYPE_SYSTEM" title="NotificationShade" '
+            'bounds="[0,0][100,90]" active="true" focused="true">'
+            '<node package="com.android.systemui" text="Dismiss all" bounds="[40,50][90,80]" '
+            'enabled="true" clickable="true"/></window>')
+
+    def test_generic_shade_offer_preserves_raw_focus_and_uses_official_back(self):
+        self.generic_shade()
+        c = cycle.Cycle(self.device(), 'v2.vpn.fast')
+        window = c.observe()
+        self.assertEqual(window['package'], 'com.android.systemui')
+        self.assertEqual(window['component'], 'NotificationShade')
+        self.assertEqual(self.broker._native_navigation_offer['focus'], ('abc123', '0', '', 'NotificationShade'))
+        self.assertTrue(c.close_notification_shade(window))
+        self.assertEqual(self.injected, [(10, 95)])
+
+    def test_unparsed_or_missing_generic_focus_never_offers_back(self):
+        self.generic_shade()
+        for value in ('null', 'Window{invalid-token u0 NotificationShade}', 'Window{abc123 u0 }'):
+            self.current_focus = FOCUS.replace('Window{abc123 u0 v2.vpn.fast/com.google.android.gms.ads.AdActivity}', value)
+            with self.subTest(value=value):
+                self.assertNotIn('native_navigation_observation', self.snapshot())
+        self.assertEqual(self.injected, [])
+
+    def test_changed_generic_focus_token_or_title_rejects_without_input(self):
+        self.generic_shade()
+        original = self.current_focus
+        for old, new in (('NotificationShade', 'Different system window'), ('abc123', 'def456')):
+            self.current_focus = original
+            window = self.snapshot()
+            self.current_focus = original.replace(old, new)
+            self.assertEqual(self.action(window)['reason'], 'navigation_focus_changed')
+        self.assertEqual(self.injected, [])
+
+    def test_generic_focus_changed_during_read_never_offers_back(self):
+        self.generic_shade()
+        def changed(*args, **kwargs):
+            self.current_focus = self.current_focus.replace('abc123', 'def456')
+            return self.hierarchy
+        self.broker.ui_hierarchy = changed
+        window = self.snapshot()
+        self.assertFalse(window['stable'])
+        self.assertNotIn('native_navigation_observation', window)
+        self.assertEqual(self.injected, [])
+
+    def test_stale_generic_focus_offer_rejects_without_input(self):
+        self.generic_shade()
+        window = self.snapshot()
+        self.clock.now += 6
+        self.assertEqual(self.action(window)['reason'], 'navigation_observation_stale')
+        self.assertEqual(self.injected, [])
+
+    def test_generic_focus_keeps_geometry_and_systemui_route_guards(self):
+        self.generic_shade()
+        window = self.snapshot()
+        self.current_focus = self.current_focus.replace('w=100 h=100 r=0', 'w=100 h=120 r=0')
+        self.assertEqual(self.action(window)['reason'], 'navigation_display_geometry_changed_or_unproven')
+        self.generic_shade()
+        self.nav_uid = 10099
+        self.assertEqual(self.action(self.snapshot())['reason'], 'navigation_routing_changed_or_unproven')
+        self.assertEqual(self.injected, [])
+
+    def test_generic_focus_needs_real_back_and_proven_initial_geometry(self):
+        self.generic_shade()
+        self.hierarchy = '<displays><display id="0"/></displays>'
+        self.assertNotIn('native_navigation_observation', self.snapshot())
+        self.generic_shade()
+        self.current_focus = self.current_focus.replace('  DisplayFrames w=100 h=100 r=0\n', '')
+        self.assertNotIn('native_navigation_observation', self.snapshot())
+        self.assertEqual(self.injected, [])
+
     def test_reconnected_accessibility_id_can_change_with_same_fresh_node_and_real_route(self):
         fresh = self.reader.navigation.side_effect
         proofs = []
