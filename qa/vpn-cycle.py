@@ -92,6 +92,7 @@ AD_NAV_SNAPSHOT_MAX_SECONDS = 5       # Client receipt age; broker independently
 AD_RECOVERY_VERIFY_SECONDS = 60       # One post-Back verification allowance; 0 adds no allowance.
 AD_LANDING_PROVENANCE_SECONDS = 120    # A store already foreground before an ad click is not recovered.
 AD_SAME_TARGET_ATTEMPT_LIMIT = 2        # Do not keep clicking an unchanged accessibility target.
+AD_SKIP_SAME_STATE_ATTEMPT_LIMIT = 1    # Wait for a changed screen after Skip; 0 disables this limit.
 AD_ACTIVITY_HINTS = ("AdActivity", "Interstitial", "RewardedAd", "RewardedVideo", "AdUnitActivity")
 AD_ACTIVITY_NAMESPACE_PREFIXES = (
     "com.google.android.gms.ads.", "com.applovin.", "com.unity3d.services.ads.",
@@ -182,6 +183,19 @@ def semantic_close_label(control):
     return False
 
 
+def ad_action_kind(control):
+    """Skipping a video is an intermediate step, distinct from closing its ad."""
+    words = set().union(*(close_tokens(control.get(field, ""))
+                          for field in ("text", "content_desc")))
+    if (words & {"close", "dismiss", "بستن", "ببند", "ببندید"}
+            or labels(control) & CLOSE_SYMBOLS):
+        return "close"
+    if words & {"skip", "رد", "عبور", "گذشتن"}:
+        return "skip"
+    identifier = close_tokens(control.get("resource_id", "").rsplit("/", 1)[-1])
+    return "skip" if "skip" in identifier else "close"
+
+
 def bounds(control):
     box = control.get("bounds")
     if (isinstance(box, (tuple, list)) and len(box) == 4
@@ -223,6 +237,9 @@ def choose_ad_close(scored):
     Distinct buttons, windows, equal-size overlaps and anonymous parents remain
     ambiguous. A chosen actionable point must lie in every candidate rectangle.
     """
+    # A real Close label outranks Skip even when Skip has a resource ID.
+    closing = [(score, control) for score, control in scored if ad_action_kind(control) == "close"]
+    scored = closing or scored
     selected = choose_unique(scored)
     if selected is not None or not scored:
         return selected
@@ -439,6 +456,7 @@ class Cycle:
         self.ad_close_attempts = {}
         self.ad_unsafe_targets = set()
         self.last_ad_close = None
+        self.ad_skip_pending = False
         self.ad_landing_returns = 0
         self.ad_landing_origin = None
         self.missing_ad_close = None
@@ -471,6 +489,9 @@ class Cycle:
             if window.get("stable"):
                 self.latest_observation_window = window
                 self.last_snapshot_record = window, finished, dict(self.last_read_stats)
+                if self.ad_skip_pending:
+                    self.ad_skip_pending = False
+                    self.log("Fresh screen after Skip; checking for a Close/Dismiss/X control")
                 return window
             return None
         except (RuntimeError, OSError) as error:
@@ -728,7 +749,10 @@ class Cycle:
                         {key: value for key, value in selected.items() if key not in {"index", "selection_basis"}})
         key = self.ad_target_key(window, selected)
         attempt = self.ad_attempt_key(window, selected)
-        if attempt in self.ad_unsafe_targets or self.ad_close_attempts.get(attempt, 0) >= AD_SAME_TARGET_ATTEMPT_LIMIT:
+        limit = (AD_SKIP_SAME_STATE_ATTEMPT_LIMIT if ad_action_kind(selected) == "skip"
+                 else AD_SAME_TARGET_ATTEMPT_LIMIT)
+        if (attempt in self.ad_unsafe_targets
+                or limit > 0 and self.ad_close_attempts.get(attempt, 0) >= limit):
             return None
         return selected
 
@@ -802,7 +826,11 @@ class Cycle:
 
     def close_ad_control(self, window, selected):
         key = self.ad_target_key(window, selected)
-        self.tap(selected, "close advertisement/popup")
+        kind = ad_action_kind(selected)
+        self.tap(selected, "skip advertisement/video" if kind == "skip" else "close advertisement/popup")
+        if kind == "skip":
+            self.ad_skip_pending = True
+            self.log("Skip is intermediate; waiting for a fresh screen and any remaining Close control")
         self.ad_progress_wait = None
         self.ad_progress_blocked = False
         attempt = self.ad_attempt_key(window, selected)
@@ -810,7 +838,7 @@ class Cycle:
         if is_ad(window):
             self.last_ad_close = {"target": attempt, "at": time.monotonic(),
                                   "component": window.get("component", ""),
-                                  "package": window.get("package", "")}
+                                  "package": window.get("package", ""), "action": kind}
         return True
 
     def service_missing_ad_close(self, window):
@@ -884,7 +912,7 @@ class Cycle:
             if now - origin["at"] > AD_LANDING_PROVENANCE_SECONDS:
                 self.ad_landing_origin = None
             elif same_ad:
-                if origin.get("observed_redirect") and self.ad_close_control(window) is not None:
+                if (origin.get("observed_redirect") or origin.get("action") == "skip") and self.ad_close_control(window) is not None:
                     return False  # A newly returned ad exposes its real Close control.
                 if self.wait_for_ad_progress(window):
                     return False
@@ -936,12 +964,13 @@ class Cycle:
             self.log("Returned from configured ad destination after completed dwell: " + window["package"])
             return True
         self.log(("Observed post-Connect ad reached configured external package: " if from_dwell
+                  else "Ad Skip reached configured external package: " if previous.get("action") == "skip"
                   else "Ad close reached configured external package: ") + window["package"]
                  + "; using observed Android Back without reset")
         self.ad_landing_origin = {"package": previous["package"],
                                   "component": self.canonical_component(previous["component"]),
                                   "at": time.monotonic(), "attempts": 0,
-                                  "observed_redirect": from_dwell}
+                                  "observed_redirect": from_dwell, "action": previous.get("action")}
         return True
 
     def observe_post_connect_ad(self, window):
@@ -1257,7 +1286,7 @@ class Cycle:
         return window
 
     def ad_screen_clear(self, window):
-        return (window and window.get("stable") is True
+        return (not self.ad_skip_pending and window and window.get("stable") is True
                 and window.get("package") == self.package
                 and not is_loading(window, self.package)
                 and not application_hierarchy_missing(window)
@@ -1513,6 +1542,7 @@ class Cycle:
 
     def run(self):
         self.device.configure_run(package=self.package)
+        self.ad_skip_pending = False
         self.post_connect_dwell_active = False
         self.post_connect_dwell_complete = False
         self.observed_post_connect_ad = None
@@ -1808,6 +1838,7 @@ def main():
                                      AD_PROGRESS_WAIT_SECONDS, AD_PROGRESS_STALL_SECONDS, AD_FINAL_READY_VERIFY_SECONDS,
                                      AD_CONTROL_LOG_INTERVAL_SECONDS))
                 or type(AD_LANDING_REQUIRE_OBSERVED_AD) is not bool
+                or type(AD_SKIP_SAME_STATE_ATTEMPT_LIMIT) is not int or AD_SKIP_SAME_STATE_ATTEMPT_LIMIT < 0
                 or type(AD_COUNTDOWN_TOP_FRACTION) not in (int, float)
                 or not 0 < AD_COUNTDOWN_TOP_FRACTION <= 1):
             raise ValueError("Invalid script timing settings")
