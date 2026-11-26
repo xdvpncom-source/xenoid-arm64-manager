@@ -67,6 +67,15 @@
     },
     {
       "before_sha256": [
+        "49b6831f2be08c2a5b5117c6ac5b66cfe8daae0d846cf89fb1a5617b92a46a23"
+      ],
+      "bytes": 43176,
+      "mode": "0644",
+      "path": "daemon/app/src/main/java/dev/xenoid/daemon/RootHelper.java",
+      "sha256": "92c066186cc0d4e4e5ecb6095af86703d1b0277713c6516da0f1dbd0a4a12ffe"
+    },
+    {
+      "before_sha256": [
         "345a24eaead312e130803e61e93164fa410b93a28ed15d5b913810c10ddf50cd",
         "2fdcfebcb49adfe9522992e08499615d1081f95fe55ff70e5829816c4b9660ed",
         "b2aa36179cb67becdd10b838016bc6ef0de4973780dffb380aa56d1002cac8ea"

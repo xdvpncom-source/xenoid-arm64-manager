@@ -1124,7 +1124,14 @@ class Broker:
             if any(old[name] != new[name] for name in old if name != "daemon"):
                 return False
             before, after = old["daemon"], new["daemon"]
-            if any(before.get(key) != after.get(key) for key in ("target", "inputSha256", "toolSha256")):
+            if any(before.get(key) != after.get(key) for key in ("target", "toolSha256")):
+                return False
+            # A daemon source fix changes its real input digest. The native
+            # boot digest excludes the replaceable daemon APK; every other
+            # artifact and the complete security seed contract stay identical.
+            if any(not isinstance(row.get("inputSha256"), str)
+                   or not re.fullmatch(r"[0-9a-f]{64}", row["inputSha256"])
+                   for row in (before, after)):
                 return False
             if len(before["outputs"]) != 1 or len(after["outputs"]) != 1:
                 return False

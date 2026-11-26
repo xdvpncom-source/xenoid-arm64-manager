@@ -75,9 +75,26 @@ class BootCompatibilityTests(unittest.TestCase):
   for key in ('inputSha256','toolSha256','outputs'):
    old=copy.deepcopy(self.desired);target=next(row for row in self.desired['artifactTuples'] if row['target']=='input')
    target[key]=[] if key=='outputs' else 'f'*64;self.assert_rejected();self.desired=old
- def test_daemon_source_or_tool_change_is_not_this_exception(self):
-  for key in ('inputSha256','toolSha256'):
-   old=copy.deepcopy(self.desired);next(row for row in self.desired['artifactTuples'] if row['target']=='daemon')[key]='f'*64;self.assert_rejected();self.desired=old
+ def test_native_recomputed_daemon_source_fix_preserves_boot_and_reuse(self):
+  changed=copy.deepcopy(self.desired)
+  next(row for row in changed['artifactTuples'] if row['target']=='daemon')['inputSha256']='f'*64
+  self.desired=compute(base_image_id=changed['baseImageId'],artifact_tuples=changed['artifactTuples'],context_inputs=changed['contextInputs'],google_inputs=changed['googleInputs'],tool_inputs=changed['toolInputs'],builder_inputs=changed['builderInputs'],daemon_seed_contract=changed['daemonSeedContract'])
+  self.assertNotEqual(self.desired['inputSha256'],changed['inputSha256'])
+  self.assertEqual(self.desired['bootInputSha256'],self.stock['bootInputSha256'])
+  self.plan=native_plan(self.desired);self.binding['daemon_compatibility']=self.proof()
+  h.Broker.regeneration_preparation_plan(self.plan,None,self.obs,self.binding)
+  self.assertEqual(self.plan.image_action,'reuse-selected');self.assertEqual(self.plan.runtime_action,'reuse')
+ def test_daemon_tool_change_is_not_this_exception(self):
+  next(row for row in self.desired['artifactTuples'] if row['target']=='daemon')['toolSha256']='f'*64
+  self.assert_rejected()
+ def test_malformed_old_or_new_daemon_input_digest_rejects(self):
+  for side in ('current','desired'):
+   for value in (None,'','f'*63,'F'*64,'invalid'):
+    with self.subTest(side=side,value=value):
+     record=self.obs['selectedImageRecord'] if side=='current' else self.desired
+     daemon=next(row for row in record['artifactTuples'] if row['target']=='daemon')
+     old=daemon['inputSha256'];daemon['inputSha256']=value
+     self.assert_rejected();daemon['inputSha256']=old
  def test_daemon_version_identity_or_permission_change_rejects(self):
   for key in ('versionCode','packageName','sharedUserId','privilegedPermissions','signingLineageSha256'):
    old=copy.deepcopy(self.desired);self.desired['daemonSeedContract'][key]='different';self.assert_rejected();self.desired=old

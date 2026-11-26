@@ -64,7 +64,7 @@ An endpoint source can contain `socks5://USER:PASSWORD@HOST:1080` or `http://USE
 
 The library accepts a single APK file up to 250 MiB per upload. Refresh the device inventory to include external registry changes before deploying. The controller rounds the percentage of registered devices to the nearest whole device, rounding a half up. The same APK selects the same device cohort at a given percentage while the inventory stays the same. Use 0% to save a zero-target selection. A later percentage sets the next install cohort. Removing an existing app copy is a separate operation.
 
-The controller uploads and verifies one temporary copy per host in parallel, then runs `/usr/local/bin/xenoid-fleet run ID -- app install PATH` for each selected device. Installation jobs report the outcome for each device. Selected devices that are stopped are recorded as failures so they can be started and retried.
+The controller uploads and verifies one temporary copy per host in parallel, then runs `/usr/local/bin/xenoid-fleet run ID -- app install PATH` for each selected device. The owning native installer uses `pm install -r -i com.android.vending` inside Android. The `-r` behavior retains an existing package's app data; the installer name is metadata and does not establish a Google Play download, license or certification. Installation jobs report the outcome for each device. Selected devices that are stopped are recorded as failures so they can be started and retried.
 
 ## Chrome baseline
 
