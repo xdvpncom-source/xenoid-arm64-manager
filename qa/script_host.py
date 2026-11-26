@@ -425,6 +425,123 @@ def trusted_device(number, config):
     return RuntimeManager(context, settings, lease)
 
 
+def _native_reserve_read_guard(target, manager, lock_info, remaining):
+    """Prove a current worker holds EX while awaiting an unacknowledged reserve.
+
+    This grants only a fresh read alongside that paused owner. It never treats
+    the retained request as a new observation or changes reservation state.
+    Called on both sides of the read; any changed proof discards the result.
+    """
+    from identity_reservations import PROC, active_request, digest, directory, read, run_folder
+
+    def require(value):
+        if not value:
+            raise ValueError("identity_observation_not_waiting_reserve")
+
+    def private_file(path):
+        info = path.lstat()
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == 0
+                and stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1)
+        return info
+
+    folder = directory(STATE / str(target["device_id"]))
+    database = folder / "runs.db"
+    db_info = private_file(database)
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=remaining(.25))) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA query_only=ON")
+        conn.execute("BEGIN")
+        rows = conn.execute("SELECT id,config,state,iteration,current FROM runs WHERE current=1").fetchall()
+        require(len(rows) == 1)
+        row = dict(rows[0])
+        config = json.loads(row["config"])
+        require(row["state"] in {"running", "waiting"} and config.get("run_id") == row["id"]
+                and config.get("identity_reservations") is True
+                and config.get("instance_id") == target["instance_id"]
+                and config.get("resource_tag") == target["resource_tag"]
+                and config.get("expected_container_id") == target["container_id"])
+        root = run_folder(folder, row["id"])
+        require(root is not None)
+        active, request = active_request(root, row["id"])
+        require(request.get("schema") == "dev.xenoid.native-identity-request/v1"
+                and request.get("binding") == target and request.get("phase") == "reserve"
+                and "values" in request and request["values"] is None
+                and "native_state" in request and request["native_state"] is None
+                and isinstance(request.get("before_values"), dict) and len(request["before_values"]) == 13)
+        request_path = root / active["path"]
+        operation = directory(request_path.parent)
+        require(operation.name == hashlib.sha256(request["operation_key"].encode()).hexdigest())
+        owner = read(operation / "owner.json")
+        require(all(owner.get(key) == request.get(key) for key in
+                    ("binding", "run_id", "operation_key", "native_transaction", "context")))
+        receipt_row = conn.execute("SELECT document FROM regeneration_receipts WHERE run_id=? AND iteration=? AND operation_key=?",
+                                   (row["id"], row["iteration"], request["operation_key"])).fetchone()
+        require(receipt_row is not None)
+        receipt = json.loads(receipt_row[0])
+        receipt_binding = {key: target[key] for key in ("instance_id", "resource_tag", "container_id")}
+        require(receipt.get("binding") == receipt_binding and receipt.get("status") == "pending"
+                and receipt.get("identity_reservation_context") == request.get("context")
+                and request.get("context", {}).get("scenario_sha256") == hashlib.sha256(config["source"].encode()).hexdigest()
+                and receipt.get("before_digest") == request.get("native_before", {}).get("stableDigest")
+                and not any(receipt.get(key) is not None for key in
+                            ("native_journal", "native_completion", "result", "completed_at", "profile_apply")))
+    after_db = private_file(database)
+    require((db_info.st_dev, db_info.st_ino) == (after_db.st_dev, after_db.st_ino))
+
+    # MainPID and its real proc identity must own this exact native lock inode.
+    shown = subprocess.run(["systemctl", "show", unit(target["device_id"]),
+                            "--property=ActiveState,SubState,MainPID,ControlGroup"],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                           timeout=remaining(2), check=False)
+    require(shown.returncode == 0)
+    props = dict(line.split("=", 1) for line in shown.stdout.decode().splitlines() if "=" in line)
+    require(props.get("ActiveState") == "active" and props.get("SubState") == "running"
+            and props.get("MainPID", "").isdigit() and int(props["MainPID"]) > 1)
+    pid = int(props["MainPID"])
+    process = PROC / str(pid)
+    require(process.stat().st_uid == 0)
+    status = (process / "status").read_text()
+    require(re.search(r"^Uid:\s+0\s+0\s+0\s+0\s*$", status, re.M))
+    argv = (process / "cmdline").read_bytes().split(b"\0")
+    require(argv == [b"/usr/bin/python3", str(HERE / "script_host.py").encode(),
+                     b"worker", str(target["device_id"]).encode(), b""])
+    fields = (process / "stat").read_text().rpartition(")")[2].split()
+    require(len(fields) > 19 and fields[19].isdecimal())
+    groups = (process / "cgroup").read_text()
+    cgroups = [line.split(":", 2)[2] for line in groups.splitlines() if line.count(":") >= 2]
+    group = props.get("ControlGroup", "")
+    require(group.startswith("/system.slice/") and group.endswith("/" + unit(target["device_id"])))
+    require(group in cgroups)
+
+    def waiting_lock():
+        holders = []
+        for line in (PROC / "locks").read_text().splitlines():
+            parts = line.split()
+            if len(parts) != 8 or parts[1:4] != ["FLOCK", "ADVISORY", "WRITE"]:
+                continue  # In particular, -> records are waiters, not owners.
+            major, minor, inode = parts[5].split(":")
+            if (int(major, 16), int(minor, 16), int(inode)) == (
+                    os.major(lock_info.st_dev), os.minor(lock_info.st_dev), lock_info.st_ino):
+                require(parts[6:] == ["0", "EOF"])
+                holders.append(int(parts[4]))
+        require(holders == [pid])
+        descriptors = list((process / "fd").iterdir())
+        require(len(descriptors) <= 4096)
+        require(any((entry.stat().st_dev, entry.stat().st_ino) == (lock_info.st_dev, lock_info.st_ino)
+                    for entry in descriptors))
+
+    waiting_lock()
+    require(not os.path.lexists(request_path.with_suffix(".ack.json"))
+            and not os.path.lexists(operation / "prepared.json")
+            and not any(os.path.lexists(manager.context.state_root / name) for name in (
+                "device-regenerate-v3.json", "device-regenerate-v2.json", "device-regenerate.json", "convergence-v1.json")))
+    remaining(1)
+    return {"proof": digest({"row": row, "owner": owner, "active": active, "request": request,
+                              "receipt": receipt, "worker": [pid, fields[19], groups, argv[1].decode()],
+                              "database": [db_info.st_dev, db_info.st_ino]}),
+            "before_values": request["before_values"]}
+
+
 def native_identity_observation(target, *, request_id, manager=None):
     """One bounded read-only observation, with no run/APK or lifecycle action."""
     from types import SimpleNamespace
@@ -454,21 +571,25 @@ def native_identity_observation(target, *, request_id, manager=None):
                     and (now.st_dev, now.st_ino) == (before.st_dev, before.st_ino))
         if not lock_owned():
             raise ValueError("identity_observation_lock_changed")
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return {**skipped, "status": "skipped", "reason": "native_busy"}
-        if not lock_owned():
-            raise ValueError("identity_observation_lock_changed")
-        if any(os.path.lexists(manager.context.state_root / name) for name in (
-                "device-regenerate-v3.json", "device-regenerate-v2.json", "device-regenerate.json", "convergence-v1.json")):
-            return {**skipped, "status": "skipped", "reason": "native_pending"}
         deadline = time.monotonic() + 8
         def remaining(wanted):
             left = deadline - time.monotonic()
             if left <= 0:
                 raise TimeoutError("identity_observation_deadline")
             return min(float(wanted or 5), left)
+        reserve_guard = None
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            try:
+                reserve_guard = _native_reserve_read_guard(target, manager, before, remaining)
+            except Exception:
+                return {**skipped, "status": "skipped", "reason": "native_busy"}
+        if not lock_owned():
+            raise ValueError("identity_observation_lock_changed")
+        if any(os.path.lexists(manager.context.state_root / name) for name in (
+                "device-regenerate-v3.json", "device-regenerate-v2.json", "device-regenerate.json", "convergence-v1.json")):
+            return {**skipped, "status": "skipped", "reason": "native_pending"}
         def owned(timeout=5):
             return manager._owned_container_record(timeout=remaining(timeout))
         def docker(args, timeout=5):
@@ -487,6 +608,10 @@ def native_identity_observation(target, *, request_id, manager=None):
         last, _ = owned()
         if not last or last.get("Id") != target["container_id"] or process_binding(last) != runtime or not lock_owned():
             raise ValueError("identity_observation_runtime_changed")
+        if reserve_guard is not None:
+            if (_native_reserve_read_guard(target, manager, before, remaining) != reserve_guard
+                    or values != reserve_guard["before_values"]):
+                raise ValueError("identity_observation_reserve_changed")
         remaining(1)
         observation = signed({"schema": "dev.xenoid.native-identity-inventory-observation/v1",
                               "binding": dict(target), "request_id": request_id, "runtime": runtime,
