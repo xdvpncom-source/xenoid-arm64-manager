@@ -722,12 +722,13 @@
     },
     {
       "before_sha256": [
-        "f98138a1df5a637419538fb00bfd20bfa73a0d57b5975b0507499d6ff0762b33"
+        "f98138a1df5a637419538fb00bfd20bfa73a0d57b5975b0507499d6ff0762b33",
+        "4fa18d6cc3212e71bd2fcd3ffa42c355b965bfb8c2ae7dd5eab2ff76879591d0"
       ],
-      "bytes": 51688,
+      "bytes": 54004,
       "mode": "0644",
       "path": "src/xenoid/device_identity.py",
-      "sha256": "4fa18d6cc3212e71bd2fcd3ffa42c355b965bfb8c2ae7dd5eab2ff76879591d0"
+      "sha256": "2319a5105fec17cf4c9b0bb34c49bcf841fa8fd90a398885f3e55dd47fd09c7c"
     },
     {
       "before_sha256": [

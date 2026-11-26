@@ -1222,6 +1222,38 @@ def _converge_initial_runtime(runtime, client, stable, profile):
     return {"ok": True}
 
 
+def _converge_staged_hostname(runtime, client):
+    """Republish this instance's existing hostname; never allocate an identity."""
+    command = ("set -eu; p=/data/local/tmp/xenoid-profile/hostname; "
+               "[ -f \"$p\" ]; [ ! -L \"$p\" ]; "
+               "stat -c '%u %g %a %h' \"$p\"; cat \"$p\"")
+
+    def staged():
+        result = runtime.docker_exec(["sh", "-c", command], timeout=10)
+        lines = result.get("stdout", "").splitlines() if result.get("ok") is True else []
+        if (len(lines) != 2 or lines[0] != "0 0 600 1"
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,62}", lines[1]) is None):
+            return None
+        return lines[1]
+
+    expected = staged()
+    if expected is None:
+        return {"ok": False, "error": "staged_hostname_invalid"}
+    current = runtime.docker_exec(["getprop", "net.hostname"], timeout=10)
+    if current.get("ok") is not True:
+        return {"ok": False, "error": "staged_hostname_readback_failed"}
+    if current.get("stdout", "").strip() == expected:
+        return {"ok": True, "unchanged": True}
+    applied = client.set_fingerprint_field("net.hostname", expected)
+    if not isinstance(applied, dict) or applied.get("ok") is not True:
+        return {"ok": False, "error": "staged_hostname_apply_failed"}
+    current = runtime.docker_exec(["getprop", "net.hostname"], timeout=10)
+    if (current.get("ok") is not True or current.get("stdout", "").strip() != expected
+            or staged() != expected):
+        return {"ok": False, "error": "staged_hostname_readback_failed"}
+    return {"ok": True, "unchanged": False}
+
+
 def converge_instance_identity(
     context: InstanceContext,
     runtime: IdentityRuntime,
@@ -1275,6 +1307,15 @@ def converge_instance_identity(
         initial = _converge_initial_runtime(runtime, client, state["stable"], profile)
         if initial.get("ok") is not True:
             return {"ok": False, "error": initial["error"], "identity": public_identity_state(state), "apply": result}
+    # Applied identities also lose net.hostname on a recreated Android runtime.
+    # A pending GEN keeps exclusive ownership of its staged target and replay.
+    if (not rotate_stable and state["pendingStable"] is None
+            and profile.get("build", {}).get("device") == "bluejay"
+            and not any((context.state_root / name).exists() or (context.state_root / name).is_symlink()
+                        for name in (REGENERATE_FILENAME, *_LEGACY_JOURNAL_MARKERS))):
+        hostname = _converge_staged_hostname(runtime, client)
+        if hostname.get("ok") is not True:
+            return {"ok": False, "error": hostname["error"], "identity": public_identity_state(state), "apply": result}
     committed = store.mark_applied(boot["containerEpoch"])
     return {
         "ok": True,
