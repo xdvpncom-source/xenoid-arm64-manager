@@ -41,7 +41,7 @@ def validate_config(value):
         raise ValueError("Fresh native pacing requires render_fps=15, fps=60, scale=null and dpi=420")
     reserve = config["memory_reserve_mib"]
     if "memory_reserve_mib" not in value:
-        reserve = 256 if render_fps is not None else 0
+        reserve = 0
         config["memory_reserve_mib"] = reserve
     if type(reserve) is not int or not 0 <= reserve <= 1024:
         raise ValueError("memory_reserve_mib must be an integer from 0 through 1024")

@@ -6,5 +6,5 @@
   "min_side": 1080,
   "dpi": 420,
   "timeout": 0,
-  "memory_reserve_mib": 256
+  "memory_reserve_mib": 0
 }

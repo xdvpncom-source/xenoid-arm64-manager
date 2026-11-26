@@ -65,10 +65,15 @@ class Headroom(unittest.TestCase):
         self.assertEqual((self.root/'outside').read_text(),'max\n')
     def test_policy_reserve_validation(self):
         fresh={'fps':60,'scale':None,'dpi':420,'render_fps':15}
-        self.assertEqual(q.validate_config(fresh)['memory_reserve_mib'],256)
+        self.assertEqual(q.validate_config(fresh)['memory_reserve_mib'],0)
+        self.assertEqual(q.validate_config({**fresh,'memory_reserve_mib':256})['memory_reserve_mib'],256)
         self.assertEqual(q.validate_config({})['memory_reserve_mib'],0)
         for value in(True,-1,1025,None,'256'):
             with self.assertRaises(ValueError):q.validate_config({**fresh,'memory_reserve_mib':value})
+    def test_packaged_fresh_policy_keeps_hard_caps_and_defaults_to_no_soft_reserve(self):
+        config=json.loads((ROOT/'qa/qa-resources.json').read_text())
+        self.assertEqual(q.validate_config(config)['memory_reserve_mib'],0)
+        self.assertEqual(q.MAX_BYTES,2*1024**3);self.assertEqual(q.SWAP_BYTES,512*1024**2)
     @unittest.skipUnless(Path('/proc/self/stat').exists() and hasattr(os,'fork'),'Linux fork/proc required')
     def test_actual_writer_deadline_has_no_late_write(self):
         self.writer.stop()

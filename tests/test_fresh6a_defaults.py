@@ -168,7 +168,7 @@ class ActualResourceTests(unittest.TestCase):
              patch.object(fresh, 'ensure_runtime', return_value={'ok': True, 'render_fps': 15}) as verify:
             got = resources.reconcile_owned('phone-1', config, manager, force=True, broker=broker)
         self.assertTrue(got['ok']); self.assertEqual(got['display']['render_fps'], 15)
-        headroom.assert_called_once_with(manager, owned['Id'], reserve_mib=256)
+        headroom.assert_called_once_with(manager, owned['Id'], reserve_mib=0)
         broker.set_frame_rate.assert_not_called(); verify.assert_called_once()
 
 

@@ -41,6 +41,7 @@ IDLE_UI_MIN_SECONDS = 2
 IDLE_UI_MAX_SECONDS = 10
 ACTION_COOLDOWN_SECONDS = 2
 AD_READY_SECONDS = 180
+AD_FINAL_READY_VERIFY_SECONDS = 30    # One read-only confirmation if the app becomes clear at the deadline.
 AD_PROGRESS_WAIT_SECONDS = 60          # Unknown progress budget; 0 disables this cutoff.
 AD_PROGRESS_STALL_SECONDS = 30         # Unchanged countdown/progress; 0 disables this cutoff.
 AD_COUNTDOWN_TOP_FRACTION = .35         # Unlabelled countdowns are only recognized above the ad.
@@ -82,6 +83,7 @@ TAP_BACKEND = "native"                 # Retained setting; this scenario accepts
 GEOMETRIC_AD_CLOSE = False             # An anonymous corner can be an ad click-through, not Close.
 TERMS_BACK_FALLBACK = False            # Legacy setting; use an observed close control, never an ADB key.
 AD_LANDING_PACKAGES = ("com.android.vending",)  # Explicit destinations allowed after a recorded ad-close tap.
+AD_LANDING_REQUIRE_OBSERVED_AD = False # After the completed dwell, allow one Back from configured stores even if a fast redirect was missed.
 AD_LANDING_RETURN_LIMIT = 1            # Tap only an observed native Android Back control.
 AD_LANDING_ORIGIN_BACK_LIMIT = 1       # After store Back, dismiss only the same originating ad.
 AD_MISSING_CLOSE_BACK_SECONDS = 15     # Grace after the initial dwell when a real AdActivity exposes no Close.
@@ -906,10 +908,14 @@ class Cycle:
                       and (previous is None or previous["at"] < automatic["at"]))
         if from_dwell:
             previous = automatic
-        if (window.get("package") not in AD_LANDING_PACKAGES or previous is None
-                or not from_dwell and now - previous["at"] > AD_LANDING_PROVENANCE_SECONDS):
+        known_origin = (previous is not None and
+                        (from_dwell or now - previous["at"] <= AD_LANDING_PROVENANCE_SECONDS))
+        configured_return = (self.post_connect_dwell_complete and
+                             not AD_LANDING_REQUIRE_OBSERVED_AD and not known_origin)
+        if (window.get("package") not in AD_LANDING_PACKAGES
+                or not known_origin and not configured_return):
             return False
-        if not from_dwell:
+        if known_origin and not from_dwell:
             self.ad_unsafe_targets.add(previous["target"])
         if self.ad_landing_returns >= AD_LANDING_RETURN_LIMIT:
             raise RuntimeError("Configured ad landing return limit exhausted; assigned app is not ready")
@@ -918,6 +924,12 @@ class Cycle:
         if not self.tap_observed_navigation(window, "return from ad landing via observed Android Back"):
             return False
         self.ad_landing_returns += 1
+        if configured_return:
+            # The panel explicitly names this destination. Do not manufacture
+            # an unseen AdActivity or authorize a second same-origin Back.
+            self.ad_landing_origin = None
+            self.log("Returned from configured ad destination after completed dwell: " + window["package"])
+            return True
         self.log(("Observed post-Connect ad reached configured external package: " if from_dwell
                   else "Ad close reached configured external package: ") + window["package"]
                  + "; using observed Android Back without reset")
@@ -1230,9 +1242,36 @@ class Cycle:
         self._idle_ui_due = finished + interval
         return window
 
+    def ad_screen_clear(self, window):
+        return (window and window.get("stable") is True
+                and window.get("package") == self.package
+                and not is_loading(window, self.package)
+                and not application_hierarchy_missing(window)
+                and not is_blocking_ad(window, self.package)
+                and not is_crash_dialog(window) and not is_terms(window) and not is_notification(window))
+
+    def confirm_ad_clearance(self, quiet_since):
+        """Confirm a late clear app without granting another action/recovery budget."""
+        if not AD_FINAL_READY_VERIFY_SECONDS:
+            return False
+        deadline = time.monotonic() + AD_FINAL_READY_VERIFY_SECONDS
+        while time.monotonic() < deadline:
+            time.sleep(min(POLL_SECONDS, max(0, deadline - time.monotonic())))
+            window = self.observe()
+            if time.monotonic() > deadline:
+                return False
+            if window is None:
+                continue
+            if not self.ad_screen_clear(window):
+                return False
+            if time.monotonic() - quiet_since >= POST_ACTION_QUIET_SECONDS:
+                self.log("Fresh app window confirmed clear after the observation deadline")
+                return window
+        return False
+
     def dismiss_ads(self):
-        if (type(AD_RECOVERY_VERIFY_SECONDS) not in (int, float) or
-                not math.isfinite(AD_RECOVERY_VERIFY_SECONDS) or AD_RECOVERY_VERIFY_SECONDS < 0):
+        if any(type(value) not in (int, float) or not math.isfinite(value) or value < 0
+               for value in (AD_RECOVERY_VERIFY_SECONDS, AD_FINAL_READY_VERIFY_SECONDS)):
             raise ValueError("Use a nonnegative finite post-Back verification allowance")
         deadline = time.monotonic() + AD_READY_SECONDS if AD_READY_SECONDS else None
         recovery_verification_used = False
@@ -1263,8 +1302,7 @@ class Cycle:
                 if deadline is not None and not recovery_verification_used:
                     deadline = max(deadline, time.monotonic() + AD_RECOVERY_VERIFY_SECONDS)
                     recovery_verification_used = True
-            elif (window and not loading and not application_hierarchy_missing(window)
-                  and not is_blocking_ad(window, self.package) and window.get("package") == self.package):
+            elif self.ad_screen_clear(window):
                 if quiet_since is None:
                     quiet_since = time.monotonic()
                 if time.monotonic() - quiet_since >= POST_ACTION_QUIET_SECONDS:
@@ -1272,6 +1310,8 @@ class Cycle:
             else:
                 quiet_since = None
             time.sleep(POLL_SECONDS)
+        if quiet_since is not None and self.confirm_ad_clearance(quiet_since):
+            return
         raise self.ad_failure("The advertisement did not expose a usable close control")
 
 
@@ -1345,6 +1385,10 @@ class Cycle:
             else:
                 quiet_since = None
             time.sleep(POLL_SECONDS)
+        if quiet_since is not None:
+            confirmed = self.confirm_ad_clearance(quiet_since)
+            if confirmed:
+                return confirmed
         raise self.ad_failure("App did not return to an unobstructed foreground window")
 
 
@@ -1739,8 +1783,9 @@ def main():
                 or CRASH_POLL_SECONDS <= 0 or FAILED_CYCLE_BACKOFF_SECONDS < 0
                 or any(type(value) not in (int, float) or not math.isfinite(value) or value < 0
                        for value in (AFTER_AD_WAIT_SECONDS, CONNECTED_WAIT_SECONDS,
-                                     AD_PROGRESS_WAIT_SECONDS, AD_PROGRESS_STALL_SECONDS,
+                                     AD_PROGRESS_WAIT_SECONDS, AD_PROGRESS_STALL_SECONDS, AD_FINAL_READY_VERIFY_SECONDS,
                                      AD_CONTROL_LOG_INTERVAL_SECONDS))
+                or type(AD_LANDING_REQUIRE_OBSERVED_AD) is not bool
                 or type(AD_COUNTDOWN_TOP_FRACTION) not in (int, float)
                 or not 0 < AD_COUNTDOWN_TOP_FRACTION <= 1):
             raise ValueError("Invalid script timing settings")

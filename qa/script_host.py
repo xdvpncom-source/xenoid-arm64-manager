@@ -2843,10 +2843,10 @@ echo retired
         return (self.container_id, self.config.get("instance_id"), self.config.get("resource_tag"),
                 self.android_user(), assigned.get("id"), assigned.get("sha256"), self.assigned_apk_size)
 
-    def cleanup(self):
+    def cleanup(self, *, drain=False):
         reader_error = None
         try:
-            self.close_ui_reader()
+            self.close_ui_reader(drain=drain)
         except Exception as error:
             reader_error = error
         with self.forward_lock:
@@ -2857,10 +2857,34 @@ echo retired
         if reader_error:
             raise reader_error
 
-    def close_ui_reader(self, *, force=False):
+    def close_ui_reader(self, *, force=False, drain=False):
         reader = getattr(self, "_ui_reader", None)
         if reader is not None:
-            with reader.manager.instance_operation_lock(timeout_seconds=12):
+            # A final round teardown retains this reader until its original
+            # native owner becomes available. Only lock entry is retried: the
+            # fenced close body, other lock errors and explicit Shutdown are not.
+            seconds = self.config.get("command_timeout", 0)
+            deadline = None if drain or not seconds else time.monotonic() + seconds
+            logged_at = None
+            with ExitStack() as stack:
+                while True:
+                    remaining = None if deadline is None else deadline - time.monotonic()
+                    if remaining is not None and remaining <= 0:
+                        raise TransportUnavailable("UI reader cleanup ownership wait exceeded its configured timeout")
+                    try:
+                        stack.enter_context(reader.manager.instance_operation_lock(
+                            timeout_seconds=.25 if remaining is None else min(.25, remaining)))
+                        break
+                    except Exception as error:
+                        if getattr(error, "code", None) != "instance_busy" or str(error) != "instance operation in progress":
+                            raise
+                        from xenoid.config import InstanceError
+                        if not isinstance(error, InstanceError):
+                            raise
+                        now = time.monotonic()
+                        if self.log and (logged_at is None or now - logged_at >= 5):
+                            self.log("warning", "Waiting for native ownership before UI reader cleanup")
+                            logged_at = now
                 reader.close(force=force)
             self._ui_reader = None
 
@@ -3725,7 +3749,7 @@ def finish_device_requests(server, thread, broker):
         server.active.join(timeout=20)
         if server.active.is_alive():
             raise RuntimeError("Device request cleanup did not finish before shutdown")
-    broker.cleanup()
+    broker.cleanup(drain=True)
 
 
 def run_iteration(folder, number, config, manager, iteration, app_cache=None):

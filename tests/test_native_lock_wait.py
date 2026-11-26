@@ -81,6 +81,13 @@ class LockWait(unittest.TestCase):
  def test_explicit_unlimited_override_is_not_capped_by_finite_panel_default(self):
   self.holder(1.2);before=time.monotonic()
   with self.broker(seconds=1).owned_manager(deadline=None):self.assertGreaterEqual(time.monotonic()-before,1.1)
+ def test_final_reader_cleanup_waits_for_real_native_owner_after_stop(self):
+  self.holder(1.2);before=time.monotonic();broker=self.broker(seconds=1)
+  reader=Mock();reader.manager=self.manager;broker._ui_reader=reader;broker.stopping.set()
+  broker.cleanup(drain=True)
+  self.assertGreaterEqual(time.monotonic()-before,1.1)
+  reader.close.assert_called_once_with(force=False);self.assertIsNone(broker._ui_reader)
+  self.manager.tap.assert_not_called()
  def test_expired_command_budget_never_starts_subprocess(self):
   broker=self.broker()
   def executable(_):time.sleep(.04);return'/fixture/adb'

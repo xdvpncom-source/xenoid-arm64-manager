@@ -52,7 +52,7 @@ class Tests(unittest.TestCase):
     def test_unrelated_store_without_observed_owned_ad_is_not_recovered(self):
         self.device.window = STORE
         self.completed_dwell()
-        with self.assertRaisesRegex(RuntimeError, 'usable close control'):
+        with patch.object(m, 'AD_LANDING_REQUIRE_OBSERVED_AD', True), self.assertRaisesRegex(RuntimeError, 'usable close control'):
             self.cycle.dismiss_ads()
         self.assertIsNone(self.cycle.observed_post_connect_ad)
         self.assertFalse(self.taps())
@@ -63,7 +63,8 @@ class Tests(unittest.TestCase):
         self.cycle.observe_post_connect_ad(self.cycle.observe())
         self.cycle.post_connect_dwell_complete = True
         self.device.window = STORE
-        self.assertFalse(self.cycle.return_from_ad_landing(self.cycle.observe()))
+        with patch.object(m, 'AD_LANDING_REQUIRE_OBSERVED_AD', True):
+            self.assertFalse(self.cycle.return_from_ad_landing(self.cycle.observe()))
         self.assertIsNone(self.cycle.observed_post_connect_ad)
         self.assertFalse(self.taps())
 
@@ -80,7 +81,8 @@ class Tests(unittest.TestCase):
         self.cycle.post_connect_dwell_complete = True
         self.clock.now = max(m.START_WAIT_SECONDS) + m.CONNECTED_WAIT_SECONDS + m.AD_LANDING_PROVENANCE_SECONDS + 1
         self.device.window = STORE
-        self.assertFalse(self.cycle.return_from_ad_landing(self.cycle.observe()))
+        with patch.object(m, 'AD_LANDING_REQUIRE_OBSERVED_AD', True):
+            self.assertFalse(self.cycle.return_from_ad_landing(self.cycle.observe()))
         self.assertEqual(self.cycle.observed_post_connect_ad['at'], at)
         self.assertFalse(self.taps())
 

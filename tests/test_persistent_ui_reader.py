@@ -349,7 +349,7 @@ class BrokerTests(unittest.TestCase):
    except Exception as error:errors.append(error)
   active=threading.Thread(target=setup);active.start();time.sleep(.05)
   server=Mock();server.active=active;broker=Mock();broker.stopping=r.stopping
-  def cleaned():self.assertFalse(active.is_alive())
+  def cleaned(**kwargs):self.assertEqual(kwargs,{'drain':True});self.assertFalse(active.is_alive())
   broker.cleanup.side_effect=cleaned
   h.finish_device_requests(server,Mock(),broker)
   self.assertEqual(len(errors),1);self.assertRegex(str(errors[0]),'stopping');broker.cleanup.assert_called_once()
