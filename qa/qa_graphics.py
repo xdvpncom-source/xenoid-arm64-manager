@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import sqlite3
 import stat
 import subprocess
@@ -21,6 +22,9 @@ import tempfile
 
 DEFAULT_QA_GRAPHICS = {"renderer_label": "Mali-G78"}
 MAX_RENDERER_LABEL_BYTES = 96
+NATIVE_STATUS_TIMEOUT = 90
+# Native up owns a 7200s deadline; allow its normal timeout cleanup to finish.
+NATIVE_CONFIGURE_TIMEOUT = 7260
 CONFIG = Path("/etc/xenoid-fleet/qa-graphics.json")
 STATE = Path("/var/lib/xenoid-fleet/qa-graphics")
 RUNS = Path("/var/lib/xenoid-panel-scripts")
@@ -180,10 +184,75 @@ def pending_receipts(number):
         connection.close()
 
 
-def pending(manager, owned, number):
+def other_pending(manager, owned, number):
     from qa_resource_runtime import pending_profile
-    return (any(os.path.lexists(manager.context.state_root / name) for name in JOURNALS)
+    return (any(os.path.lexists(manager.context.state_root / name) for name in JOURNALS if name != "convergence-v1.json")
             or pending_profile(manager, owned) or pending_receipts(number))
+
+
+def pending(manager, owned, number):
+    return os.path.lexists(manager.context.state_root / "convergence-v1.json") or other_pending(manager, owned, number)
+
+
+def resume_api():
+    from xenoid.convergence import ConvergenceExecutor, ConvergenceJournal, ConvergencePlan, _input_identity_digest, _refine_component_actions
+    from xenoid.config import load_config, config_dict
+    from xenoid.util import command_timeout
+    return ConvergenceExecutor, ConvergenceJournal, ConvergencePlan, _input_identity_digest, load_config, config_dict, command_timeout, _refine_component_actions
+
+
+def resume_renderer_convergence(manager, settings, number, expected_cid):
+    """Continue only a fixed renderer reuse plan through the original executor."""
+    def need(value):
+        if not value:
+            raise ValueError("graphics_saved_renderer_plan_not_qualified")
+    with manager.instance_operation_lock(timeout_seconds=0):
+        owned, _ = manager._owned_container_record(timeout=8)
+        need(owned is not None and owned["Id"] == expected_cid and (owned.get("State") or {}).get("Running") is True)
+        need(not other_pending(manager, owned, number))
+        Executor, Journal, Plan, input_digest, load_config, config_dict, deadline, refine = resume_api()
+        journal_owner = Journal.for_manager(manager)
+        saved = journal_owner.load()  # Official strict schema, plan digest and phase-order parser.
+        need(saved is not None)
+        plan = Plan.from_dict(saved["plan"])
+        context = manager.context
+        cfg = load_config(context)  # Pure configuration read; never recover/initialize registry state.
+        # Finish the exact old native intent before considering a newer panel default.
+        # The fixed input digest below includes this native renderer configuration.
+        need(config_dict(cfg) == config_dict(manager.cfg))
+        need(saved["instanceId"] == context.instance_id and saved["oldContainerId"] == expected_cid)
+        need(all(saved.get(key) is None for key in ("newContainerId", "seedContainerId", "regenerationTransactionId", "bootSeedTarget", "proxyBootstrap")))
+        phases = {"planned", "quarantined", "live_resolved", "components_deployed", "control_ready", "graphics_ready", "accepted"}
+        need(saved.get("phase") in phases and set(saved.get("completed", ())) <= phases)
+        need(plan.resolution == "complete" and not plan.artifact_targets
+             and plan.runtime_action == "reuse" and plan.image_action == "reuse-selected"
+             and plan.boot_seed_action == "none" and not plan.recreate_reasons and plan.daemon_action == "reuse")
+        need(all(getattr(plan, name + "_action") == "reuse" for name in
+                 ("identity", "location", "proxy", "keybox", "camera", "google", "protection")))
+        changed = {name: action for name, action in (plan.deploy_components or {}).items() if action != "reuse"}
+        need(changed.get("glesRenderer") == "deploy" and set(changed) <= {"glesRenderer", "rendererControl"}
+             and all(action == "deploy" for action in changed.values()))
+        if saved.get("liveResolution") is not None:
+            need(refine(plan, saved["liveResolution"]) == saved["liveResolution"]["componentActions"])
+        executor = Executor(manager)
+        with deadline(7200):
+            observation = manager.observe_convergence(skip_build=True)
+            runtime = observation.get("runtime") or {}
+            need(observation.get("instanceId") == context.instance_id and runtime.get("state") == "running"
+                 and runtime.get("containerId") == expected_cid)
+            for observed, recorded in (("dataUuid", "observedDataUuid"), ("rootfsUuid", "observedRootfsUuid"),
+                                       ("imageInputSha256", "selectedImageInputSha256"),
+                                       ("imageBootInputSha256", "selectedImageBootInputSha256")):
+                need(saved.get(recorded) is not None and runtime.get(observed) == saved[recorded])
+            executor._validate_resume_state(saved, observation)  # Includes ownership, storage, boot/image, proxy and protection.
+            need(executor.planner.input_identity_digest(skip_build=True) == input_digest(plan))
+            # No lock handoff, config write, new planner or QA journal mutation.
+            result = executor.run(skip_build=True)
+            need(result.get("ok") is True and result.get("resumed") is True
+                 and result.get("initialPlanDigest") == plan.plan_digest and result.get("followUpPlanDigest") is None)
+        current, _ = manager._owned_container_record(timeout=8)
+        need(current is not None and current["Id"] == expected_cid and not journal_owner.exists())
+        return {"ok": True, "resumed_renderer": True, "plan_digest": plan.plan_digest}
 
 
 def native_document(upstream, name, arguments, value=None, *, expected_id=None):
@@ -194,12 +263,33 @@ def native_document(upstream, name, arguments, value=None, *, expected_id=None):
     environment.pop("XENOID_EXPECT_INSTANCE_ID", None)
     if expected_id is not None:
         environment["XENOID_EXPECT_INSTANCE_ID"] = expected_id
-    result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=240,
-                            env=environment, **kwargs)
-    document = json.loads(result.stdout)
+    limit = NATIVE_CONFIGURE_TIMEOUT if arguments[0] == "configure" else NATIVE_STATUS_TIMEOUT
+    input_text = kwargs.pop("input", None)
+    stdin = subprocess.PIPE if input_text is not None else kwargs["stdin"]
+    with subprocess.Popen(command, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, env=environment, start_new_session=True) as process:
+        try:
+            output, _ = process.communicate(input=input_text, timeout=limit)
+        except BaseException:
+            # Reap only this CLI's new process group; native journals remain resumable.
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.communicate(timeout=5)
+            raise
+        code = process.returncode
+    document = json.loads(output)
     if not isinstance(document, dict):
         raise ValueError("graphics_native_response_invalid")
-    return document, result.returncode
+    return document, code
 
 
 def proof(status, settings):
@@ -258,8 +348,13 @@ def reconcile_one(name, settings, *, inspect_only=False, owned_worker=False, exp
                     return deferred("runtime_not_running")
                 if expected_binding is not None and owned["Id"] != expected_binding.get("container_id"):
                     raise ValueError("graphics_worker_container_changed")
-                if pending(manager, owned, number):
+                if other_pending(manager, owned, number):
                     return deferred("recorded_transaction_pending")
+                if os.path.lexists(manager.context.state_root / "convergence-v1.json"):
+                    try:
+                        resume_renderer_convergence(manager, settings, number, owned["Id"])
+                    except Exception:
+                        return deferred("saved_convergence_not_renderer_ready")
             status, code = native_document(UPSTREAM, name, ["status"], expected_id=manager.context.instance_id)
             if code or not proof(status, settings):
                 if inspect_only:
@@ -376,11 +471,16 @@ def worker_boundary(number, config, manager, gate_fd):
             settings = load_settings()
             with manager.instance_operation_lock(timeout_seconds=0):
                 owned, _ = manager._owned_container_record(timeout=8)
-                if owned is None or (owned.get("State") or {}).get("Running") is not True or pending(manager, owned, number):
+                if owned is None or (owned.get("State") or {}).get("Running") is not True or other_pending(manager, owned, number):
                     return {"ok": True, "deferred": True, "reason": "recorded_transaction_or_runtime_pending"}
                 expected_cid = config.get("expected_container_id", owned["Id"])
                 if re.fullmatch(r"[0-9a-f]{64}", str(expected_cid)) is None or expected_cid != owned["Id"]:
                     return {"ok": False, "code": "graphics_worker_container_changed"}
+                if os.path.lexists(manager.context.state_root / "convergence-v1.json"):
+                    try:
+                        resume_renderer_convergence(manager, settings, number, expected_cid)
+                    except Exception:
+                        return {"ok": True, "deferred": True, "reason": "saved_convergence_not_renderer_ready"}
                 if cached_proof(number, settings, manager, owned):
                     return {"ok": True, "deferred": False, "cached_runtime_epoch": True}
             # This worker owns EX and has not launched its app iteration yet.

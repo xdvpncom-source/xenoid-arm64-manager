@@ -8,6 +8,8 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
+import time
+import subprocess
 import types
 import unittest
 from unittest.mock import Mock, patch
@@ -43,6 +45,7 @@ class GraphicsTests(unittest.TestCase):
         stack.enter_context(patch.object(g, 'worker_inactive', return_value=True))
         stack.enter_context(patch.object(g, 'source_generation', return_value='generation-54'))
         stack.enter_context(patch.object(g, 'pending', return_value=False))
+        stack.enter_context(patch.object(g, 'other_pending', return_value=False))
         return stack
 
     def test_default_and_explicit_native_do_not_touch_identity_files(self):
@@ -78,7 +81,7 @@ class GraphicsTests(unittest.TestCase):
         self.assertTrue(result['deferred']); call.assert_not_called()
 
     def test_native_profile_or_receipt_pending_never_calls_configure(self):
-        with self.patches(), patch.object(g, 'pending', return_value=True), patch.object(g, 'native_document') as call:
+        with self.patches(), patch.object(g, 'other_pending', return_value=True), patch.object(g, 'native_document') as call:
             result = g.reconcile_one('phone-3', g.DEFAULT_QA_GRAPHICS)
         self.assertTrue(result['deferred']); call.assert_not_called()
 
@@ -173,7 +176,7 @@ class GraphicsTests(unittest.TestCase):
                 patch.object(g,'native_document') as call, g.lifecycle_gate(3,worker=True) as fd:
             self.assertFalse(g.worker_boundary(3,{},self.manager,fd)['ok'])
             call.assert_not_called()
-        with self.patches(), patch.object(g,'worker_owner'), patch.object(g,'pending',return_value=True), \
+        with self.patches(), patch.object(g,'worker_owner'), patch.object(g,'other_pending',return_value=True), \
                 patch.object(g,'native_document') as call, g.lifecycle_gate(3,worker=True) as fd:
             self.assertTrue(g.worker_boundary(3,{},self.manager,fd)['deferred'])
             call.assert_not_called()
@@ -214,6 +217,40 @@ class GraphicsTests(unittest.TestCase):
             self.assertEqual((folder/'runs.db').read_bytes(),raw)
             response.stdout=response.stdout.replace('MainPID='+str(os.getpid()),'MainPID=999999')
             with self.assertRaises(ValueError):g.worker_owner(3,config,self.manager)
+
+    def test_native_configure_allows_canonical_long_up_budget(self):
+        received={}
+        class SlowNative:
+            pid=12345
+            returncode=0
+            def __enter__(self):return self
+            def __exit__(self,*args):pass
+            def communicate(self,*,input=None,timeout=None):
+                received['timeout']=timeout
+                received['input']=input
+                # Models a healthy native convergence lasting longer than the old 240s wrapper budget.
+                if timeout < 300:raise subprocess.TimeoutExpired('native',timeout)
+                return '{"ok":true}', ''
+        with patch.object(g.subprocess,'Popen',return_value=SlowNative()):
+            result,code=g.native_document(self.root,'phone-3',['configure','--json-stdin'],{'renderer_label':'Mali-G78'})
+        self.assertTrue(result['ok']);self.assertEqual(code,0)
+        self.assertGreaterEqual(received['timeout'],7200)
+        self.assertEqual(json.loads(received['input']),{'renderer_label':'Mali-G78'})
+
+    def test_native_timeout_reaps_its_own_child_group(self):
+        executable=self.root/'xenoid'
+        pidfile=self.root/'child.pid'
+        executable.write_text('#!'+sys.executable+'\nimport subprocess,sys,time\nfrom pathlib import Path\np=subprocess.Popen([sys.executable,"-c","import time;time.sleep(30)"])\nPath('+repr(str(pidfile))+').write_text(str(p.pid))\ntime.sleep(30)\n')
+        executable.chmod(0o755)
+        started=time.monotonic()
+        with patch.object(g,'NATIVE_STATUS_TIMEOUT',2):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                g.native_document(self.root,'phone-3',['status'])
+        self.assertLess(time.monotonic()-started,6)
+        pid=int(pidfile.read_text())
+        # A descendant may briefly remain a reparented zombie; it cannot continue native work.
+        result=subprocess.run(['ps','-o','stat=','-p',str(pid)],capture_output=True,text=True)
+        self.assertTrue(result.returncode != 0 or result.stdout.strip().startswith('Z'),result.stdout)
 
     def test_settings_ack_cannot_clear_a_newer_panel_save(self):
         g.configure({'renderer_label':'one'})
