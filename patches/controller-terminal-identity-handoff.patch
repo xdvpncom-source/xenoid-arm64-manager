@@ -1,0 +1,90 @@
+--- a/device_scripts.py
++++ b/device_scripts.py
+@@ -1050,6 +1050,77 @@
+             raise RemoteError("Native identity host inventory changed")
+         return {"host_id": row["host_id"], **binding}
+
++    def _terminal_identity_replay(self, row, item):
++        """Read-only retirement of identity evidence already committed here.
++
++        A terminal host cannot consume another ACK. Its old controller run may
++        also have a queued successor, so current-run admission is inappropriate.
++        Never reserve, finalize, enroll, or acknowledge through this path.
++        """
++        import math
++        from device_profiles import NativeIdentityLedger, native_identity_values, values_from_native_target
++        from qa_fresh6a import defaults
++        ledger = NativeIdentityLedger(self.storage)
++        cid = row["startup_container_id"] or row["identity_container_id"]
++        binding = ledger._binding({"host_id": row["host_id"], "device_id": row["device_id"],
++            "instance_id": row["instance_id"], "resource_tag": row["resource_tag"], "container_id": cid})
++        native_binding = {k: v for k, v in binding.items() if k != "host_id"}
++        if (item.get("state") not in TERMINAL or any(item.get(k) != row[k]
++                for k in ("run_id", "device_id", "instance_id", "resource_tag", "script_id", "version"))):
++            raise RemoteError("Terminal native identity owner mismatch")
++        request = item.get("identity_request")
++        observation = item.get("identity_observation")
++        with self.storage.connection() as db:
++            db.execute("BEGIN")
++            current = db.execute("SELECT * FROM device_script_runs WHERE run_id=?", (row["run_id"],)).fetchone()
++            if (current is None or current["phase"] not in {"tracking", "draining"}
++                    or any(current[k] != row[k] for k in ("host_id", "device_id", "instance_id", "resource_tag",
++                        "startup_container_id", "identity_container_id", "script_id", "version", "is_current", "phase"))):
++                raise RemoteError("Terminal native identity controller owner changed")
++            ledger._current(db, binding)
++            head = ledger._head(db, binding)
++            if (head is None or head[5] != "current" or head[2] != ledger._raw(binding).decode()
++                    or db.execute("SELECT 1 FROM native_identity_generations WHERE owner=? AND phase='reserved'",
++                                  (binding["instance_id"],)).fetchone()):
++                raise RemoteError("Terminal native identity is not fully committed")
++            values = native_identity_values(json.loads(self.storage.vault.decrypt(head[3])))
++            if hashlib.sha256(ledger._raw(values)).hexdigest() != head[4]:
++                raise RemoteError("Terminal native identity ledger values changed")
++            if request is not None:
++                if (not isinstance(request, dict) or request.get("schema") != "dev.xenoid.native-identity-request/v1"
++                        or request.get("phase") != "finalize" or request.get("run_id") != row["run_id"]
++                        or request.get("binding") != native_binding
++                        or request.get("native_transaction") != head[1]
++                        or request.get("request_sha256") != self._identity_digest({k: v for k, v in request.items() if k != "request_sha256"})
++                        or json.loads(head[7]) != {"kind": "committed_native_readback", "sha256": request["request_sha256"]}):
++                    raise RemoteError("Terminal native identity finalization is unconfirmed")
++                target, before, context, location = (request[k] for k in ("target", "native_before", "context", "location_sidecar"))
++                identity = {"target_sha256": self._identity_digest(target), "before_sha256": self._identity_digest(before),
++                    "context_sha256": self._identity_digest(context), "location_sha256": self._identity_digest(location)}
++                version = db.execute("SELECT source FROM device_script_versions WHERE script_id=? AND version=?",
++                                     (row["script_id"], row["version"])).fetchone()
++                state = request.get("native_state")
++                if (json.loads(head[8]) != identity or request["target_sha256"] != identity["target_sha256"]
++                        or native_identity_values(request["values"]) != values or values_from_native_target(target, location) != values
++                        or version is None or context["scenario_sha256"] != hashlib.sha256(self.storage.vault.decrypt(version[0])).hexdigest()
++                        or not isinstance(state, dict) or state.get("schema") != "dev.xenoid.device-regenerate/v3"
++                        or state.get("instanceId") != binding["instance_id"] or state.get("phase") != "committed"
++                        or state.get("transactionId") != head[1] or state.get("target") != target or state.get("before") != before):
++                    raise RemoteError("Terminal native identity committed evidence changed")
++            if observation is not None:
++                build = defaults()["build"]
++                allowed = [values] + ([native_identity_values(request["before_values"])] if request is not None else [])
++                if (not isinstance(observation, dict) or set(observation) !=
++                        {"schema", "binding", "run_id", "values", "build", "captured_at", "proof_sha256"}
++                        or observation.get("schema") != "dev.xenoid.native-identity-observation/v1"
++                        or observation.get("binding") != native_binding or observation.get("run_id") != row["run_id"]
++                        or type(observation.get("captured_at")) not in (int, float)
++                        or not math.isfinite(observation["captured_at"]) or observation["captured_at"] <= 0
++                        or observation.get("proof_sha256") != self._identity_digest({k: v for k, v in observation.items() if k != "proof_sha256"})
++                        or observation.get("build") != {k: build[k] for k in ("model", "device", "fingerprint")}
++                        or native_identity_values(observation["values"]) not in allowed):
++                    raise RemoteError("Terminal native identity observation changed")
++
+     def _sync_identity(self, ssh, rows, by_run):
+         """Private native handshake. Ledger commits precede an exact ACK.
+
+@@ -1066,6 +1137,9 @@
+                 item = by_run[row["run_id"]]
+                 if item.get("run_id") != row["run_id"] or item.get("device_id") != row["device_id"]:
+                     raise RemoteError("Native identity poll owner mismatch")
++                if item.get("state") in TERMINAL and (item.get("identity_observation") is not None or item.get("identity_request") is not None):
++                    self._terminal_identity_replay(row, item)
++                    continue
+                 observation = item.get("identity_observation")
+                 if observation is not None:
+                     if (not isinstance(observation, dict) or set(observation) !=
