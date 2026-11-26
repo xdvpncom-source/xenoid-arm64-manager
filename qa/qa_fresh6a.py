@@ -1,7 +1,9 @@
-"""Fresh Pixel 6a policy defaults and read-only runtime contract checks.
+"""Fresh Pixel 6a policy defaults, verification and explicit input recovery.
 
 Native source/image construction owns Build, display, boot properties and
-render pacing. This module neither invents device IDs nor modifies Android.
+render pacing. Read-only verification never repairs Android. Resource/profile
+actions can explicitly recover the existing official input registration; they
+do not create a driver, change an identity or inject a pointer event.
 """
 from __future__ import annotations
 
@@ -160,6 +162,21 @@ def verify_runtime(broker, manager, *, deadline):
     pacing, not measured presentation cadence; qualification tests measure that
     separately. Every command uses the broker's official, owner-bound transport.
     """
+    return _runtime_contract(broker, manager, deadline=deadline, repair_input=False)
+
+
+def ensure_runtime(broker, manager, *, deadline):
+    """Verify resources and recover only a missing official input registration.
+
+    The resource/profile action must already hold the native instance lock.
+    An existing verified uinput inode may be reannounced through the SDK, then
+    its kernel, EventHub and coordinate mapping must pass the original checks.
+    Healthy input uses the read-only fast path.
+    """
+    return _runtime_contract(broker, manager, deadline=deadline, repair_input=True)
+
+
+def _runtime_contract(broker, manager, *, deadline, repair_input):
     def read(argv):
         result = broker.native_display_exec(manager, argv, deadline=deadline, check=True)
         return result.stdout.decode(errors="strict").strip()
@@ -209,8 +226,32 @@ def verify_runtime(broker, manager, *, deadline):
         output = read(["sha256sum", path]).split()
         _require(len(output) == 2 and output == [expected, path], "fresh6a_render_asset_changed:" + path)
     mapping = broker.native_interaction_snapshot(manager, deadline)
+    input_recovery = None
+    if not mapping.get("ready") and repair_input:
+        # A valid kernel device can survive while EventHub loses registration.
+        # Do not let this preflight prevent the SDK's existing bound recovery.
+        # Refuse a changed profile before any reannouncement is requested.
+        before_sha = mapping.get("profile_sha256")
+        _require(mapping.get("profile") == profile
+                 and isinstance(before_sha, str) and re.fullmatch("[0-9a-f]{64}", before_sha),
+                 "fresh6a_input_profile_changed")
+        mapping = broker.ensure_native_interaction(manager, deadline, repair=True)
+        _require(mapping.get("profile") == profile and mapping.get("profile_sha256") == before_sha,
+                 "fresh6a_input_profile_changed")
+        _require(mapping.get("ready") is True and mapping.get("mapping", {}).get("logical_size") == [1080, 2400],
+                 "fresh6a_official_input_not_ready")
+        # Reannouncement success alone is insufficient. Bind the newly observed
+        # InputReader to the same official event node and prove every viewport
+        # corner with the existing strict verifier, without a test tap.
+        input_recovery = broker.verify_native_display_geometry(manager, profile, deadline, state=mapping)
+        _require(isinstance(input_recovery, dict) and input_recovery.get("ok") is True
+                 and input_recovery.get("events_injected") is False
+                 and input_recovery.get("official_backend") == "xenoid_native"
+                 and input_recovery.get("raw_profile_sha256") == before_sha,
+                 "fresh6a_official_input_recovery_unverified")
     _require(mapping.get("ready") is True and mapping.get("mapping", {}).get("logical_size") == [1080, 2400],
-             "fresh6a_official_input_not_ready")
+             "fresh6a_official_input_not_ready" +
+             (": " + mapping["mapping_error"] if isinstance(mapping.get("mapping_error"), str) else ""))
     current, reason = manager._owned_container_record(timeout=8)
     _require(current and all(current.get(key) == owned.get(key) for key in ("Id", "Image"))
              and current.get("State", {}).get("Pid") == owned.get("State", {}).get("Pid")
@@ -220,6 +261,7 @@ def verify_runtime(broker, manager, *, deadline):
             "real_caps": resources, "build_properties_verified": len(expected_map),
             "presentation_cadence_measured": False, "changed": False, "restarted": False,
             "container_id": broker.container_id, "official_input_unchanged": True,
+            "input_recovery": input_recovery,
             "native_manifest_sha256": hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
 
 

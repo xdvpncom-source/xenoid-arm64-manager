@@ -1,6 +1,6 @@
 # Xenoid ARM64 Fleet
 
-The v0.1.42 release keeps panel APK installation on the official Xenoid `app install` path and records `com.android.vending` as installer metadata through the owning native daemon. See the [release notes](docs/releases/v0.1.42.md). The earlier [controller handoff patch](patches/controller-terminal-identity-handoff.patch) remains included.
+The v0.1.43 release recovers a missing Android registration of an existing official Xenoid touchscreen during explicit resource and profile actions. It also calculates default fleet capacity with one GiB reserved for the host. See the [release notes](docs/releases/v0.1.43.md). The earlier official APK installer metadata and [controller handoff patch](patches/controller-terminal-identity-handoff.patch) remain included.
 
 Install Xenoid on an ARM64 Ubuntu server and manage headless Android 13 instances through a local CLI. Each numeric ID maps to an upstream instance name. For example, `2` selects `phone-2`. Xenoid allocates the container, persistent volume, network, and loopback ADB port for each instance.
 
@@ -17,7 +17,7 @@ Long-running fleet qualification is recorded separately.
 Use an **ARM64 (aarch64) server running Ubuntu 24.04**, such as a Hetzner CAX server. The installer requires root access, outbound HTTPS, and free disk space for the build toolchain, container images, and Android data. Install and management commands use the same operator account and Xenoid registry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.42/install.sh | sudo -H bash -s -- --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.43/install.sh | sudo -H bash -s -- --accept-android-licenses
 ```
 
 The `--accept-android-licenses` flag accepts the Android SDK licenses for the pinned build tools from Google. The installer prepares the host and creates fresh Pixel 6a devices up to the host’s reserved capacity. Allow tens of minutes for the first build on a small server. The CLI is installed as `/usr/local/bin/xenoid-fleet` and the managed checkout lives under `/opt/xenoid-fleet/upstream`. Rerunning the installer reuses the toolchain, creates missing IDs and converges existing matching Pixel 6a instances. An incompatible existing profile is rejected; deletion is a separate explicit operation.
@@ -35,7 +35,7 @@ sudo -H xenoid-fleet run 1 -- adb shell getprop sys.boot_completed
 Use `--install-only` to prepare the host before creating the first device or upgrade an existing installation without issuing a device start. Upgrades also refresh enabled proxies on already-running devices when their native control/process revision has not been verified.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.42/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
+curl -fsSL https://raw.githubusercontent.com/xdvpncom-source/xenoid-arm64-manager/v0.1.43/install.sh | sudo -H bash -s -- --install-only --accept-android-licenses
 ```
 
 ## Devices
@@ -150,9 +150,15 @@ recommended count without changing any runtime:
 sudo -H xenoid-fleet capacity --json
 ```
 
-Automatic sizing reserves one host CPU and the greater of 1 GiB or 10% of real
-host RAM. A numeric count remains an explicit administrator override and reports
-overcommit. The panel accepts `auto` for new hosts and device-count operations.
+Automatic sizing reserves one host CPU and 1 GiB of real host RAM, then uses the
+smaller number of remaining CPU slots or complete 2-GiB physical-RAM slots.
+Swap does not increase this count; its separate check requires 512 MiB per device.
+The measured 4-CPU/7.548-GiB hosts therefore fit three devices, and the
+8-CPU/15.212-GiB host fits seven. The read-only capacity command accepts
+`--memory-reserve-mib` and `--cpu-reserve` for larger explicit host budgets;
+their minimums remain 1024 MiB and one CPU. A numeric device count remains an
+explicit administrator override and reports overcommit. The panel accepts
+`auto` for new hosts and device-count operations.
 `--install-only` installs source, tools and defaults without creating a device;
 normal installation uses the automatic count. `create ID --if-missing` avoids
 forced recreation while still converging an existing matching instance.

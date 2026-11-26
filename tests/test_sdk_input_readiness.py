@@ -90,7 +90,9 @@ class ReadinessTests(unittest.TestCase):
   duplicate=DUMP.replace('  Device -1:',DUMP[DUMP.index('  Device 2:'):DUMP.index('  Device -1:')]+'  Device -1:',1)
   for dump in ('Input Reader State:\nInput Dispatcher State:\n',duplicate):
    self.b.native_display_exec=MagicMock(return_value=subprocess.CompletedProcess([],0,RAW+b'\nXENOID_INPUT_MAPPING\n'+dump.encode(),b''))
-   self.assertFalse(self.b.native_interaction_snapshot(self.manager,None)['ready'])
+   result=self.b.native_interaction_snapshot(self.manager,None)
+   self.assertFalse(result['ready'])
+   self.assertTrue(result['mapping_error'].startswith('Native touch mapping unavailable: '))
  def test_native_rootd_rejects_cid_handoff_before_command(self):
   self.manager._owned_container_record.return_value=({'Id':'b'*64},None)
   with self.assertRaises(h.RuntimeIdentityError):self.b.native_input_rootd(self.manager,'read-only-command',None)

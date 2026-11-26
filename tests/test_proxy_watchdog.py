@@ -64,7 +64,7 @@ class Watchdog(unittest.TestCase):
         self.previous={'instance':'phone-1','ok':True,'identity':self.identity,
                        'key':q.resource_key(self.manager.owned,self.config,self.identity),
                        'display':{'verified_sentinel':True},'metrics':{'unchanged_sentinel':True}}
-        fresh=types.ModuleType('qa_fresh6a');fresh.is_bluejay=lambda _:True;fresh.verify_runtime=Mock(return_value={'ok':True,'changed':False})
+        fresh=types.ModuleType('qa_fresh6a');fresh.is_bluejay=lambda _:True;fresh.ensure_runtime=Mock(return_value={'ok':True,'changed':False})
         self.fresh=fresh
         route=types.ModuleType('qa_control_routes');route.ensure_control_routes=Mock(return_value={'ok':True,'changed':False,'ipv6_changed':False});self.route=route
         util=types.ModuleType('xenoid.util');util.command_timeout=lambda seconds:contextlib.nullcontext()
@@ -78,11 +78,11 @@ class Watchdog(unittest.TestCase):
     def test_healthy_same_boot_reads_actual_host_without_reconcile_or_graphics(self):
         value=self.timer();self.assertTrue(value['ok']);self.assertFalse(value['proxy_pending']);self.assertTrue(value['proxy_maintenance_only'])
         self.assertIn('host_engine_read',self.manager.events);self.assertNotIn('official_proxy_reconcile',self.manager.events)
-        self.assertEqual(value['display'],self.previous['display']);self.assertEqual(value['metrics'],self.previous['metrics']);self.fresh.verify_runtime.assert_not_called()
+        self.assertEqual(value['display'],self.previous['display']);self.assertEqual(value['metrics'],self.previous['metrics']);self.fresh.ensure_runtime.assert_not_called()
     def test_dead_agent_stale_daemon_report_invokes_existing_official_reconcile(self):
         self.manager.engine={'ok':False,'error':'engine_process_failed'}
         value=self.timer();self.assertTrue(value['ok']);self.assertFalse(value['proxy_pending']);self.assertIn('official_proxy_reconcile',self.manager.events)
-        self.assertEqual(value['display'],self.previous['display']);self.fresh.verify_runtime.assert_not_called()
+        self.assertEqual(value['display'],self.previous['display']);self.fresh.ensure_runtime.assert_not_called()
     def test_missing_runtime_epoch_full_official_bootstrap_precedes_proxy_reconcile(self):
         self.manager.status.update(runtimeEpoch='',quarantined=True,report=None);self.manager.bootstrap_epoch='';self.manager.engine={'ok':False}
         value=self.timer();self.assertTrue(value['ok']);self.assertFalse(value['proxy_pending'])
@@ -97,7 +97,7 @@ class Watchdog(unittest.TestCase):
     def test_upstream_offline_is_pending_but_graphics_and_normal_resource_ok(self):
         self.manager.status.update(quarantined=True);self.manager.engine={'ok':False};self.manager.offline=True
         value=self.timer();self.assertTrue(value['ok']);self.assertTrue(value['resource_ok']);self.assertTrue(value['proxy_pending'])
-        self.assertEqual(value['proxy_watchdog']['code'],'proxy_outbound_unavailable');self.assertEqual(value['display'],self.previous['display']);self.fresh.verify_runtime.assert_not_called()
+        self.assertEqual(value['proxy_watchdog']['code'],'proxy_outbound_unavailable');self.assertEqual(value['display'],self.previous['display']);self.fresh.ensure_runtime.assert_not_called()
         value=self.timer();self.assertTrue(value['proxy_pending']);self.assertEqual(self.manager.events.count('official_proxy_reconcile'),2)
     def test_unreadable_daemon_status_uses_official_bootstrap_then_rechecks(self):
         self.manager.status_unreadable=True
@@ -117,13 +117,13 @@ class Watchdog(unittest.TestCase):
         with patch.object(q,'pending_profile',return_value=True):self.assertTrue(self.timer()['deferred'])
         for name in('device-regenerate-v3.json','convergence-v1.json'):
             p=self.root/name;p.write_text('{}');value=self.timer();p.unlink();self.assertTrue(value['deferred']);self.assertEqual(value['skipped'],'native_transaction_pending')
-        self.assertEqual(self.manager.events,[]);self.fresh.verify_runtime.assert_not_called()
+        self.assertEqual(self.manager.events,[]);self.fresh.ensure_runtime.assert_not_called()
     def test_stopped_runtime_never_starts_or_heals(self):
         self.manager.owned['State']['Running']=False
         with patch.object(q,'native_manager',return_value=self.manager):self.assertEqual(q.reconcile('phone-1',self.config)['skipped'],'stopped')
         self.assertEqual(self.manager.events,[])
     def test_SDK_force_true_preserves_existing_readback_without_network_healing(self):
-        value=self.timer(force=True);self.assertTrue(value['ok']);self.fresh.verify_runtime.assert_called_once();self.assertEqual(self.manager.events,[])
+        value=self.timer(force=True);self.assertTrue(value['ok']);self.fresh.ensure_runtime.assert_called_once();self.assertEqual(self.manager.events,[])
     def test_changed_owned_CID_is_not_masked_as_network_pending(self):
         self.manager.owned={**self.manager.owned,'Id':'c'*64}
         with self.assertRaises(host.RuntimeIdentityError):q.native_proxy_maintenance(self.manager,{'Id':CID},self.config,self.previous,broker=self.broker)
@@ -142,13 +142,13 @@ class Watchdog(unittest.TestCase):
         self.assertIn(('official_bootstrap',None),self.manager.events)
     def test_control_route_precedes_initial_FPS_and_timer_UI_reads(self):
         order=[];self.route.ensure_control_routes.side_effect=lambda *a,**k:(order.append('route')or{'ok':True})
-        self.fresh.verify_runtime.side_effect=lambda *a,**k:(order.append('fps')or{'ok':True})
+        self.fresh.ensure_runtime.side_effect=lambda *a,**k:(order.append('fps')or{'ok':True})
         self.timer(force=True);self.assertEqual(order,['route','fps'])
         self.assertEqual(self.route.ensure_control_routes.call_args.args[1],CID)
         order.clear();self.timer();self.assertEqual(order,['route'])
     def test_GEN_defer_also_precedes_initial_force_true_route_and_FPS(self):
         (self.root/'convergence-v1.json').write_text('{}')
-        self.assertTrue(self.timer(force=True)['deferred']);self.route.ensure_control_routes.assert_not_called();self.fresh.verify_runtime.assert_not_called()
+        self.assertTrue(self.timer(force=True)['deferred']);self.route.ensure_control_routes.assert_not_called();self.fresh.ensure_runtime.assert_not_called()
     def test_legacy_same_boot_retains_existing_early_return(self):
         self.fresh.is_bluejay=lambda _:False;self.config=q.validate_config({});self.previous['key']=q.resource_key(self.manager.owned,self.config,self.identity);q.atomic_json(self.root/'phone-1.json',self.previous)
         value=self.timer();self.assertEqual(value['skipped'],'already_applied');self.assertEqual(self.manager.events,[]);self.assertNotIn('proxy_watchdog',value)

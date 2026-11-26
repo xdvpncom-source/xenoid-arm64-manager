@@ -22,7 +22,7 @@ from typing import Iterator
 
 
 NAME_PREFIX = "phone-"
-VERSION = "v0.1.42"
+VERSION = "v0.1.43"
 FRESH_CONFIG = Path("defaults/bluejay-linux-arm.json")
 BLUEJAY_GOOGLE_RELEASE = "microg-0.3.15.250932-phonesky-30.4.17-gsfproxy-0.1.0-bluejay"
 DEVICE_ID = re.compile(r"[1-9][0-9]{0,25}")
@@ -81,8 +81,10 @@ def capacity_report(*, memory_total_bytes=None, cpu_count=None, swap_total_bytes
             or (memory_reserve_mib is not None
                 and (type(memory_reserve_mib) is not int or memory_reserve_mib < 1024))):
         raise FleetError("Capacity requires valid host resources and at least 1 CPU/1 GiB reserve")
-    reserve = (max(1024**3, (memory_total_bytes + 9) // 10) if memory_reserve_mib is None
-               else memory_reserve_mib * 1024**2)
+    # Reserve a fixed host budget, then count complete physical-RAM slots.
+    # A percentage reserve unnecessarily discarded a full 2-GiB slot on the
+    # measured 15.2-GiB hosts. Swap remains a separate capacity check.
+    reserve = 1024**3 if memory_reserve_mib is None else memory_reserve_mib * 1024**2
     by_cpu = max(0, cpu_count - cpu_reserve)
     by_memory = max(0, (memory_total_bytes - reserve) // (2 * 1024**3))
     count = min(by_cpu, by_memory)
@@ -91,7 +93,7 @@ def capacity_report(*, memory_total_bytes=None, cpu_count=None, swap_total_bytes
         "host": {"cpu_count": cpu_count, "memory_total_bytes": memory_total_bytes,
                  "swap_total_bytes": swap_total_bytes},
         "reserve": {"cpu_count": cpu_reserve, "memory_bytes": reserve,
-                    "memory_policy": "max-1gib-10-percent" if memory_reserve_mib is None else "explicit"},
+                    "memory_policy": "fixed-1gib" if memory_reserve_mib is None else "explicit"},
         "per_device": {"cpu_count": 1, "memory_bytes": 2 * 1024**3,
                        "swap_limit_bytes": 512 * 1024**2},
         "max_by_cpu": by_cpu, "max_by_memory": by_memory, "recommended_count": count,
@@ -905,7 +907,7 @@ def main(argv: list[str] | None = None) -> int:
     listing.add_argument("--json", action="store_true")
     capacity = commands.add_parser("capacity", help="read host capacity for fresh 1-CPU/2-GiB devices")
     capacity.add_argument("--json", action="store_true")
-    capacity.add_argument("--memory-reserve-mib", type=int, help="explicit reserve, at least 1024 MiB; default max(1 GiB, 10%%)")
+    capacity.add_argument("--memory-reserve-mib", type=int, help="explicit host reserve, at least 1024 MiB; default 1024 MiB")
     capacity.add_argument("--cpu-reserve", type=int, default=1, help="host CPU reserve, at least 1")
     create = commands.add_parser("create", help="create or recreate devices while preserving existing data")
     create.add_argument("ids", metavar="ID[,ID...]")

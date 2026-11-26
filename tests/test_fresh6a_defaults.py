@@ -1,6 +1,7 @@
 """Fresh Bluejay logical/pacing contracts and native-input scenario regressions."""
 from copy import deepcopy
 import contextlib
+import hashlib
 import importlib.util
 import json
 import os
@@ -164,7 +165,7 @@ class ActualResourceTests(unittest.TestCase):
              patch.object(resources, 'ensure_host_vm_guard', return_value={'ok': True}), \
              patch.object(resources, 'ensure_memory_headroom', return_value={'ok': True}) as headroom, \
              patch.object(resources, 'apply_metrics', side_effect=AssertionError('WM setter called')), \
-             patch.object(fresh, 'verify_runtime', return_value={'ok': True, 'render_fps': 15}) as verify:
+             patch.object(fresh, 'ensure_runtime', return_value={'ok': True, 'render_fps': 15}) as verify:
             got = resources.reconcile_owned('phone-1', config, manager, force=True, broker=broker)
         self.assertTrue(got['ok']); self.assertEqual(got['display']['render_fps'], 15)
         headroom.assert_called_once_with(manager, owned['Id'], reserve_mib=256)
@@ -205,11 +206,132 @@ class NativeReadbackTests(unittest.TestCase):
         self.native_module.template_from_live = deepcopy
         self.native_module.expected_properties = lambda value: self.expected
 
-    def verify(self):
+    def verify(self, *, recover=False):
         with patch.object(fresh, 'verify_actual_caps', return_value={'cpu_cores': 1}), \
              patch.object(fresh, 'verify_config_files'), \
              patch.dict(sys.modules, {'xenoid': types.ModuleType('xenoid'), 'xenoid.cold_profile': self.native_module}):
-            return fresh.verify_runtime(self.broker, self.manager, deadline=None)
+            action = fresh.ensure_runtime if recover else fresh.verify_runtime
+            return action(self.broker, self.manager, deadline=None)
+
+    def input_state(self, *, registered=True):
+        """Sanitized real captures: healthy 9/2 and lost registration on 9/3."""
+        import script_host
+        name = 'bluejay-input-registered.txt' if registered else 'bluejay-input-unregistered.txt'
+        dump = (ROOT / 'tests/fixtures' / name).read_text()
+        value = json.loads(self.responses[('cat', '/data/local/tmp/xenoid-profile/effective.json')])
+        try:
+            _, _, mapping = script_host.native_touch_point(dump, value, None, None)
+            reason = None
+        except script_host.TransportUnavailable as error:
+            mapping, reason = None, str(error)
+        result = {'ready': mapping is not None, 'mapping': mapping, 'profile': value,
+                  'profile_sha256': hashlib.sha256(json.dumps(value).encode()).hexdigest(), 'dump': dump}
+        if reason is not None:
+            result['mapping_error'] = reason
+        return result
+
+    def repair_fixture(self):
+        missing, ready = self.input_state(registered=False), self.input_state()
+        self.broker.native_interaction_snapshot = Mock(return_value=missing)
+        self.broker.ensure_native_interaction = Mock(return_value=ready)
+        self.broker.verify_native_display_geometry = Mock(return_value={
+            'ok': True, 'events_injected': False, 'official_backend': 'xenoid_native',
+            'raw_profile_sha256': ready['profile_sha256']})
+        return missing, ready
+
+    def test_actual_missing_eventhub_registration_is_not_a_valid_mapping(self):
+        missing, ready = self.input_state(registered=False), self.input_state()
+        self.assertFalse(missing['ready'])
+        self.assertIn('expected one direct touchscreen', missing['mapping_error'])
+        self.assertTrue(ready['ready'])
+        self.assertEqual(ready['mapping']['logical_size'], [1080, 2400])
+
+    def test_readonly_contract_reports_missing_mapping_without_repair(self):
+        self.repair_fixture()
+        with self.assertRaisesRegex(RuntimeError, 'fresh6a_official_input_not_ready.*expected one direct'):
+            self.verify()
+        self.broker.ensure_native_interaction.assert_not_called()
+        self.broker.verify_native_display_geometry.assert_not_called()
+
+    def test_explicit_resource_action_recovers_actual_missing_registration(self):
+        missing, ready = self.repair_fixture()
+        result = self.verify(recover=True)
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['input_recovery']['raw_profile_sha256'], missing['profile_sha256'])
+        self.broker.ensure_native_interaction.assert_called_once_with(self.manager, None, repair=True)
+        self.broker.verify_native_display_geometry.assert_called_once_with(
+            self.manager, ready['profile'], None, state=ready)
+
+    def test_explicit_action_healthy_fastpath_does_not_reannounce(self):
+        self.repair_fixture()
+        self.broker.native_interaction_snapshot.return_value = self.input_state()
+        result = self.verify(recover=True)
+        self.assertTrue(result['ok']); self.assertIsNone(result['input_recovery'])
+        self.broker.ensure_native_interaction.assert_not_called()
+        self.broker.verify_native_display_geometry.assert_not_called()
+
+    def test_changed_initial_profile_is_rejected_before_reannouncement(self):
+        missing, _ = self.repair_fixture()
+        missing['profile']['ids']['serial'] = 'changed-for-test-only'
+        with self.assertRaisesRegex(RuntimeError, 'fresh6a_input_profile_changed'):
+            self.verify(recover=True)
+        self.broker.ensure_native_interaction.assert_not_called()
+
+    def test_changed_repaired_profile_or_raw_bytes_are_rejected(self):
+        for key in ('profile', 'profile_sha256'):
+            with self.subTest(key=key):
+                _, ready = self.repair_fixture()
+                if key == 'profile':
+                    ready['profile']['ids']['serial'] = 'changed-for-test-only'
+                else:
+                    ready[key] = 'f' * 64
+                with self.assertRaisesRegex(RuntimeError, 'fresh6a_input_profile_changed'):
+                    self.verify(recover=True)
+                self.broker.verify_native_display_geometry.assert_not_called()
+
+    def test_helper_success_without_live_geometry_proof_is_rejected(self):
+        for key, bad in (('ok', False), ('events_injected', True),
+                         ('official_backend', 'adb'), ('raw_profile_sha256', 'f' * 64)):
+            with self.subTest(key=key):
+                self.repair_fixture()
+                self.broker.verify_native_display_geometry.return_value[key] = bad
+                with self.assertRaisesRegex(RuntimeError, 'fresh6a_official_input_recovery_unverified'):
+                    self.verify(recover=True)
+
+    def test_wrong_eventhub_node_rejection_is_not_converted_to_success(self):
+        import qa_input_ready
+        self.repair_fixture()
+        self.broker.verify_native_display_geometry.side_effect = qa_input_ready.NativeInputBindingError(
+            'InputReader is not using the verified official event node')
+        with self.assertRaisesRegex(qa_input_ready.NativeInputBindingError, 'verified official event node'):
+            self.verify(recover=True)
+        self.broker.ensure_native_interaction.assert_called_once()
+        self.broker.verify_native_display_geometry.assert_called_once()
+
+    def test_still_missing_or_wrong_geometry_never_passes_after_repair(self):
+        for ready_flag, geometry in ((False, None), (True, [720, 1560])):
+            with self.subTest(ready=ready_flag):
+                _, ready = self.repair_fixture()
+                ready['ready'] = ready_flag
+                ready['mapping'] = {'logical_size': geometry}
+                with self.assertRaisesRegex(RuntimeError, 'fresh6a_official_input_not_ready'):
+                    self.verify(recover=True)
+                self.broker.verify_native_display_geometry.assert_not_called()
+
+    def test_ready_wrong_geometry_does_not_trigger_repair(self):
+        self.repair_fixture()
+        ready = self.input_state(); ready['mapping']['logical_size'] = [720, 1560]
+        self.broker.native_interaction_snapshot.return_value = ready
+        with self.assertRaisesRegex(RuntimeError, 'fresh6a_official_input_not_ready'):
+            self.verify(recover=True)
+        self.broker.ensure_native_interaction.assert_not_called()
+
+    def test_runtime_handoff_after_recovery_cannot_be_accepted(self):
+        self.repair_fixture()
+        changed = deepcopy(self.owned); changed['State']['Pid'] += 1
+        self.manager._owned_container_record = Mock(side_effect=[(self.owned, None), (changed, None)])
+        with self.assertRaisesRegex(RuntimeError, 'fresh6a_runtime_changed_during_readback'):
+            self.verify(recover=True)
 
     def test_pacing_readback_preserves_advertised60_and_has_no_setters(self):
         got = self.verify()

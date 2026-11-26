@@ -841,8 +841,8 @@ def complete(broker, manager, cli, receipt, store, key, deadline, *, state_dir=S
     fps = int(target["display"]["defaultRefreshRateHz"])
     timeout = 0 if deadline is None else max(1, int(deadline - time.monotonic()))
     if plan.get("resource_config", {}).get("render_fps") is not None:
-        from qa_fresh6a import verify_runtime
-        verify_runtime(broker, manager, deadline=deadline)
+        from qa_fresh6a import ensure_runtime
+        ensure_runtime(broker, manager, deadline=deadline)
     else:
         broker.set_frame_rate(fps, timeout=timeout)
     period = _display_period(broker, manager, deadline)

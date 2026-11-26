@@ -84,10 +84,53 @@ class FreshCreation(unittest.TestCase):
         small = calculate(memory_total_bytes=8104976384, cpu_count=4, swap_total_bytes=4 * 1024**3)
         large = calculate(memory_total_bytes=int(15.212 * 1024**3), cpu_count=8, swap_total_bytes=8 * 1024**3)
         self.assertEqual(small["recommended_count"], 3)
-        self.assertEqual(large["recommended_count"], 6)
+        self.assertEqual(large["recommended_count"], 7)
         self.assertEqual(small["reserve"]["memory_bytes"], 1024**3)
-        self.assertGreaterEqual(large["reserve"]["memory_bytes"], large["host"]["memory_total_bytes"] / 10)
+        self.assertEqual(large["reserve"]["memory_bytes"], 1024**3)
+        self.assertEqual(large["reserve"]["memory_policy"], "fixed-1gib")
         self.assertEqual(calculate(memory_total_bytes=2 * 1024**3, cpu_count=1, swap_total_bytes=0)["recommended_count"], 0)
+
+    def test_measured_fleet_has_seventy_complete_slots_without_ram_overcommit(self):
+        calculate = FLEET["capacity_report"]
+        # Actual Linux MemTotal from the 22-host, 69-device census.
+        hosts = [(4, 8104976384)] * 21 + [(8, 16333709312)]
+        counts = []
+        for cpus, ram in hosts:
+            report = calculate(memory_total_bytes=ram, cpu_count=cpus,
+                               swap_total_bytes=8 * 1024**3)
+            count = report["recommended_count"]
+            counts.append(count)
+            self.assertLessEqual(count + report["reserve"]["cpu_count"], cpus)
+            self.assertLessEqual(count * report["per_device"]["memory_bytes"]
+                                 + report["reserve"]["memory_bytes"], ram)
+        self.assertEqual(counts, [3] * 21 + [7])
+        self.assertEqual(sum(counts), 70)
+
+    def test_capacity_limits_cpu_and_physical_ram_independently_of_swap(self):
+        calculate = FLEET["capacity_report"]
+        cpu_limited = calculate(memory_total_bytes=64 * 1024**3, cpu_count=4,
+                                swap_total_bytes=0)
+        ram_limited = calculate(memory_total_bytes=4 * 1024**3, cpu_count=64,
+                                swap_total_bytes=1024 * 1024**3)
+        self.assertEqual(cpu_limited["recommended_count"], 3)
+        self.assertEqual(ram_limited["recommended_count"], 1)
+        self.assertFalse(cpu_limited["swap_capacity_ok"])
+        self.assertTrue(ram_limited["swap_capacity_ok"])
+
+    def test_larger_explicit_host_reserve_remains_available(self):
+        calculate = FLEET["capacity_report"]
+        report = calculate(memory_total_bytes=16333709312, cpu_count=8,
+                           swap_total_bytes=8 * 1024**3, memory_reserve_mib=2048)
+        self.assertEqual(report["recommended_count"], 6)
+        self.assertEqual(report["reserve"]["memory_bytes"], 2 * 1024**3)
+        self.assertEqual(report["reserve"]["memory_policy"], "explicit")
+
+    def test_host_reserve_cannot_be_removed_or_made_smaller_than_one_gib(self):
+        calculate = FLEET["capacity_report"]
+        for reserve in (0, 1023, True, 1024.0):
+            with self.subTest(memory_reserve_mib=reserve), self.assertRaises(FLEET["FleetError"]):
+                calculate(memory_total_bytes=16333709312, cpu_count=8,
+                          swap_total_bytes=0, memory_reserve_mib=reserve)
 
     def test_explicit_capacity_override_is_visible_and_not_a_silent_clamp(self):
         report = FLEET["capacity_report"](memory_total_bytes=8104976384, cpu_count=4, swap_total_bytes=0)

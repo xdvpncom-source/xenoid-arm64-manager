@@ -587,12 +587,12 @@ def reconcile_owned(name, config, manager, *, force=False, broker=None):
         # Native image/boot owns the 15 FPS render cap independently of the
         # advertised 60 Hz mode. Never invoke the legacy HWC replacement here.
         import time
-        from qa_fresh6a import verify_runtime
+        from qa_fresh6a import ensure_runtime
         deadline = time.monotonic() + config["timeout"] if config["timeout"] else None
         # A timer-created Broker binds its immutable CID lazily. Enter the
         # official owner context before comparing IDs or reading Android.
         with broker.owned_manager() as active:
-            result = verify_runtime(broker, active, deadline=deadline)
+            result = ensure_runtime(broker, active, deadline=deadline)
         metrics = {"changed": False, "preserved": True, "native": True}
     else:
         result = broker.set_frame_rate(config["fps"], timeout=config["timeout"])

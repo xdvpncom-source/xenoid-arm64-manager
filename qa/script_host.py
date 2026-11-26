@@ -2010,18 +2010,23 @@ echo retired
             dump = raw.decode()
         except (ValueError, UnicodeError) as error:
             raise TransportUnavailable("Native touch mapping could not be read") from error
+        mapping_error = None
         try:
             _x, _y, mapping = native_touch_point(dump, profile, None, None)
-        except TransportUnavailable:
+        except TransportUnavailable as error:
             mapping = None
+            mapping_error = str(error)[:512]
         if mapping is not None:
             self._native_display_id = mapping["display_id"]
         focus = foreground_window(focus_dump.decode(), self._native_display_id) if focus_dump is not None else None
         window = {"ready": focus is not None, "package": focus[2] if focus else "",
                   "component": (focus[2] + "/" + focus[3]) if focus and focus[2] else ""}
-        return {"ready": mapping is not None, "mapping": mapping, "profile": profile,
+        result = {"ready": mapping is not None, "mapping": mapping, "profile": profile,
                 "profile_sha256": hashlib.sha256(profile_bytes).hexdigest(), "dump": dump,
                 "foreground": window}
+        if mapping_error is not None:
+            result["mapping_error"] = mapping_error
+        return result
 
     def native_input_rootd(self, manager, command, deadline):
         """Use the same token-gated official rootd transport as soft_reboot."""

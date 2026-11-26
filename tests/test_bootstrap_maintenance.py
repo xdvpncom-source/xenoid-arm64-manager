@@ -96,7 +96,7 @@ class BootstrapMaintenance(unittest.TestCase):
         self.assertGreater(self.bootstrap_calls()[0][1], 170)
         self.assertEqual(self.manager.bootstrap_reads, 2)
         self.manager.import_keys.assert_not_called()
-        self.fresh.verify_runtime.assert_not_called()
+        self.fresh.ensure_runtime.assert_not_called()
         self.assertEqual(value['display'], self.previous['display'])
         fresh = self.timer()
         self.assertFalse(fresh['proxy_pending'])
