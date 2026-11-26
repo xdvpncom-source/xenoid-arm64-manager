@@ -24,7 +24,8 @@ class Tests(unittest.TestCase):
   self.cycle.connect(window('MainActivity',[control('Connect'),control('Connect',box=(40,40,60,60))]));self.assertEqual(len(self.taps()),1);self.assertEqual(self.taps()[0][-2:],(80,90))
  def test_each_preparation_receives_only_remaining_total_budget(self):
   budgets=[]
-  def prepare(seconds):
+  def prepare(seconds, **kwargs):
+   self.assertEqual(kwargs,{'blocking_ads_only':True})
    budgets.append(seconds);self.clock.sleep(3);return window('MainActivity',[])
   self.cycle.prepare_screen=prepare
   with self.assertRaisesRegex(RuntimeError,'No unique Connect control'):self.cycle.connect(window('MainActivity',[]))
@@ -35,7 +36,7 @@ class Tests(unittest.TestCase):
    self.cycle.connect(window('MainActivity',[]))
   self.cycle.prepare_screen.assert_not_called();self.assertEqual(self.clock.now,1);self.assertFalse(self.taps())
  def test_late_preparation_result_cannot_tap_after_total_deadline(self):
-  def prepare(seconds):self.clock.sleep(seconds);return window('MainActivity',[control('Connect')])
+  def prepare(seconds, **kwargs):self.clock.sleep(seconds);return window('MainActivity',[control('Connect')])
   self.cycle.prepare_screen=prepare
   with self.assertRaisesRegex(RuntimeError,'No unique Connect control'):self.cycle.connect(window('MainActivity',[]))
   self.assertEqual(self.clock.now,10);self.assertFalse(self.taps())
@@ -68,7 +69,7 @@ class Tests(unittest.TestCase):
   self.cycle.prepare_screen.assert_called_once();self.assertFalse(self.taps())
  def test_no_snapshot_starts_preparation_with_full_budget(self):
   self.cycle.prepare_screen=Mock(return_value=window('MainActivity',[control('Connect')]))
-  self.cycle.connect();self.cycle.prepare_screen.assert_called_once_with(10);self.assertEqual(len(self.taps()),1)
+  self.cycle.connect();self.cycle.prepare_screen.assert_called_once_with(10,blocking_ads_only=True);self.assertEqual(len(self.taps()),1)
  def test_timeout_with_no_control_never_uses_blind_center_or_changes_app_data(self):
   self.device.inspect_window=lambda **kw:window('MainActivity',[])
   with self.assertRaisesRegex(RuntimeError,'No unique Connect control'):self.cycle.connect(window('MainActivity',[]))

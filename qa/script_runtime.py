@@ -136,6 +136,72 @@ class Device:
             return request("inspect-window", [package, priority])
         return request("inspect-window", [] if package is None else [package])
 
+    def clickable_controls(self, window=None, *, priority=None):
+        """List observed clickable controls, including disabled entries.
+
+        Indices describe this snapshot only. Disabled/background controls are
+        never click targets; no input is sent by enumeration. All original
+        window metadata is retained alongside readable labels and bounds.
+        """
+        if window is None:
+            window = self.inspect_window(priority=priority, windows=True)
+        if not isinstance(window, dict):
+            raise ValueError("Supply an inspected window")
+        result, seen = [], set()
+        for source in ("controls", "navigation_controls"):
+            for item in window.get(source, ()):
+                if (not isinstance(item, dict) or item.get("clickable") is not True
+                        or source == "controls" and item.get("window_active") is False
+                        and item.get("window_focused") is False):
+                    continue
+                row = dict(item)
+                for key in ("text", "content_desc", "resource_id", "class_name"):
+                    row.setdefault(key, "")
+                row.setdefault("package", window.get("package", ""))
+                row.setdefault("display_id", window.get("display_id"))
+                for key in ("window_id", "window_layer", "window_type", "window_title", "window_bounds",
+                            "window_active", "window_focused"):
+                    row.setdefault(key, None)
+                row.setdefault("bounds", [])
+                row.setdefault("enabled", False)
+                row["bounds"] = list(row["bounds"])
+                identity = json.dumps(row, sort_keys=True, separators=(",", ":"))
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                row["index"] = len(result) + 1
+                result.append(row)
+        return result
+
+    def click_control(self, control, *, window, priority=None):
+        """Re-read an enumerated control before one official native tap.
+
+        The old index alone never identifies a new target. A changed foreground,
+        moved/disabled/missing or ambiguous control is rejected without input.
+        """
+        if (not isinstance(window, dict) or window.get("stable") is not True
+                or not isinstance(control, dict) or control.get("enabled") is not True
+                or control.get("clickable") is not True):
+            raise ValueError("Select an enabled clickable control from a stable window")
+        expected = {key: value for key, value in control.items() if key != "index"}
+        original = [{key: value for key, value in item.items() if key != "index"}
+                    for item in self.clickable_controls(window)]
+        if expected not in original:
+            raise ValueError("The control does not belong to this window snapshot")
+        fresh = self.inspect_window(priority=priority, windows=True)
+        if (fresh.get("stable") is not True or any(fresh.get(key) != window.get(key)
+                for key in ("package", "component", "display_id"))):
+            raise RuntimeError("The foreground window changed before the control could be clicked")
+        matches = [item for item in self.clickable_controls(fresh)
+                   if {key: value for key, value in item.items() if key != "index"} == expected]
+        if len(matches) != 1:
+            raise RuntimeError("The selected control changed or is ambiguous")
+        box = matches[0]["bounds"]
+        if (len(box) != 4 or any(type(value) is not int for value in box)
+                or box[2] <= box[0] or box[3] <= box[1]):
+            raise ValueError("The selected control has no visible bounds")
+        return self.tap((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
+
     def detect_window(self):
         """Read the current foreground and its available named actions."""
         return request("detect-window", [])

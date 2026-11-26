@@ -448,13 +448,40 @@ class RegenerationRuntimeTests(unittest.TestCase):
         with self.assertRaises(h.RegenerationPending):self.broker.regenerate(0,'key')
         current={**BASE,'run_id':'new-run'}
         with h.db(self.root) as conn:
-            conn.execute('UPDATE runs SET id=?,config=? WHERE current=1',(current['run_id'],json.dumps(current)))
+            conn.execute('UPDATE runs SET current=0 WHERE current=1')
+            conn.execute('INSERT INTO runs(id,created,config,state,iteration,current,updated,resume_at) VALUES(?,?,?,?,?,?,?,?)',
+                         (current['run_id'],h.now(),json.dumps(current),'queued',0,1,h.now(),0))
         with patch.object(h,'trusted_device',return_value=self.manager), \
              patch.object(h.Broker,'regeneration_cli',side_effect=lambda:native_cli(self.manager)), \
              patch.object(h.Broker,'display_raw_docker',return_value=contextlib.nullcontext()), \
              patch.object(h.Broker,'display_bootstrap',return_value=None):
             self.assertFalse(h.resume_regeneration_receipts(self.root,1,current,0,{}))
         self.assertEqual(self.broker.regeneration_receipts.load('key')['status'],'committed')
+        self.assertEqual(self.manager.rotations,1)
+
+    def test_old_reserved_revision_resumes_with_original_gate_context(self):
+        old={**BASE,'source':'print("old revision")','identity_reservations':True}
+        self.broker.config=old.copy()
+        with h.db(self.root) as conn:
+            conn.execute('UPDATE runs SET config=? WHERE current=1',(json.dumps(old),))
+        with patch('identity_reservations.NativeGate') as gate:
+            self.manager.failure='prepared'
+            with self.assertRaises(h.RegenerationPending):self.broker.regenerate(0,'old-context')
+            current={**BASE,'run_id':'new-run','source':'print("new revision")','identity_reservations':False}
+            with h.db(self.root) as conn:
+                conn.execute('UPDATE runs SET current=0 WHERE current=1')
+                conn.execute('INSERT INTO runs(id,created,config,state,iteration,current,updated,resume_at) VALUES(?,?,?,?,?,?,?,?)',
+                             (current['run_id'],h.now(),json.dumps(current),'queued',0,1,h.now(),0))
+            with patch.object(h,'trusted_device',return_value=self.manager), \
+                 patch.object(h.Broker,'regeneration_cli',side_effect=lambda:native_cli(self.manager)), \
+                 patch.object(h.Broker,'display_raw_docker',return_value=contextlib.nullcontext()), \
+                 patch.object(h.Broker,'display_bootstrap',return_value=None):
+                self.assertFalse(h.resume_regeneration_receipts(self.root,1,current,0,{}))
+            replay=gate.call_args
+            self.assertEqual(replay.args[1]['source'],old['source'])
+            self.assertTrue(replay.args[1]['identity_reservations'])
+            self.assertEqual(replay.kwargs['context'],self.broker.regeneration_receipts.load('old-context')['identity_reservation_context'])
+        self.assertEqual(self.broker.regeneration_receipts.load('old-context')['status'],'committed')
         self.assertEqual(self.manager.rotations,1)
 
     def test_fresh_safe_up_preparation_is_staged_before_official_command_and_regeneration(self):

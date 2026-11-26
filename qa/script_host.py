@@ -3801,6 +3801,37 @@ def recovery_current(folder, config):
         raise Shutdown
 
 
+def regeneration_replay_config(folder, run, binding, receipt):
+    """Recover only the recorded run's metadata; its user source is never executed."""
+    with db(folder) as conn:
+        row = conn.execute("SELECT id,config FROM runs WHERE id=?", (run,)).fetchone()
+    if row is None:
+        raise RegenerationPending("regeneration_original_run_missing")
+    try:
+        original = json.loads(row["config"])
+        if (not isinstance(original, dict) or row["id"] != run or original.get("run_id") != run
+                or original.get("instance_id") != binding.get("instance_id")
+                or original.get("resource_tag") != binding.get("resource_tag")
+                or original.get("expected_container_id") != binding.get("container_id")):
+            raise ValueError("Original run binding differs from the receipt")
+        source = shared_policy("source", source=original.get("source"))
+        reserved = original.get("identity_reservations", False)
+        if type(reserved) is not bool:
+            raise ValueError("Invalid original reservation setting")
+        prior = receipt.get("identity_reservation_context")
+        if prior is not None:
+            from identity_reservations import digest
+            expected = {"scenario_sha256": hashlib.sha256(source).hexdigest(),
+                        "profile_plan_sha256": digest(receipt["profile_plan"]) if receipt.get("profile_plan") else None}
+            if not reserved or prior != expected:
+                raise ValueError("Original run context differs from the receipt")
+    except (KeyError, TypeError, ValueError, OverflowError, UnicodeError):
+        raise RegenerationPending("regeneration_original_config_invalid") from None
+    return {"run_id": run, "instance_id": binding["instance_id"], "resource_tag": binding["resource_tag"],
+            "expected_container_id": binding["container_id"], "source": original["source"],
+            "identity_reservations": reserved}
+
+
 def resume_regeneration_receipts(folder, number, config, iteration, app_cache):
     """Finish recorded native transactions before any new user app actions."""
     store = RegenerationReceipts(folder, config["run_id"], iteration)
@@ -3812,10 +3843,7 @@ def resume_regeneration_receipts(folder, number, config, iteration, app_cache):
         if (binding.get("instance_id") != manager.context.instance_id
                 or binding.get("resource_tag") != manager.context.resource_tag):
             continue  # Never adopt a deleted/replaced immutable device.
-        pinned = {"run_id": run, "instance_id": binding["instance_id"], "resource_tag": binding["resource_tag"],
-                  "expected_container_id": binding["container_id"]}
-        if config.get("identity_reservations"):
-            pinned.update(identity_reservations=True, source=config["source"])
+        pinned = regeneration_replay_config(folder, run, binding, receipt)
         def log(level, message):
             with db(folder) as conn:
                 record(conn, config["run_id"], iteration, level, message)

@@ -25,10 +25,10 @@ MIN_DISPLAY_SIDE = 200
 MIN_DISPLAY_DPI = 72
 DISPLAY_FPS = None                    # None inherits panel FPS; 0 explicitly restores native FPS.
 DISPLAY_SETUP_TIMEOUT = 180            # Initial native FPS setup may restart Android graphics.
-START_WAIT_SECONDS = (90, 120)
+START_WAIT_SECONDS = (90, 120)          # Random dwell after VPN permission, before ad dismissal.
 COLD_START_APP = True                  # Close a surviving app/VPN session before each launch; preserve app data.
-AFTER_AD_WAIT_SECONDS = 5
-CONNECTED_WAIT_SECONDS = 100
+AFTER_AD_WAIT_SECONDS = 10             # Foreground hold after ad dismissal; handle new popups.
+CONNECTED_WAIT_SECONDS = 0             # Optional extra seconds added to the post-permission dwell.
 POLL_SECONDS = 2
 UI_INSPECTION_PRIORITY = 0             # None uses the runtime's default UI reader priority.
 UI_ALL_WINDOWS = True                 # Read real WebView Close nodes and observed navigation controls.
@@ -41,6 +41,11 @@ IDLE_UI_MIN_SECONDS = 2
 IDLE_UI_MAX_SECONDS = 10
 ACTION_COOLDOWN_SECONDS = 2
 AD_READY_SECONDS = 180
+AD_PROGRESS_WAIT_SECONDS = 60          # Unknown progress budget; 0 disables this cutoff.
+AD_PROGRESS_STALL_SECONDS = 30         # Unchanged countdown/progress; 0 disables this cutoff.
+AD_COUNTDOWN_TOP_FRACTION = .35         # Unlabelled countdowns are only recognized above the ad.
+AD_LIST_CLICKABLE_CONTROLS = True       # List observed controls when the ad UI changes.
+AD_CONTROL_LOG_INTERVAL_SECONDS = 10   # Changed inventories may be logged this often; 0 logs every change.
 DIALOG_READY_SECONDS = 240
 CONNECT_READY_SECONDS = 180
 VPN_READY_SECONDS = 180
@@ -432,6 +437,13 @@ class Cycle:
         self.missing_ad_close = None
         self.missing_ad_close_backs = {}
         self.last_ad_window = None
+        self.post_connect_dwell_active = False
+        self.post_connect_dwell_complete = False
+        self.observed_post_connect_ad = None
+        self.ad_progress_wait = None
+        self.ad_progress_blocked = False
+        self.last_ad_controls_digest = None
+        self.last_ad_controls_at = float("-inf")
 
     def log(self, message):
         self.device.log(message)
@@ -516,6 +528,8 @@ class Cycle:
             raise RuntimeError("Official native navigation input was not confirmed")
         self.invalidate_idle_monitor()
         self.last_action = time.monotonic()
+        self.ad_progress_wait = None
+        self.ad_progress_blocked = False
         self.missing_close_reason = "observed_native_navigation_sent"
         self.log("Input sent: " + reason)
         return True
@@ -591,18 +605,31 @@ class Cycle:
         window = self.observe()
         return bool(window and self.close_crash_dialog(window))
 
-    def close_control(self, window, selectors=(), *, geometric=False):
+    def close_control(self, window, selectors=(), *, geometric=False, geometry_window=None):
         selected = explicit_control(window, selectors)
         if selected:
             return selected
         scored = []
         ad = is_ad(window) and not is_terms(window)
         for control in controls(window):
-            if close_rejected(control, ad=ad):
-                continue
             words = labels(control)
             tail = control.get("resource_id", "").rsplit("/", 1)[-1].casefold()
             actionable = control.get("clickable") or control.get("class_name", "").rsplit(".", 1)[-1] in {"Button", "ImageButton"}
+            zero_timer = ad and actionable and any(re.fullmatch(
+                r"(?:close|skip|dismiss)(?: ad)?\s*(?:in|after)?\s*\(?0\)?\s*(?:s|sec|seconds?)?", word)
+                for word in words)
+            if zero_timer:
+                cleared = dict(control)
+                for field in ("text", "content_desc"):
+                    if re.fullmatch(r"(?:close|skip|dismiss)(?: ad)?\s*(?:in|after)?\s*\(?0\)?\s*(?:s|sec|seconds?)?",
+                                    normalized(control.get(field, ""))):
+                        cleared[field] = "Close"
+                zero_timer = not close_rejected(cleared, ad=ad)
+            if close_rejected(control, ad=ad) and not zero_timer:
+                continue
+            if zero_timer:
+                scored.append((100, control))
+                continue
             if (tail in CLOSE_IDS or ad and actionable and tail in AD_PACKED_CLOSE_IDS
                     or ad and close_tokens(control.get("resource_id", "").rsplit("/", 1)[-1]) & {"close", "dismiss", "skip"}):
                 scored.append((110, control))
@@ -614,7 +641,7 @@ class Cycle:
             return choose_ad_close(scored) if ad else choose_unique(scored)
         # An ambiguous semantic match stays ambiguous. Geometry uses only actual
         # observed clickable controls, with no CTA/countdown or descriptive copy.
-        all_boxes = [bounds(control) for control in controls(window)]
+        all_boxes = [bounds(control) for control in controls(geometry_window or window)]
         width = max((box[2] for box in all_boxes), default=0)
         height = max((box[3] for box in all_boxes), default=0)
         for control in controls(window):
@@ -643,20 +670,134 @@ class Cycle:
                               for item in controls(window))
         return self.ad_target_key(window, control), visible_state
 
-    def ad_close_control(self, window):
-        selected = self.close_control(window, AD_CLOSE_SELECTORS,
-                                      geometric=GEOMETRIC_AD_CLOSE and is_ad(window))
+    def ad_control_choices(self, window, *, emit_log=True):
+        enumerate_controls = getattr(self.device, "clickable_controls", None)
+        if enumerate_controls is not None:
+            choices = enumerate_controls(window)
+        else:
+            # Existing saved SDKs remain compatible with the new editable file.
+            choices = [{**item, "index": index} for index, item in enumerate(
+                (item for item in window.get("controls", ()) if item.get("clickable") is True), 1)]
+        # Some SDKs expose a Close label child as nonclickable, with no parent
+        # relationship in their flat snapshot. Preserve that explicit semantic
+        # candidate instead of guessing an unrelated geometric parent.
+        for item in window.get("controls", ()):
+            if item.get("clickable") is not True and self.close_control(
+                    {**window, "controls": [{**item, "enabled": True}]}, AD_CLOSE_SELECTORS) is not None:
+                choices.append({**item, "index": len(choices) + 1, "selection_basis": "semantic_label"})
+        material = json.dumps([{key: item.get(key) for key in (
+            "index", "text", "content_desc", "resource_id", "class_name", "package", "bounds",
+            "enabled", "clickable", "selection_basis")} for item in choices],
+            sort_keys=True, separators=(",", ":"), default=str)
+        digest = hashlib.sha256(material.encode()).hexdigest()
+        if (emit_log and AD_LIST_CLICKABLE_CONTROLS and is_ad(window) and digest != self.last_ad_controls_digest
+                and time.monotonic() - self.last_ad_controls_at >= AD_CONTROL_LOG_INTERVAL_SECONDS):
+            self.last_ad_controls_digest = digest
+            self.last_ad_controls_at = time.monotonic()
+            self.log("Observed ad controls: " + str(len(choices)))
+            for choice in choices:
+                payload = json.dumps(choice, sort_keys=True, ensure_ascii=False)
+                if len(payload) <= 1400:
+                    self.log("Ad control " + payload)
+                else:
+                    parts = [payload[index:index + 1400] for index in range(0, len(payload), 1400)]
+                    for index, part in enumerate(parts, 1):
+                        self.log(f"Ad control {choice['index']} part {index}/{len(parts)}: " + part)
+        return choices
+
+    def ad_close_control(self, window, *, emit_log=True):
+        choices = self.ad_control_choices(window, emit_log=emit_log)
+        # System navigation is listed for inspection, but belongs to the
+        # separately verified last-resort Back path, never Close detection.
+        candidates = [item for item in choices if item.get("window_type") != "TYPE_SYSTEM"]
+        selected = self.close_control({**window, "controls": candidates}, AD_CLOSE_SELECTORS,
+                                      geometric=GEOMETRIC_AD_CLOSE and is_ad(window), geometry_window=window)
         if selected is None:
             return None
+        # Enumeration indexes belong to the list, not the legacy control value.
+        # Preserve the original snapshot node for existing scripts/diagnostics.
+        selected = next((item for item in window.get("controls", ())
+                         if all(selected.get(key) == value for key, value in item.items())),
+                        {key: value for key, value in selected.items() if key not in {"index", "selection_basis"}})
         key = self.ad_target_key(window, selected)
         attempt = self.ad_attempt_key(window, selected)
         if attempt in self.ad_unsafe_targets or self.ad_close_attempts.get(attempt, 0) >= AD_SAME_TARGET_ATTEMPT_LIMIT:
             return None
         return selected
 
+    def ad_progress(self, window):
+        """Read visible timer/progress evidence, including nonclickable text."""
+        if not is_ad(window):
+            return None
+        items = window.get("controls", ())
+        height = max((box[3] for item in items if (box := bounds(item))), default=0)
+        signals = []
+        for item in items:
+            box = bounds(item)
+            labels_here = labels(item)
+            progress_bar = item.get("class_name", "").rsplit(".", 1)[-1] == "ProgressBar"
+            for label in labels_here:
+                number = re.fullmatch(r"\(?\s*(\d+)\s*(?:s|sec|seconds?|ثانیه)?\s*\)?", label)
+                timer_words = bool(close_tokens(label) & {"second", "seconds", "sec", "remaining", "left", "ثانیه"})
+                action_words = bool(close_tokens(label) & {"close", "skip", "wait", "dismiss", "بستن", "انتظار", "رد"})
+                contextual = re.search(r"\d+", label) if timer_words or action_words and (" in " in label or " after " in label) else None
+                if (number and box and height and box[1] <= height * AD_COUNTDOWN_TOP_FRACTION
+                        or contextual):
+                    value = int((number or contextual)[1] if number else contextual[0])
+                    if value > 0:
+                        signals.append(("countdown", item.get("resource_id", ""), value))
+            if progress_bar:
+                percent = next((re.search(r"(\d+(?:\.\d+)?)\s*%", label) for label in labels_here
+                                if re.search(r"(\d+(?:\.\d+)?)\s*%", label)), None)
+                if percent is not None:
+                    value = float(percent[1])
+                    if value < 100:
+                        signals.append(("progress", item.get("resource_id", ""), value))
+                else:
+                    signals.append(("unknown", item.get("resource_id", ""), item.get("content_desc", "")))
+            if item.get("enabled") is False and self.close_control(
+                    {**window, "controls": [{**item, "enabled": True}]}, AD_CLOSE_SELECTORS) is not None:
+                signals.append(("unknown", "disabled_close", item.get("resource_id", "")))
+        return tuple(signals) if signals else None
+
+    def wait_for_ad_progress(self, window):
+        # A real enabled Close wins even if a decorative progress view remains.
+        if self.close_control(window, AD_CLOSE_SELECTORS, geometric=False) is not None:
+            self.ad_progress_wait = None
+            return False
+        signals = self.ad_progress(window)
+        if not signals:
+            self.ad_progress_wait = None
+            return False
+        for value in (AD_PROGRESS_WAIT_SECONDS, AD_PROGRESS_STALL_SECONDS):
+            if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                raise ValueError("Ad progress budgets must be finite nonnegative seconds")
+        now = time.monotonic()
+        key = (window.get("package"), self.canonical_component(window.get("component", "")))
+        state = self.ad_progress_wait
+        if state is None or state["key"] != key:
+            state = {"key": key, "started": now, "changed": now, "signals": signals, "exhausted": False}
+            self.ad_progress_wait = state
+            self.log("Waiting for observed ad countdown/progress before last-resort Back")
+        elif state["signals"] != signals:
+            state.update(signals=signals, changed=now, exhausted=False)
+        unknown = all(signal[0] == "unknown" for signal in signals)
+        expired = (unknown and AD_PROGRESS_WAIT_SECONDS and now - state["started"] >= AD_PROGRESS_WAIT_SECONDS)
+        stalled = AD_PROGRESS_STALL_SECONDS and now - state["changed"] >= AD_PROGRESS_STALL_SECONDS
+        if expired or stalled:
+            if not state["exhausted"]:
+                state["exhausted"] = True
+                self.log("Ad progress unresolved after configured " + ("wait budget" if expired else "stall budget")
+                         + "; allowing only the verified last-resort Back path")
+            return False
+        self.ad_progress_blocked = True
+        return True
+
     def close_ad_control(self, window, selected):
         key = self.ad_target_key(window, selected)
         self.tap(selected, "close advertisement/popup")
+        self.ad_progress_wait = None
+        self.ad_progress_blocked = False
         attempt = self.ad_attempt_key(window, selected)
         self.ad_close_attempts[attempt] = self.ad_close_attempts.get(attempt, 0) + 1
         if is_ad(window):
@@ -678,6 +819,10 @@ class Cycle:
             self.missing_ad_close = None
             self.missing_close_reason = "not_a_confirmed_ad"
             return False
+        if self.wait_for_ad_progress(window):
+            self.missing_ad_close = None
+            self.missing_close_reason = "ad_countdown_or_progress_wait"
+            return False
         # An ambiguous pair of real Close controls is not an absent Close.
         if any(self.close_control({**window, "controls": [control]}, AD_CLOSE_SELECTORS,
                                   geometric=False) is not None for control in controls(window)):
@@ -698,6 +843,9 @@ class Cycle:
             # slow inspection. Time before RPC dispatch/setup cannot count.
             credited = (min(AD_MISSING_CLOSE_BACK_SECONDS, proof["elapsed_seconds"])
                         if proof is not None and proof.get("basis") == "independent_wm_focus_pair" else 0.0)
+            if self.ad_progress_blocked:
+                credited = 0.0
+                self.ad_progress_blocked = False
             self.missing_ad_close = key, now - credited
         self.missing_close_grace_seconds = max(0.0, now - self.missing_ad_close[1])
         if (now - self.missing_ad_close[1] < AD_MISSING_CLOSE_BACK_SECONDS
@@ -729,6 +877,10 @@ class Cycle:
             if now - origin["at"] > AD_LANDING_PROVENANCE_SECONDS:
                 self.ad_landing_origin = None
             elif same_ad:
+                if origin.get("observed_redirect") and self.ad_close_control(window) is not None:
+                    return False  # A newly returned ad exposes its real Close control.
+                if self.wait_for_ad_progress(window):
+                    return False
                 # Store Back can reveal the same ad instead of the app. Only
                 # that proven origin receives one separately bounded Back.
                 # An unchanged ad after this tap still fails normal readiness.
@@ -743,10 +895,22 @@ class Cycle:
             elif window.get("package") == self.package and not is_ad(window):
                 self.ad_landing_origin = None
         previous = self.last_ad_close
+        automatic = self.observed_post_connect_ad
+        # Some creatives open their configured store without any close tap.
+        # Only the real owned AdActivity observed during this cycle's completed
+        # post-permission dwell may explain that landing. Its original read time
+        # is retained; the finite allowance covers the dwell plus recovery.
+        automatic_age_limit = max(START_WAIT_SECONDS) + CONNECTED_WAIT_SECONDS + AD_LANDING_PROVENANCE_SECONDS
+        from_dwell = (self.post_connect_dwell_complete and automatic is not None
+                      and 0 <= now - automatic["at"] <= automatic_age_limit
+                      and (previous is None or previous["at"] < automatic["at"]))
+        if from_dwell:
+            previous = automatic
         if (window.get("package") not in AD_LANDING_PACKAGES or previous is None
-                or now - previous["at"] > AD_LANDING_PROVENANCE_SECONDS):
+                or not from_dwell and now - previous["at"] > AD_LANDING_PROVENANCE_SECONDS):
             return False
-        self.ad_unsafe_targets.add(previous["target"])
+        if not from_dwell:
+            self.ad_unsafe_targets.add(previous["target"])
         if self.ad_landing_returns >= AD_LANDING_RETURN_LIMIT:
             raise RuntimeError("Configured ad landing return limit exhausted; assigned app is not ready")
         if now - self.last_action < ACTION_COOLDOWN_SECONDS:
@@ -754,12 +918,22 @@ class Cycle:
         if not self.tap_observed_navigation(window, "return from ad landing via observed Android Back"):
             return False
         self.ad_landing_returns += 1
-        self.log("Ad close reached configured external package: " + window["package"]
+        self.log(("Observed post-Connect ad reached configured external package: " if from_dwell
+                  else "Ad close reached configured external package: ") + window["package"]
                  + "; using observed Android Back without reset")
         self.ad_landing_origin = {"package": previous["package"],
                                   "component": self.canonical_component(previous["component"]),
-                                  "at": time.monotonic(), "attempts": 0}
+                                  "at": time.monotonic(), "attempts": 0,
+                                  "observed_redirect": from_dwell}
         return True
+
+    def observe_post_connect_ad(self, window):
+        if (self.post_connect_dwell_active and window.get("package") == self.package
+                and is_ad_activity(window) and self.paired_focus(window) is not None
+                and not is_terms(window) and not is_notification(window) and not is_crash_dialog(window)):
+            self.observed_post_connect_ad = {"package": self.package,
+                "component": self.canonical_component(window.get("component", "")),
+                "at": time.monotonic()}
 
     @staticmethod
     def observed_navigation_back(window):
@@ -796,7 +970,7 @@ class Cycle:
         items = list(window.get("controls", ()))
         encoded = json.dumps(window, sort_keys=True, separators=(",", ":"), default=str).encode()
         selected = self.close_control(window, AD_CLOSE_SELECTORS, geometric=False)
-        available = self.ad_close_control(window)
+        available = self.ad_close_control(window, emit_log=False)
         candidates = sum(self.close_control({**window, "controls": [item]}, AD_CLOSE_SELECTORS,
                                             geometric=False) is not None for item in controls(window))
         reason = ("application_hierarchy_unavailable" if application_hierarchy_missing(window) else
@@ -992,6 +1166,8 @@ class Cycle:
             if dialogs:
                 window = self.observe_idle()
                 if window:
+                    if not ads:
+                        self.observe_post_connect_ad(window)
                     handled = self.service_dialog(window, vpn=vpn, ads=ads)
                 if handled:
                     self.invalidate_idle_monitor()
@@ -1076,7 +1252,7 @@ class Cycle:
                 time.sleep(POLL_SECONDS)
                 continue
             if window and (is_terms(window) or is_notification(window) or window.get("package") == VPN_PACKAGE):
-                return  # These dialogs are handled after the requested five-second pause.
+                return  # The caller handles blocking dialogs before the foreground hold.
             loading = window and is_loading(window, self.package)
             selected = self.ad_close_control(window) if window and not loading else None
             if selected and time.monotonic() - self.last_action >= ACTION_COOLDOWN_SECONDS:
@@ -1122,7 +1298,7 @@ class Cycle:
             return value
         return owner + "/" + (owner + activity if activity.startswith(".") else activity)
 
-    def prepare_screen(self, seconds, *, ads=True):
+    def prepare_screen(self, seconds, *, ads=True, blocking_ads_only=False):
         deadline = time.monotonic() + seconds if seconds else None
         quiet_since = None
         reopened_from_home = False
@@ -1150,8 +1326,11 @@ class Cycle:
                 time.sleep(POLL_SECONDS)
                 continue
             loading = window and is_loading(window, self.package)
-            handled = (window and ((loading and ads and self.service_missing_ad_close(window))
-                       or (not loading and self.service_dialog(window, ads=ads))))
+            ad_actions = ads and (not blocking_ads_only or not window
+                                   or is_blocking_ad(window, self.package)
+                                   or self.connect_control(window) is None)
+            handled = (window and ((loading and ad_actions and self.service_missing_ad_close(window))
+                       or (not loading and self.service_dialog(window, ads=ad_actions))))
             self.check_target_crash()
             blocked = (not window or loading or is_crash_dialog(window) or is_terms(window) or is_notification(window)
                        or application_hierarchy_missing(window)
@@ -1169,6 +1348,16 @@ class Cycle:
         raise self.ad_failure("App did not return to an unobstructed foreground window")
 
 
+    def connect_control(self, window):
+        if application_hierarchy_missing(window):
+            return None
+        selected = explicit_control(window, CONNECT_SELECTORS)
+        if selected is None:
+            selected = choose_unique([(1, control) for control in controls(window)
+                                      if control.get("package", self.package) == self.package
+                                      and labels(control) & CONNECT_WORDS])
+        return selected
+
     def connect(self, window=None):
         deadline = time.monotonic() + CONNECT_READY_SECONDS if CONNECT_READY_SECONDS else None
         while True:
@@ -1176,14 +1365,10 @@ class Cycle:
                 remaining = deadline - time.monotonic() if deadline is not None else 0
                 if deadline is not None and remaining <= 0:
                     break
-                window = self.prepare_screen(remaining)
+                window = self.prepare_screen(remaining, blocking_ads_only=True)
                 if deadline is not None and time.monotonic() >= deadline:
                     break
-            selected = explicit_control(window, CONNECT_SELECTORS) if not application_hierarchy_missing(window) else None
-            if selected is None and not application_hierarchy_missing(window):
-                selected = choose_unique([(1, control) for control in controls(window)
-                                          if control.get("package", self.package) == self.package
-                                          and labels(control) & CONNECT_WORDS])
+            selected = self.connect_control(window)
             if selected:
                 self.tap(selected, "Connect button")
                 return
@@ -1214,7 +1399,7 @@ class Cycle:
         self.last_permission_error = None
         return bool(re.search(r"\bACTIVATE_VPN\s*:\s*allow\b", output, re.I))
 
-    def approve_vpn(self):
+    def approve_vpn(self, *, ads=True):
         deadline = time.monotonic() + VPN_READY_SECONDS if VPN_READY_SECONDS else None
         last_loading = False
         loading_logged = False
@@ -1225,13 +1410,15 @@ class Cycle:
                 if last_loading and not loading_logged:
                     self.log("Waiting for app server list loading to finish")
                     loading_logged = True
-                handled = ((last_loading and self.service_missing_ad_close(window))
-                           or (not last_loading and self.service_dialog(window, vpn=True, ads=True)))
+                handled = ((last_loading and ads and self.service_missing_ad_close(window))
+                           or (not last_loading and self.service_dialog(window, vpn=True, ads=ads)))
                 self.check_target_crash()
                 # After any click, obtain a fresh hierarchy before declaring authorization.
-                unobstructed = (not last_loading and window.get("package") == self.package and not is_crash_dialog(window)
+                expected_window = (window.get("package") == self.package or not ads and is_ad(window))
+                unobstructed = (not last_loading and expected_window and not is_crash_dialog(window)
                                 and not application_hierarchy_missing(window)
-                                and not is_terms(window) and not is_notification(window) and not is_blocking_ad(window, self.package))
+                                and not is_terms(window) and not is_notification(window)
+                                and (not ads or not is_blocking_ad(window, self.package)))
                 if not handled and unobstructed and self.vpn_allowed():
                     self.log("Android VPN permission confirmed (including previously authorized apps)")
                     return
@@ -1260,6 +1447,13 @@ class Cycle:
 
     def run(self):
         self.device.configure_run(package=self.package)
+        self.post_connect_dwell_active = False
+        self.post_connect_dwell_complete = False
+        self.observed_post_connect_ad = None
+        self.ad_progress_wait = None
+        self.ad_progress_blocked = False
+        self.last_ad_controls_digest = None
+        self.last_ad_controls_at = float("-inf")
         failure = None
         try:
             if COLD_START_APP:
@@ -1267,17 +1461,21 @@ class Cycle:
                 self.log("Existing app instance closed before launch; app data preserved")
             self.device.app_open()
             self.log("App opened: " + self.package)
-            initial_wait = random.randint(*START_WAIT_SECONDS)
-            self.log(f"Waiting {initial_wait}s before ad dismissal")
-            self.wait(initial_wait)
-            self.dismiss_ads()
-            self.log(f"Ad handling completed; waiting {AFTER_AD_WAIT_SECONDS}s")
-            self.wait(AFTER_AD_WAIT_SECONDS)
-            ready = self.prepare_screen(DIALOG_READY_SECONDS)
+            ready = self.prepare_screen(DIALOG_READY_SECONDS, blocking_ads_only=True)
             self.connect(ready)
-            self.approve_vpn()
-            self.log(f"Keeping app open for {CONNECTED_WAIT_SECONDS}s after VPN permission")
-            self.wait(CONNECTED_WAIT_SECONDS, dialogs=True, vpn=True, ads=True)
+            self.approve_vpn(ads=False)
+            dwell = random.randint(*START_WAIT_SECONDS) + CONNECTED_WAIT_SECONDS
+            self.log(f"Keeping app open for {dwell}s after VPN permission; ad dismissal follows")
+            self.post_connect_dwell_active = True
+            try:
+                self.wait(dwell, dialogs=True, vpn=True, ads=False)
+            finally:
+                self.post_connect_dwell_active = False
+            self.post_connect_dwell_complete = True
+            self.dismiss_ads()
+            self.prepare_screen(DIALOG_READY_SECONDS)
+            self.log(f"Ad handling completed; keeping app in foreground for {AFTER_AD_WAIT_SECONDS}s")
+            self.wait(AFTER_AD_WAIT_SECONDS, dialogs=True, vpn=True, ads=True)
         except Exception as error:
             failure = error
             self.log("Cycle failed: " + type(error).__name__ + ": " + str(error))
@@ -1535,9 +1733,16 @@ def main():
             raise ValueError("The device has no resolvable assigned APK")
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", package):
             raise ValueError("Invalid target app package")
-        if (len(START_WAIT_SECONDS) != 2 or START_WAIT_SECONDS[0] < 0
+        if (len(START_WAIT_SECONDS) != 2 or any(type(value) is not int for value in START_WAIT_SECONDS)
+                or START_WAIT_SECONDS[0] < 0
                 or START_WAIT_SECONDS[1] < START_WAIT_SECONDS[0] or POLL_SECONDS <= 0
-                or CRASH_POLL_SECONDS <= 0 or FAILED_CYCLE_BACKOFF_SECONDS < 0):
+                or CRASH_POLL_SECONDS <= 0 or FAILED_CYCLE_BACKOFF_SECONDS < 0
+                or any(type(value) not in (int, float) or not math.isfinite(value) or value < 0
+                       for value in (AFTER_AD_WAIT_SECONDS, CONNECTED_WAIT_SECONDS,
+                                     AD_PROGRESS_WAIT_SECONDS, AD_PROGRESS_STALL_SECONDS,
+                                     AD_CONTROL_LOG_INTERVAL_SECONDS))
+                or type(AD_COUNTDOWN_TOP_FRACTION) not in (int, float)
+                or not 0 < AD_COUNTDOWN_TOP_FRACTION <= 1):
             raise ValueError("Invalid script timing settings")
         validate_regeneration_settings()
         cycle.package = package

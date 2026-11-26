@@ -112,13 +112,13 @@ class Tests(unittest.TestCase):
         with patch.object(m,'time',clock),patch.object(m.random,'randint',return_value=97):m.Cycle(d,'qa.vpn').run()
         taps=[row for row in d.trace if row[0]=='tap']
         self.assertEqual([row[2] for row in taps],['startup','terms','notification','main','vpn'])
-        self.assertEqual(taps[0][1],97)
-        self.assertGreaterEqual(taps[1][1]-taps[0][1],5)
+        self.assertEqual(taps[0][1],0)
+        self.assertGreaterEqual(taps[1][1]-taps[0][1],m.ACTION_COOLDOWN_SECONDS)
         closes=[row for row in d.trace if row[0]=='close'];clears=[row for row in d.trace if row[0]=='clear']
         self.assertEqual(len(closes),2);self.assertEqual(len(clears),1)
         self.assertLess(d.trace.index(closes[0]), next(i for i,row in enumerate(d.trace) if row[0]=='open'))
         approval_log=next(row for row in d.trace if row[0]=='log' and str(row[2]).startswith('Android VPN permission confirmed'))
-        self.assertEqual(closes[-1][1]-approval_log[1],100)
+        self.assertGreaterEqual(closes[-1][1]-approval_log[1],97+m.AFTER_AD_WAIT_SECONDS)
         self.assertEqual(clears[0][2:],('qa.vpn','0'))
 
     def test_surviving_connecting_app_is_closed_before_launch_without_initial_data_clear(self):

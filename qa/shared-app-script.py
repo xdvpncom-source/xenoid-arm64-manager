@@ -21,6 +21,8 @@ class Device(RuntimeDevice):
 
     Any window: tap/click(x, y), find(...).click(), app_tap(resource_id),
     inspect_window(), ui_dump(), back(), keyevent(), swipe(), text().
+    Controls: clickable_controls(window) lists every observed clickable entry;
+    click_control(entry, window=window) rechecks it before official native input.
     Dialogs: app_confirm(), confirm_vpn(), close_popup(), detect_window(),
     click_window_action(window, action).
     Apps/ADB: app_package(), app_open(), app_close(), app_reset(),

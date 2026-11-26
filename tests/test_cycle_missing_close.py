@@ -65,7 +65,7 @@ class Tests(unittest.TestCase):
         d=Device();c=m.Cycle(d,'v2.vpn.fast');self.service(c, AD);self.clock.now=30
         with patch.object(m,'AD_MISSING_CLOSE_BACK_LIMIT',0):self.assertFalse(self.service(c, AD))
         self.assertFalse(d.taps)
-    def test_loading_progress_and_ephemeral_ids_do_not_restart_ad_grace(self):
+    def test_changing_loading_progress_blocks_back_until_complete_then_grace(self):
         d=Device();c=m.Cycle(d,'v2.vpn.fast')
         def loading(percent,window_id):
             w=copy.deepcopy(AD);w['controls'].append({'class_name':'android.widget.ProgressBar','resource_id':'',
@@ -75,7 +75,9 @@ class Tests(unittest.TestCase):
         self.assertTrue(m.is_loading(loading(10,1),'v2.vpn.fast'))
         self.assertFalse(self.service(c, loading(10,1)));self.clock.now=8
         self.assertFalse(self.service(c, loading(40,2)));self.clock.now=16
-        self.assertTrue(self.service(c, loading(80,3)))
+        self.assertFalse(self.service(c, loading(80,3)));self.clock.now=24
+        self.assertFalse(self.service(c, loading(100,4)));self.clock.now=40
+        self.assertTrue(self.service(c, loading(100,5)))
         self.assertEqual(d.taps,[(42,345)])
     def test_loading_actual_ad_is_closed_in_both_ad_and_prepare_phases(self):
         for phase in ('dismiss','prepare','vpn'):
