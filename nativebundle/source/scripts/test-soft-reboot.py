@@ -43,12 +43,13 @@ def parser():
 
 
 class Probe:
-    def __init__(self, *, resume=False, maintenance=True, state=1, old_pid=False, stop_ready=True, netd_reset=True, control_rules=3, old_netd_pid=False):
+    def __init__(self, *, resume=False, maintenance=True, state=1, old_pid=False, stop_ready=True, netd_reset=True, control_rules=3, old_netd_pid=False, quarantine=True, feature_absent=False, cellular=True):
         self.clock = Clock()
         env = namespace(self.clock)
         exec(compile(CANDIDATE, "<keystore-order-candidate>", "exec"), env)
         self.soft_reboot = MethodType(env["soft_reboot"], self)
         self.lease = SimpleNamespace(rootd_port=42870)
+        self.cfg = SimpleNamespace(cold_profile=None)
         self.events = []
         self.started = resume
         self.stopped = False
@@ -58,6 +59,8 @@ class Probe:
         self.old_netd_pid=old_netd_pid
         self.maintenance, self.state, self.old_pid, self.stop_ready = maintenance, state, old_pid, stop_ready
         self.receipt_ok = True
+        self.quarantine_ok, self.feature_absent, self.cellular = quarantine, feature_absent, cellular
+        self.address_restored = False
 
     def daemon_client(self, **kwargs):
         return SimpleNamespace(read_private_token=lambda **kw: "token", health=lambda **kw: {"ok": True})
@@ -66,6 +69,12 @@ class Probe:
     def reconcile_bootstrap(self, *args): self.events.append("bootstrap"); return {"controlReady": True}
     def reconcile_proxy_desired(self): return {"ok": True}
     def regeneration_restart_receipt(self, value): return {"ok": self.receipt_ok}
+    def quarantine_proxy_for_lifecycle(self, *, deadline):
+        self.events.append("lease-quarantine")
+        assert self.stopped and not self.started and self.netd_pid == "40"
+        if self.feature_absent:return {"ok":True,"notPrepared":True}
+        self.address_restored = self.quarantine_ok
+        return {"ok":self.quarantine_ok,"code":"ipv6_unsupported"} if not self.quarantine_ok else {"ok":True}
 
     def _rootd_output(self, args, **kwargs):
         self.events.append(tuple(args))
@@ -87,10 +96,14 @@ class Probe:
             assert self.stopped and not self.started
             assert "setprop ctl.start netd" in command
             assert "ctl.restart netd" not in command
-            assert "/system/bin/xenoid-netctl cellular-ready" in command
+            assert "/system/bin/xenoid-netctl cellular-ready" not in command
             if not self.old_netd_pid:self.netd_pid="40"
-            return {"ok":self.netd_reset,"exitCode":0 if self.netd_reset else 91,
-                    "stdout":json.dumps({"ok":True,"op":"cellular-init","ifname":"rmnet_data0","controlRules":self.control_rules})}
+            return {"ok":self.netd_reset,"exitCode":0 if self.netd_reset else 91,"stdout":""}
+        if command == "/system/bin/xenoid-netctl cellular-ready":
+            assert self.stopped and not self.started and self.address_restored
+            if not self.cellular:
+                return {"ok":True,"exitCode":1,"stdout":json.dumps({"ok":False,"op":"cellular-ready-addresses","errno":110,"private":"not-public"})}
+            return {"ok":True,"exitCode":0,"stdout":json.dumps({"ok":True,"op":"cellular-init","ifname":"rmnet_data0","controlRules":self.control_rules})}
         if command == "setprop ctl.restart keystore2":
             assert self.stopped and not self.started
             if not self.old_pid: self.keystore_pid = "20"
@@ -134,10 +147,14 @@ class FlowTests(unittest.TestCase):
         stop = next(i for i, x in enumerate(writes) if "ctl.stop zygote" in x)
         restart = writes.index("setprop ctl.restart keystore2")
         netd = next(i for i,x in enumerate(writes) if "setprop ctl.stop netd" in x)
+        lease = writes.index("lease-quarantine")
+        cellular = writes.index("/system/bin/xenoid-netctl cellular-ready")
         queried = writes.index("service call android.security.maintenance 5 i32 0")
         start = writes.index("setprop ctl.restart vendor.ril-daemon;setprop ctl.start zygote")
         self.assertLess(stop, netd)
-        self.assertLess(netd, restart)
+        self.assertLess(netd, lease)
+        self.assertLess(lease, cellular)
+        self.assertLess(cellular, restart)
         self.assertLess(restart, queried)
         self.assertLess(queried, start)
         self.assertEqual(writes.count("setprop ctl.restart keystore2"), 1)
@@ -180,6 +197,24 @@ class FlowTests(unittest.TestCase):
                 self.assertTrue(probe.stopped)
                 self.assertNotIn('setprop ctl.restart keystore2',probe.events)
                 self.assertNotIn('bootstrap',probe.events)
+
+    def test_lease_owner_failure_or_noop_never_starts_framework(self):
+        for kwargs in ({'quarantine':False},{'feature_absent':True}):
+            with self.subTest(kwargs=kwargs):
+                probe=Probe(**kwargs)
+                result=probe.soft_reboot(timeout=10,require_health=False)
+                self.assertEqual(result['error'],'soft_reboot_network_quarantine_failed')
+                self.assertTrue(probe.stopped)
+                self.assertNotIn('/system/bin/xenoid-netctl cellular-ready',probe.events)
+                self.assertNotIn('setprop ctl.restart keystore2',probe.events)
+
+    def test_cellular_error_preserves_sanitized_native_cause(self):
+        probe=Probe(cellular=False)
+        result=probe.soft_reboot(timeout=10,require_health=False)
+        self.assertEqual(result,{'ok':False,'code':'soft_reboot_netd_control_failed','error':'soft_reboot_netd_control_failed',
+                                 'rootExitCode':1,'controlOp':'cellular-ready-addresses','controlErrno':110})
+        self.assertNotIn('setprop ctl.restart keystore2',probe.events)
+        self.assertNotIn('not-public',json.dumps(result))
 
     def test_netd_script_is_bounded_valid_shell_without_manual_routes(self):
         probe=Probe()

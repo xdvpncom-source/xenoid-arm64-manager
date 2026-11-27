@@ -11384,8 +11384,10 @@ cat >/dev/null
             # ctl.stop/start bypasses Android's reciprocal zygote/netd
             # onrestart callbacks. Reset netd explicitly while the framework
             # is absent, so its old NetworkIds cannot survive the new one.
-            # netd flushes routing rules during startup: keep its reset and
-            # the native control-route restoration in one guest request.
+            # netd flushes the leased IPv6 address and routing rules during
+            # startup. Its readiness must precede the existing host lease
+            # owner, and that owner must precede cellular-ready: waiting for
+            # the address in this request would strand the stopped framework.
             netd_budget = remaining(90.0)
             if netd_budget <= 0:
                 return failure("soft_reboot_timeout")
@@ -11406,14 +11408,58 @@ cat >/dev/null
                 '[ "$(date +%s)" -lt "$end" ] || exit 92; sleep 0.1; done;'
                 'test "$(getprop init.svc.zygote)" = stopped;'
                 'if pidof zygote zygote64 system_server >/dev/null; then exit 93; '
-                'else s=$?; test "$s" = 1; fi;'
-                "/system/bin/xenoid-netctl cellular-ready"
+                'else s=$?; test "$s" = 1; fi'
             )
             reset = exec_checked(netd_script, timeout_ms=max(100, int(netd_budget * 1000)))
             if reset is None:
                 return failure("soft_reboot_netd_reset_failed")
+            if not netd_ready(previous_netd_pid):
+                return failure("soft_reboot_netd_control_unverified")
+            # This is the same fail-closed owner used before official start:
+            # it verifies the current CID/interface/MAC/IPv4 against the
+            # manifest and restores only that lease's IPv6 and routes. It
+            # neither connects to nor requires an online proxy provider.
             try:
-                control = json.loads(str(reset.get("stdout", "")))
+                quarantine = self.quarantine_proxy_for_lifecycle(deadline=deadline)
+            except Exception:
+                return failure("soft_reboot_network_quarantine_failed")
+            if (not isinstance(quarantine, dict) or quarantine.get("ok") is not True
+                    or quarantine.get("notPrepared") is True):
+                cause = quarantine.get("code", quarantine.get("error")) if isinstance(quarantine, dict) else None
+                return failure(
+                    "soft_reboot_network_quarantine_failed",
+                    **({"causeCode": cause} if isinstance(cause, str)
+                       and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", cause) else {}),
+                )
+            control_budget = remaining(90.0)
+            if control_budget <= 0:
+                return failure("soft_reboot_timeout")
+            control_result = self._rootd_exec(
+                "/system/bin/xenoid-netctl cellular-ready", token,
+                deadline=deadline, timeout_ms=max(100, int(control_budget * 1000)),
+            )
+            if (not isinstance(control_result, dict) or control_result.get("ok") is not True
+                    or control_result.get("exitCode") != 0):
+                # Preserve only the bounded native failure classification.
+                # Raw rootd output may contain private values and is omitted.
+                details = {}
+                if isinstance(control_result, dict):
+                    exit_code = control_result.get("exitCode")
+                    if type(exit_code) is int and -255 <= exit_code <= 255:
+                        details["rootExitCode"] = exit_code
+                    raw = control_result.get("stdout")
+                    if isinstance(raw, str) and len(raw) <= 4096:
+                        try:
+                            native = json.loads(raw)
+                        except (TypeError, ValueError):
+                            native = None
+                        if (isinstance(native, dict) and native.get("ok") is False
+                                and native.get("op") in {"cellular-ready-netd", "cellular-ready-rules", "cellular-ready-addresses", "cellular-init-control-rules"}
+                                and type(native.get("errno")) is int and 0 <= native["errno"] <= 4095):
+                            details.update(controlOp=native["op"], controlErrno=native["errno"])
+                return failure("soft_reboot_netd_control_failed", **details)
+            try:
+                control = json.loads(str(control_result.get("stdout", "")))
             except (TypeError, ValueError):
                 return failure("soft_reboot_netd_control_unverified")
             if (not isinstance(control, dict) or control.get("ok") is not True

@@ -299,7 +299,20 @@ class RendererOverlay:
             if proof.get("ok") is not True:
                 restart = self.manager.soft_reboot(require_health=False, reset_ssaid=False)
                 if restart.get("ok") is not True:
-                    return {"ok": False, "error": "graphics_restart_failed"}
+                    details = {"ok": False}
+                    for key in ("code", "error", "causeCode"):
+                        code = restart.get(key)
+                        if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,95}", code):
+                            details[key] = code
+                    if restart.get("controlOp") in {"cellular-ready-netd", "cellular-ready-rules", "cellular-ready-addresses", "cellular-init-control-rules"}:
+                        details["controlOp"] = restart["controlOp"]
+                    for key, maximum in (("controlErrno", 4095), ("rootExitCode", 255)):
+                        value = restart.get(key)
+                        if type(value) is int and (0 if key == "controlErrno" else -255) <= value <= maximum:
+                            details[key] = value
+                    return {"ok": False, "error": "graphics_restart_failed",
+                            "errorCode": details.get("code", details.get("error", "graphics_restart_failed")),
+                            "softReboot": details}
                 restarted = True
             after = self.observe(artifact_records)
             return {**after, "restarted": restarted, "changed": status.get("changed") is True}

@@ -1877,6 +1877,7 @@ class ConvergenceExecutor:
         elif journal_state is not None:
             self._validate_regeneration_capability(journal_state, regeneration_capability)
         completed = set(journal_state["completed"]) if journal_state else set()
+        runtime_started_again = False
 
         if journal_state is not None and "quarantined" not in completed:
             required = bool(journal_state["proxyQuarantineRequired"])
@@ -2154,9 +2155,14 @@ class ConvergenceExecutor:
                     ),
                     wait=True,
                 )
+                runtime_started_again = True
                 if journal_state is not None:
-                    journal_state = self.journal.advance("runtime_started")
-                    completed.add("runtime_started")
+                    # A later retained phase records the original start, not
+                    # the current runtime epoch. Re-establish the owned runtime
+                    # without rewinding its fixed operation journal.
+                    if _PHASE_INDEX[journal_state["phase"]] < _PHASE_INDEX["runtime_started"]:
+                        journal_state = self.journal.advance("runtime_started")
+                        completed.add("runtime_started")
                     self._verify_after_phase(journal_state, skip_build=True)
 
         final_actions = _plan_component_actions(plan)
@@ -2222,13 +2228,20 @@ class ConvergenceExecutor:
             or final_actions["daemon"] in {"install", "reconcile"}
             or deploy_required
         )
-        if control_required and (journal_state is None or "control_ready" not in completed):
+        control_plane = initial_observation.get("controlPlane")
+        control_stale = runtime_started_again or (
+            plan.runtime_action in {"start", "restart"}
+            and isinstance(control_plane, Mapping)
+            and control_plane.get("ready") is False
+        )
+        if control_required and (journal_state is None or "control_ready" not in completed or control_stale):
             self._phase_call(
                 "control_ready", "reconcile_control_plane", reporter, deadline
             )
             if journal_state is not None:
-                journal_state = self.journal.advance("control_ready")
-                completed.add("control_ready")
+                if _PHASE_INDEX[journal_state["phase"]] < _PHASE_INDEX["control_ready"]:
+                    journal_state = self.journal.advance("control_ready")
+                    completed.add("control_ready")
                 self._verify_after_phase(journal_state, skip_build=True)
 
         # Old fixed-target regeneration plans intentionally lack these new

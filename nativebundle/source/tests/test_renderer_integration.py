@@ -2,6 +2,7 @@ import io
 from contextlib import redirect_stdout
 import json
 import os
+import runpy
 import tempfile
 import unittest
 import uuid
@@ -216,6 +217,23 @@ class RendererConvergeTests(unittest.TestCase):
         value._write_record.assert_not_called()
         value._helper.assert_called_once_with('bind', record())
 
+    def test_restart_failure_preserves_only_sanitized_official_cause(self):
+        value, manager = overlay(rec=record(), target=row())
+        manager.soft_reboot.return_value = {
+            'ok': False, 'code': 'soft_reboot_netd_control_failed',
+            'controlOp': 'cellular-ready-addresses', 'controlErrno': 110,
+            'rootExitCode': 1, 'token': 'private token', 'stdout': 'private output',
+        }
+        result = value.converge([])
+        self.assertEqual(result['error'], 'graphics_restart_failed')
+        self.assertEqual(result['errorCode'], 'soft_reboot_netd_control_failed')
+        self.assertEqual(result['softReboot'], {
+            'ok': False, 'code': 'soft_reboot_netd_control_failed',
+            'controlOp': 'cellular-ready-addresses', 'controlErrno': 110,
+            'rootExitCode': 1,
+        })
+        self.assertNotIn('private', json.dumps(result))
+
     def test_root_wrapper_requires_public_exit_field(self):
         manager = SimpleNamespace(daemon_client=lambda **kwargs: SimpleNamespace(root_exec=lambda command: {'ok': True, 'exitCode': 0, 'stdout': '{}'}))
         self.assertFalse(RendererOverlay(manager)._root('true')['ok'])
@@ -354,6 +372,126 @@ class RendererColdBootCompatibilityTests(unittest.TestCase):
         with self.assertRaises(ConvergenceError) as error:
             self.plan()
         self.assertEqual(error.exception.code, 'daemon_seed_contract_incompatible')
+
+
+class RendererSavedStartRecoveryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Reuse the upstream runtime-free owner fixture, not a second executor.
+        cls.contract = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'scripts/test-convergence.py'))
+
+    def pending(self, root):
+        from xenoid.convergence import ConvergenceExecutor, ConvergenceJournal
+        fixture = self.contract
+        snapshot = fixture['healthy_snapshot']()
+        snapshot['runtime']['state'] = 'stopped'
+        snapshot['controlPlane']['ready'] = False
+        snapshot['components']['deploy']['glesRenderer'] = 'unknown'
+        snapshot['components']['graphics'] = {'ok': False}
+        manager = fixture['FakeManager'](root, snapshot)
+        old_control = manager.reconcile_control_plane
+
+        def control():
+            answer = old_control()
+            if answer['ok']:
+                manager.snapshot['controlPlane']['ready'] = True
+            return answer
+
+        def graphics(**kwargs):
+            answer = manager._result('graphics')
+            if answer['ok']:
+                manager.snapshot['components']['graphics'] = {'ok': True}
+            return answer
+
+        manager.reconcile_control_plane = control
+        manager.reconcile_graphics = graphics
+        manager.fail_once['graphics'] = 'soft_reboot_netd_control_failed'
+        class Acceptance(fixture['FakeAcceptance']):
+            def observe(self, **kwargs):
+                answer = super().observe(**kwargs)
+                if kwargs['mode'] == 'convergence-resolve':
+                    actions = dict(kwargs['expected']['componentActions'])
+                    for name, action in actions.items():
+                        if name != 'deploy' and action in {None, 'inspect'}:
+                            actions[name] = 'reconcile' if name == 'daemon' else 'reuse'
+                    if actions['deploy'] is None:
+                        actions['deploy'] = {name: 'deploy' if name == 'glesRenderer' else 'reuse'
+                                             for name in manager.snapshot['components']['deploy']}
+                    answer['componentActions'] = actions
+                return answer
+        acceptance = Acceptance(manager)
+        first = ConvergenceExecutor(manager, live_acceptance=acceptance).run(skip_build=True)
+        self.assertFalse(first['ok'])
+        self.assertEqual(first['error'], 'soft_reboot_netd_control_failed')
+        journal = ConvergenceJournal.for_manager(manager)
+        state = journal.load()
+        self.assertEqual(state['phase'], 'control_ready')
+        self.assertEqual(state['plan']['runtimeAction'], 'start')
+        return manager, journal, state, acceptance
+
+    def test_stopped_saved_start_keeps_fixed_journal_and_revalidates_control(self):
+        from xenoid.convergence import ConvergenceExecutor
+        with tempfile.TemporaryDirectory() as temporary:
+            manager, journal, before, acceptance = self.pending(Path(temporary))
+            manager.snapshot['runtime']['state'] = 'stopped'
+            manager.snapshot['controlPlane']['ready'] = False
+            controls = []
+            original = manager.reconcile_control_plane
+
+            def checked_control():
+                retained = journal.load()
+                self.assertEqual(retained, before)
+                controls.append(True)
+                return original()
+
+            manager.reconcile_control_plane = checked_control
+            result = ConvergenceExecutor(manager, live_acceptance=acceptance).run(skip_build=True)
+            self.assertTrue(result['ok'], result)
+            self.assertTrue(result['resumed'])
+            self.assertEqual(result['initialPlanDigest'], before['planDigest'])
+            self.assertEqual(controls, [True])
+            self.assertEqual(manager.snapshot['runtime']['containerId'], before['oldContainerId'])
+            self.assertFalse(journal.exists())
+            names = [name for name, _ in manager.calls]
+            self.assertEqual(names.count('start'), 2)
+            self.assertEqual(names.count('control'), 2)
+            self.assertFalse(set(names) & {'remove', 'create', 'storage', 'seed-start'})
+
+    def test_already_running_saved_start_with_stale_control_revalidates_without_restart(self):
+        from xenoid.convergence import ConvergenceExecutor
+        with tempfile.TemporaryDirectory() as temporary:
+            manager, journal, before, acceptance = self.pending(Path(temporary))
+            manager.snapshot['controlPlane']['ready'] = False
+            result = ConvergenceExecutor(manager, live_acceptance=acceptance).run(skip_build=True)
+            self.assertTrue(result['ok'], result)
+            names = [name for name, _ in manager.calls]
+            self.assertEqual(names.count('start'), 1)
+            self.assertEqual(names.count('control'), 2)
+
+    def test_control_revalidation_failure_does_not_rewind_or_rewrite_fixed_journal(self):
+        from xenoid.convergence import ConvergenceExecutor
+        with tempfile.TemporaryDirectory() as temporary:
+            manager, journal, before, acceptance = self.pending(Path(temporary))
+            manager.snapshot['runtime']['state'] = 'stopped'
+            manager.snapshot['controlPlane']['ready'] = False
+            manager.fail_once['control'] = 'bootstrap_unavailable'
+            result = ConvergenceExecutor(manager, live_acceptance=acceptance).run(skip_build=True)
+            self.assertFalse(result['ok'])
+            self.assertEqual(result['error'], 'bootstrap_unavailable')
+            self.assertEqual(journal.load(), before)
+
+    def test_changed_runtime_is_rejected_before_saved_start_or_control(self):
+        from xenoid.convergence import ConvergenceExecutor
+        with tempfile.TemporaryDirectory() as temporary:
+            manager, journal, before, acceptance = self.pending(Path(temporary))
+            manager.snapshot['runtime']['containerId'] = 'e' * 64
+            manager.snapshot['runtime']['state'] = 'stopped'
+            count = len(manager.calls)
+            result = ConvergenceExecutor(manager, live_acceptance=acceptance).run(skip_build=True)
+            self.assertFalse(result['ok'])
+            self.assertEqual(result['error'], 'convergence_state_conflict')
+            self.assertEqual(journal.load(), before)
+            self.assertFalse({'start', 'control'} & {name for name, _ in manager.calls[count:]})
 
 
 if __name__ == '__main__':
