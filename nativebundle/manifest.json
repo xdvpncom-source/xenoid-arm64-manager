@@ -826,12 +826,13 @@
         "e5c0879ccfc96807fa95b54719d6c7e6255bbcfe6c3c88d6fa52016b8dfcf6ef",
         "fe72ddb67164c4e96d39dde697436b10394570072cb8414915aa545715bda0f7",
         "2f5a4cfb310e53fb709555dac701479aab828b3e5b9188cb0e7c7653dc8eb68a",
-        "1514703f7af813b8d4a31c1c9196efdb32c92bae4985051be21409bb7a5604a6"
+        "1514703f7af813b8d4a31c1c9196efdb32c92bae4985051be21409bb7a5604a6",
+        "4eca8629ef48ca14ac7a299e4a377af9ad8fbd419429da6abbae49e2ad1ca24a"
       ],
-      "bytes": 145380,
+      "bytes": 146193,
       "mode": "0644",
       "path": "src/xenoid/convergence.py",
-      "sha256": "4eca8629ef48ca14ac7a299e4a377af9ad8fbd419429da6abbae49e2ad1ca24a"
+      "sha256": "e8fb0a65d3ee3d74a821df8683fea4ed248013eec5a2c2c30a4ab5c10a0874d3"
     },
     {
       "before_sha256": [
@@ -965,12 +966,13 @@
     },
     {
       "before_sha256": [
-        null
+        null,
+        "670b91a0d8e1aec5ed52c874c8542401000fd23bc208dfc48317053651a13394"
       ],
-      "bytes": 15113,
+      "bytes": 19781,
       "mode": "0644",
       "path": "tests/test_renderer_integration.py",
-      "sha256": "670b91a0d8e1aec5ed52c874c8542401000fd23bc208dfc48317053651a13394"
+      "sha256": "dec53bfe0613b76016595da3147184d28fb9d430588b74257e896240e7426bdc"
     }
   ],
   "google_release": "microg-0.3.15.250932-phonesky-30.4.17-gsfproxy-0.1.0-bluejay",

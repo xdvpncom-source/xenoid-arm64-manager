@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 from xenoid.artifacts import BUILDER_SCHEMA, CONSUMER_TARGETS, TARGETS
 from xenoid.backend import RuntimeManager
 from xenoid.config import XenoidConfig, config_dict, _validate_config, InstanceError, new_instance_config
-from xenoid.convergence import ConvergencePlanner, _PHASE_INDEX, _plan_may_mutate
+from xenoid.convergence import ConvergencePlanner, ConvergenceError, _PHASE_INDEX, _plan_may_mutate
 from xenoid.graphics import RendererOverlay, BASE_SHA256, TARGET, zygote_mapping_proof, renderer_environment
 
 
@@ -272,6 +272,88 @@ class RendererPendingAcceptanceTests(unittest.TestCase):
         result = self.observe({}, 'doctor-runtime')
         self.assertFalse(result['ok'])
         self.assertEqual(result['errorCode'], 'graphics_not_ready')
+
+
+class RendererColdBootCompatibilityTests(unittest.TestCase):
+    # Reproduces a qualified stopped-runtime observation; device ownership and
+    # storage identifiers are synthetic. Content/boot digests retain the exact
+    # full-input-only drift that exposed the cold-start planner regression.
+    OLD_INPUT = '90e4c79acd8ad29b7cd94d5176890a138265c00b2657f87474c2cc5101ac2a0d'
+    NEW_INPUT = '8dcd318c38f22f146c4066126b9b8e2af9062083025c5cd987076d8862c9dd3c'
+    BOOT = 'a768b099b872cab946763cbcc5ec110edd8c7f497b61febc9fc1210b98bee7a3'
+
+    def setUp(self):
+        self.manager = SimpleNamespace(context=SimpleNamespace(instance_id=IID))
+        self.observation = {
+            'instanceId': IID,
+            'runtime': {'state': 'stopped', 'containerId': CID,
+                        'ownershipValid': True, 'integrationIdentityValid': True,
+                        'storageValid': True, 'createSpecMatches': True,
+                        'networkMatches': True, 'volumeMatches': True,
+                        'storageMigrationRequired': False,
+                        'imageInputSha256': self.OLD_INPUT, 'imageBootInputSha256': self.BOOT,
+                        'bootSeedRequired': False},
+            'components': {name: {'state': 'matching'} for name in
+                           ('identity', 'location', 'proxy', 'keybox', 'camera', 'google', 'protection')},
+            'desiredImageInputSha256': self.NEW_INPUT, 'desiredImageBootInputSha256': self.BOOT,
+            'artifactTargets': [], 'artifactRecords': [], 'acceptanceChecks': ['container'],
+        }
+        self.observation['components']['daemon'] = {'state': 'unknown'}
+        self.observation['components']['deploy'] = {'glesRenderer': {'state': 'unknown'}, 'rendererControl': {'state': 'unknown'}}
+
+    def plan(self):
+        return ConvergencePlanner(self.manager).inspect(observation=self.observation)
+
+    def test_boot_equivalent_apk_only_drift_starts_owned_container_and_resolves_live(self):
+        plan = self.plan()
+        self.assertEqual(plan.runtime_action, 'start')
+        self.assertEqual(plan.image_action, 'reuse-selected')
+        self.assertEqual(plan.boot_seed_action, 'none')
+        self.assertEqual(plan.recreate_reasons, ())
+        self.assertTrue(plan.live_observation_required)
+        self.assertEqual(plan.daemon_action, 'inspect')
+        self.assertIsNone(plan.deploy_components)
+        self.assertEqual(plan.desired_image_boot_input_sha256, self.BOOT)
+
+    def test_different_boot_contract_keeps_recreate(self):
+        self.observation['runtime']['imageBootInputSha256'] = '9' * 64
+        plan = self.plan()
+        self.assertEqual(plan.runtime_action, 'recreate')
+        self.assertEqual(plan.image_action, 'ensure-desired')
+        self.assertIn('runtime_boot_image_mismatch', plan.recreate_reasons)
+        self.assertIn('runtime_image_input_mismatch', plan.recreate_reasons)
+
+    def test_missing_boot_contract_never_qualifies_compatibility(self):
+        self.observation['runtime']['imageBootInputSha256'] = None
+        self.assertEqual(self.plan().runtime_action, 'recreate')
+        self.observation['desiredImageBootInputSha256'] = None
+        with self.assertRaises(ConvergenceError):
+            self.plan()
+
+    def test_other_contract_mismatches_keep_recreate_even_when_boot_matches(self):
+        for field in ('createSpecMatches', 'networkMatches', 'volumeMatches'):
+            with self.subTest(field=field):
+                self.observation['runtime'][field] = False
+                plan = self.plan()
+                self.assertEqual(plan.runtime_action, 'recreate')
+                self.assertIn('runtime_image_input_mismatch', plan.recreate_reasons)
+                self.observation['runtime'][field] = True
+        self.observation['runtime']['storageMigrationRequired'] = True
+        plan = self.plan()
+        self.assertEqual(plan.runtime_action, 'recreate')
+        self.assertIn('storage_v4_migration_required', plan.recreate_reasons)
+
+    def test_unproven_owner_storage_integration_or_daemon_contract_stays_rejected(self):
+        for field in ('ownershipValid', 'integrationIdentityValid', 'storageValid'):
+            with self.subTest(field=field):
+                self.observation['runtime'][field] = False
+                with self.assertRaises(ConvergenceError):
+                    self.plan()
+                self.observation['runtime'][field] = True
+        self.observation['components']['daemon']['state'] = 'incompatible'
+        with self.assertRaises(ConvergenceError) as error:
+            self.plan()
+        self.assertEqual(error.exception.code, 'daemon_seed_contract_incompatible')
 
 
 if __name__ == '__main__':

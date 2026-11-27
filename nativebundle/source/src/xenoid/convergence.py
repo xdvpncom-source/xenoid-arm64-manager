@@ -1190,7 +1190,22 @@ class ConvergencePlanner:
             daemon_action = "inspect"
         else:
             raise ConvergenceError("convergence_observation_invalid")
-        if runtime_input_mismatch and runtime_state == "stopped":
+        # The boot digest replaces only the compatible daemon APK bytes with
+        # its verified seed contract. That same compatibility must survive a
+        # cold start: deploy/verify the daemon after starting the owned runtime,
+        # rather than replace a data-bearing container for an APK-only drift.
+        cold_boot_compatible = (
+            runtime_state == "stopped"
+            and desired_boot is not None
+            and current_boot is not None
+            and desired_boot == current_boot
+            and not recreate_reasons
+            and all(runtime.get(flag) is True for flag in (
+                "ownershipValid", "integrationIdentityValid", "storageValid",
+                "createSpecMatches", "networkMatches", "volumeMatches",
+            ))
+        )
+        if runtime_input_mismatch and runtime_state == "stopped" and not cold_boot_compatible:
             recreate_reasons.append("runtime_image_input_mismatch")
             runtime_action = "recreate"
 
